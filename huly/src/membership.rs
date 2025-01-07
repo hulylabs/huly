@@ -1,15 +1,15 @@
 //
 
 use crate::db::Db;
+use crate::id::{AccId, NodeId, OrgId};
 use crate::message::SignedMessage;
-use crate::{AccId, NodeId, OrgId};
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_lite::StreamExt;
 use iroh::endpoint::{get_remote_node_id, Connecting};
 use iroh::protocol::ProtocolHandler;
-use iroh::{Endpoint, SecretKey};
+use iroh::Endpoint;
 use iroh_gossip::net::GossipSender;
 use iroh_gossip::{
     net::{Event, Gossip, GossipEvent, GossipReceiver, GOSSIP_ALPN},
@@ -96,7 +96,7 @@ impl ProtocolHandler for Membership {
 
             let account_id = this
                 .db
-                .get_device_account(device_id.as_bytes())?
+                .get_device_account(device_id.into())?
                 .ok_or(anyhow::anyhow!("unknown account"))?;
 
             println!("authenticated as {}", account_id);
@@ -120,7 +120,7 @@ impl ProtocolHandler for Membership {
                 match read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await? {
                     Some(bytes) => {
                         let message = SignedMessage::decode_and_verify(bytes.as_ref())?;
-                        if device_id.as_bytes() == message.get_signer() {
+                        if message.get_signer() == device_id.into() {
                             match message.get_type() {
                                 MembershipRequestType::TAG => {
                                     let request = MembershipRequestType::decode(message)?;

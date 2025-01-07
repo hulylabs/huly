@@ -1,6 +1,6 @@
 //
 
-use super::{AccId, OrgId, PublicKey, Uid};
+use crate::id::{AccId, DeviceId, OrgId, Uid};
 use anyhow::Result;
 use redb::{Database, MultimapTableDefinition, TableDefinition};
 use std::{collections::HashSet, sync::Arc};
@@ -10,10 +10,10 @@ pub struct Db {
     db: Arc<Database>,
 }
 
-const DEVICE_ACCOUNT: TableDefinition<PublicKey, Uid> = TableDefinition::new("device_account");
+const DEVICE_ACCOUNT: TableDefinition<Uid, Uid> = TableDefinition::new("device_account");
 const ACCOUNT_ORGS: MultimapTableDefinition<Uid, Uid> =
     MultimapTableDefinition::new("account_orgs");
-const ACCOUNT_DEVICES: MultimapTableDefinition<Uid, PublicKey> =
+const ACCOUNT_DEVICES: MultimapTableDefinition<Uid, Uid> =
     MultimapTableDefinition::new("account_devices");
 
 impl Db {
@@ -29,7 +29,7 @@ impl Db {
         })
     }
 
-    pub fn get_device_account(&self, device: &PublicKey) -> Result<Option<AccId>> {
+    pub fn get_device_account(&self, device: DeviceId) -> Result<Option<AccId>> {
         Ok(self
             .db
             .begin_read()?
@@ -54,13 +54,13 @@ impl Db {
         }
     }
 
-    pub fn has_account_device(&self, acc: AccId, device: PublicKey) -> Result<bool> {
+    pub fn has_account_device(&self, acc: AccId, device: DeviceId) -> Result<bool> {
         Ok(self
             .db
             .begin_read()?
             .open_multimap_table(ACCOUNT_DEVICES)?
             .get(acc)?
-            .any(|v| v.map(|x| device == x.value()).unwrap_or(false)))
+            .any(|v| v.map(|x| device.as_bytes() == &x.value()).unwrap_or(false)))
     }
 }
 

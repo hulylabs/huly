@@ -1,10 +1,10 @@
 //
 
-use crate::{BlobId, PublicKey};
+use crate::id::PKey;
 use anyhow::Result;
 use bytes::Bytes;
 use ed25519_dalek::Signature;
-use iroh::SecretKey;
+use iroh::{PublicKey, SecretKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 type Tag = u64;
@@ -27,12 +27,11 @@ where
     pub fn sign_and_encode(secret_key: &SecretKey, message: T) -> Result<Bytes> {
         let data: Bytes = postcard::to_stdvec(&message)?.into();
         let signature = secret_key.sign(&data);
-        let by = secret_key.public().public().to_bytes();
         let signed_message = SignedMessage {
             message_type: Self::TAG,
             format: POSTCARD_FORMAT,
             data: Data::Bytes(data),
-            by,
+            by: secret_key.public().into(),
             signature,
         };
         let encoded = postcard::to_stdvec(&signed_message)?;
@@ -50,7 +49,7 @@ where
 #[derive(Debug, Serialize, Deserialize)]
 enum Data {
     Bytes(Bytes),
-    Blob(BlobId),
+    Blob(),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -58,24 +57,24 @@ pub struct SignedMessage {
     message_type: Tag,
     format: Tag,
     data: Data,
-    by: PublicKey,
+    by: PKey,
     signature: Signature,
 }
 
 impl SignedMessage {
     pub fn decode_and_verify(bytes: &[u8]) -> Result<Self> {
         let this: Self = postcard::from_bytes(bytes)?;
-        let key = iroh::PublicKey::from_bytes(&this.by)?;
+        let key: PublicKey = this.by.into();
         if let Data::Bytes(data) = &this.data {
             key.verify(&data, &this.signature)?;
             Ok(this)
         } else {
-            anyhow::bail!("blob verification not implemented");
+            Err(anyhow::anyhow!("blob verification not implemented"))
         }
     }
 
-    pub fn get_signer(&self) -> &PublicKey {
-        &self.by
+    pub fn get_signer(&self) -> PKey {
+        self.by
     }
 
     pub fn get_type(&self) -> Tag {
@@ -90,7 +89,7 @@ impl Data {
     {
         match &self {
             Self::Bytes(bytes) => postcard::from_bytes(bytes.as_ref()).map_err(Into::into),
-            Self::Blob(_) => anyhow::bail!("blob decoding not implemented"),
+            Self::Blob() => Err(anyhow::anyhow!("blob decoding not implemented")),
         }
     }
 }
