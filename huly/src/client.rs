@@ -1,8 +1,7 @@
 //
 
+use crate::id::{AccId, Hash, OrgId, Uid};
 use crate::membership::{Membership, MembershipRequestType};
-use crate::AccId;
-use crate::{Hash, ObjId, OrgId, Uid};
 use anyhow::Result;
 use iroh::{Endpoint, NodeId, SecretKey};
 
@@ -10,13 +9,13 @@ pub async fn request_membership(
     secret_key: &SecretKey,
     endpoint: Endpoint,
     account: AccId,
-    org: iroh::NodeId,
+    org: OrgId,
 ) -> Result<()> {
-    let conn = endpoint.connect(org, Membership::ALPN).await?;
+    let node_id = NodeId::from_bytes(org.as_bytes())?;
+    let conn = endpoint.connect(node_id, Membership::ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await?;
 
-    let request =
-        MembershipRequestType::make(secret_key.public().public().to_bytes(), account, org);
+    let request = MembershipRequestType::make(secret_key.public().into(), account, org);
     let encoded = MembershipRequestType::sign_and_encode(secret_key, request)?;
 
     send.write_all(&encoded).await?;

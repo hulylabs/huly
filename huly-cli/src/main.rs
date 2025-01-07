@@ -4,6 +4,7 @@ use anyhow::{bail, Ok, Result};
 use clap::Parser;
 use config::Config;
 use huly::db::Db;
+use huly::id::{AccId, OrgId};
 use huly::membership::Membership;
 use iroh::protocol::Router;
 use iroh::{Endpoint, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey};
@@ -30,7 +31,7 @@ struct Args {
 
 #[derive(Parser, Debug)]
 enum Command {
-    Client { server: String },
+    Client { server: String, account: String },
     Server {},
 }
 
@@ -64,7 +65,7 @@ async fn main() -> Result<()> {
     println!("using relay servers: {}", fmt_relay_mode(&relay_mode));
 
     let endpoint = Endpoint::builder()
-        .secret_key(secret_key)
+        .secret_key(secret_key.clone())
         .relay_mode(relay_mode)
         .bind_addr_v4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.bind_port))
         .discovery_local_network()
@@ -75,7 +76,7 @@ async fn main() -> Result<()> {
 
     println!("ready with node id: {}", endpoint.node_id());
 
-    let builder = Router::builder(endpoint);
+    let builder = Router::builder(endpoint.clone());
 
     let db = Db::open("huly.redb")?;
     let membership = Membership::new(db, builder.endpoint().clone());
@@ -95,9 +96,11 @@ async fn main() -> Result<()> {
             // Wait for Ctrl-C to be pressed.
             tokio::signal::ctrl_c().await?;
         }
-        Command::Client { server } => {
-            let server = iroh::Server::new(endpoint).await?;
-            server.run().await
+        Command::Client { server, account } => {
+            let account: AccId = account.parse()?;
+            let org: OrgId = server.parse()?;
+            huly::client::request_membership(&secret_key.clone(), endpoint.clone(), account, org)
+                .await?;
         }
     }
 
@@ -129,6 +132,8 @@ async fn main() -> Result<()> {
     // .await?;
 
     // client.run().await
+
+    node.shutdown().await?;
 
     Ok(())
 }
