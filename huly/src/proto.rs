@@ -1,34 +1,14 @@
 //
 
-use crate::{AccId, BlobId, DeviceId, OrgId, PublicKey, Uuid};
+use crate::{AccId, BlobId, NodeId, OrgId, PublicKey, Uuid};
 use anyhow::Result;
 use bytes::Bytes;
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signature;
+use iroh::SecretKey;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 
 //
-
-#[derive(Debug, Serialize, Deserialize)]
-struct Timestamp(i64);
-
-impl From<DateTime<Utc>> for Timestamp {
-    fn from(dt: DateTime<Utc>) -> Self {
-        Timestamp(dt.timestamp())
-    }
-}
-
-impl TryInto<DateTime<Utc>> for Timestamp {
-    type Error = anyhow::Error;
-
-    fn try_into(self) -> Result<DateTime<Utc>> {
-        match Utc.timestamp_opt(self.0, 0) {
-            chrono::LocalResult::Single(datetime) => Ok(datetime),
-            chrono::LocalResult::None => anyhow::bail!("timestamp is out of range"),
-            chrono::LocalResult::Ambiguous(_, _) => anyhow::bail!("timestamp is ambiguous"),
-        }
-    }
-}
 
 //
 
@@ -89,19 +69,6 @@ impl SignedMessage {
     {
         self.data.decode()
     }
-
-    // pub fn sign_and_encode(secret_key: &SecretKey, message: &Message) -> Result<Bytes> {
-    //     let data: Bytes = postcard::to_stdvec(&message)?.into();
-    //     let signature = secret_key.sign(&data);
-    //     let from: PublicKey = secret_key.public();
-    //     let signed_message = Self {
-    //         from,
-    //         data,
-    //         signature,
-    //     };
-    //     let encoded = postcard::to_stdvec(&signed_message)?;
-    //     Ok(encoded.into())
-    // }
 }
 
 pub struct TypedMessage<T> {
@@ -111,11 +78,24 @@ pub struct TypedMessage<T> {
 
 impl<T> TypedMessage<T>
 where
-    T: DeserializeOwned,
+    T: DeserializeOwned + Serialize,
 {
     pub fn verify_and_decode(&self) -> Result<T> {
         self.message.verify()?;
         self.message.decode::<T>()
+    }
+
+    pub fn sign_and_encode(secret_key: &SecretKey, message: T) -> Result<Bytes> {
+        let data: Bytes = postcard::to_stdvec(&message)?.into();
+        let signature = secret_key.sign(&data);
+        let by = secret_key.public();
+        let signed_message = SignedMessage {
+            from,
+            data,
+            signature,
+        };
+        let encoded = postcard::to_stdvec(&signed_message)?;
+        Ok(encoded.into())
     }
 }
 
@@ -124,7 +104,7 @@ where
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceOwnership {
     account: AccId,
-    device: DeviceId,
+    device: NodeId,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -139,6 +119,13 @@ impl MembershipRequest {
         0x00, 0x1d, 0x1f, 0x0f, 0x29, 0xba, 0x48, 0x12, 0x92, 0xe3, 0x0b, 0xc0, 0x2c, 0xe1, 0xcc,
         0xc0,
     ];
+
+    pub fn new(device: NodeId, account: AccId, org: OrgId) -> Self {
+        Self {
+            device_ownership: DeviceOwnership { account, device },
+            org,
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]

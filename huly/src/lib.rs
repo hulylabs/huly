@@ -1,5 +1,13 @@
 // Huly™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
+pub mod client;
+pub mod db;
+pub mod membership;
+pub mod message;
+// pub mod proto;
+
+use anyhow::Result;
+use chrono::{DateTime, TimeZone, Utc};
 use serde::{Deserialize, Serialize};
 use std::borrow::Borrow;
 
@@ -44,6 +52,25 @@ impl std::fmt::Display for ObjId {
 pub type AccId = ObjId;
 pub type OrgId = ObjId;
 
-pub mod db;
-pub mod proto;
-pub mod server;
+//
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Timestamp(i64);
+
+impl From<DateTime<Utc>> for Timestamp {
+    fn from(dt: DateTime<Utc>) -> Self {
+        Timestamp(dt.timestamp())
+    }
+}
+
+impl TryInto<DateTime<Utc>> for Timestamp {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<DateTime<Utc>> {
+        match Utc.timestamp_opt(self.0, 0) {
+            chrono::LocalResult::Single(datetime) => Ok(datetime),
+            chrono::LocalResult::None => anyhow::bail!("timestamp is out of range"),
+            chrono::LocalResult::Ambiguous(_, _) => anyhow::bail!("timestamp is ambiguous"),
+        }
+    }
+}

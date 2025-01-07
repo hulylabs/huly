@@ -3,9 +3,11 @@
 use anyhow::{bail, Ok, Result};
 use clap::Parser;
 use config::Config;
+use huly::db::Db;
+use huly::membership::Membership;
+use iroh::protocol::Router;
 use iroh::{Endpoint, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey};
 use std::net::{Ipv4Addr, SocketAddrV4};
-use tokio::time::{sleep, Duration};
 
 /// By default, the relay server run by n0 is used. To use a local relay server, run
 ///     cargo run --bin iroh-relay --features iroh-relay -- --dev
@@ -73,16 +75,27 @@ async fn main() -> Result<()> {
 
     println!("ready with node id: {}", endpoint.node_id());
 
-    match args.command {
-        Command::Client { server } => {
-            let server: PublicKey = server.parse()?;
-            let client =
-                iroh::Client::connect(endpoint, secret_key, vec![], relay_mode, args.bind_port)
-                    .await?;
+    let builder = Router::builder(endpoint);
 
-            client.run().await
-        }
+    let db = Db::open("huly.redb")?;
+    let membership = Membership::new(db, builder.endpoint().clone());
+
+    let builder = builder.accept(Membership::ALPN, membership.clone());
+    let node = builder.spawn().await?;
+
+    match args.command {
         Command::Server {} => {
+            let node_id = node.endpoint().node_id();
+            println!("membership proto started on node id: {node_id}");
+
+            // for text in text.into_iter() {
+            //     proto.insert_and_index(text).await?;
+            // }
+
+            // Wait for Ctrl-C to be pressed.
+            tokio::signal::ctrl_c().await?;
+        }
+        Command::Client { server } => {
             let server = iroh::Server::new(endpoint).await?;
             server.run().await
         }
