@@ -1,8 +1,9 @@
 //
 
-use crate::id::PKey;
+use crate::id::{Hash, PKey};
 use anyhow::Result;
 use bytes::Bytes;
+use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signature;
 use iroh::{PublicKey, SecretKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
@@ -49,7 +50,7 @@ where
 #[derive(Debug, Serialize, Deserialize)]
 enum Data {
     Bytes(Bytes),
-    Blob(),
+    Blob(Hash),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -89,7 +90,30 @@ impl Data {
     {
         match &self {
             Self::Bytes(bytes) => postcard::from_bytes(bytes.as_ref()).map_err(Into::into),
-            Self::Blob() => Err(anyhow::anyhow!("blob decoding not implemented")),
+            Self::Blob(_) => Err(anyhow::anyhow!("blob decoding not implemented")),
+        }
+    }
+}
+
+// Timestamp
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Timestamp(i64);
+
+impl From<DateTime<Utc>> for Timestamp {
+    fn from(dt: DateTime<Utc>) -> Self {
+        Timestamp(dt.timestamp())
+    }
+}
+
+impl TryInto<DateTime<Utc>> for Timestamp {
+    type Error = anyhow::Error;
+
+    fn try_into(self) -> Result<DateTime<Utc>> {
+        match Utc.timestamp_opt(self.0, 0) {
+            chrono::LocalResult::Single(datetime) => Ok(datetime),
+            chrono::LocalResult::None => anyhow::bail!("timestamp is out of range"),
+            chrono::LocalResult::Ambiguous(_, _) => anyhow::bail!("timestamp is ambiguous"),
         }
     }
 }
