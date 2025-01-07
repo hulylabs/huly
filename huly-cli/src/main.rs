@@ -1,9 +1,8 @@
 //
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Ok, Result};
 use clap::Parser;
-use huly::topic::run;
-use iroh::discovery::{dns::DnsDiscovery, pkarr::PkarrPublisher, ConcurrentDiscovery};
+use config::Config;
 use iroh::{Endpoint, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey};
 use std::net::{Ipv4Addr, SocketAddrV4};
 use tokio::time::{sleep, Duration};
@@ -29,8 +28,8 @@ struct Args {
 
 #[derive(Parser, Debug)]
 enum Command {
-    Client {},
-    Server { ticket: String },
+    Client { server: String },
+    Server {},
 }
 
 #[tokio::main]
@@ -38,11 +37,11 @@ async fn main() -> Result<()> {
     tracing_subscriber::fmt::init();
     let args = Args::parse();
 
-    // let settings = Config::builder()
-    //     .add_source(config::File::with_name("settings"))
-    //     .add_source(config::Environment::with_prefix("HULY"))
-    //     .build()
-    //     .unwrap();
+    let settings = Config::builder()
+        // .add_source(config::File::with_name("settings"))
+        .add_source(config::Environment::with_prefix("HULY"))
+        .build()
+        .unwrap();
 
     let secret_key = match args.secret_key {
         None => SecretKey::generate(rand::rngs::OsRng),
@@ -67,14 +66,29 @@ async fn main() -> Result<()> {
         .relay_mode(relay_mode)
         .bind_addr_v4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, args.bind_port))
         .discovery_local_network()
-        .discovery_dht()
-        .discovery_n0()
+        // .discovery_dht()
+        // .discovery_n0()
         .bind()
         .await?;
 
     println!("ready with node id: {}", endpoint.node_id());
 
-    sleep(Duration::from_secs(60)).await;
+    match args.command {
+        Command::Client { server } => {
+            let server: PublicKey = server.parse()?;
+            let client =
+                iroh::Client::connect(endpoint, secret_key, vec![], relay_mode, args.bind_port)
+                    .await?;
+
+            client.run().await
+        }
+        Command::Server {} => {
+            let server = iroh::Server::new(endpoint).await?;
+            server.run().await
+        }
+    }
+
+    // sleep(Duration::from_secs(60)).await;
 
     // 88877a049601655b479cf46b906669266066a6eda2473aadf1574fffaa1353a7
     // 67c78c9886bc71fd91415577e078de03966bc17603d52a1355ad53cb53571ae1
@@ -85,13 +99,13 @@ async fn main() -> Result<()> {
     // d28aeaafe8e8c70f16bc862085795dfcb45c083ab8ff0754654b0e35a45fe339
     // 22cfbf283eb134a3cde229fec9de9f97aa946021d484e66a308b7a79b005c814
 
-    let peers: Vec<PublicKey> = vec![
-        "67c78c9886bc71fd91415577e078de03966bc17603d52a1355ad53cb53571ae1".parse()?,
-        "b60988059e237d6e1ccc9f1b9985123a3db34b21a527e14b4bad99574aeabed9".parse()?,
-        "22cfbf283eb134a3cde229fec9de9f97aa946021d484e66a308b7a79b005c814".parse()?,
-    ];
+    // let peers: Vec<PublicKey> = vec![
+    //     "67c78c9886bc71fd91415577e078de03966bc17603d52a1355ad53cb53571ae1".parse()?,
+    //     "b60988059e237d6e1ccc9f1b9985123a3db34b21a527e14b4bad99574aeabed9".parse()?,
+    //     "22cfbf283eb134a3cde229fec9de9f97aa946021d484e66a308b7a79b005c814".parse()?,
+    // ];
 
-    run(endpoint, peers).await
+    // run(endpoint, peers).await
     // let client = Client::connect(
     //     uuid::Uuid::new_v4(),
     //     secret_key,
@@ -102,6 +116,8 @@ async fn main() -> Result<()> {
     // .await?;
 
     // client.run().await
+
+    Ok(())
 }
 
 fn fmt_relay_mode(relay_mode: &RelayMode) -> String {

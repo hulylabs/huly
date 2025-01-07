@@ -1,12 +1,12 @@
 //
 
 use crate::db::Db;
-use crate::proto::{MembershipRequest, Message, SignedMessage};
+use crate::proto::{MembershipRequest, SignedMessage};
 use anyhow::{Context, Result};
 use bytes::{Bytes, BytesMut};
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_lite::StreamExt;
-use iroh::endpoint::{get_remote_node_id, Connecting, Connection};
+use iroh::endpoint::{get_remote_node_id, Connecting};
 use iroh::protocol::ProtocolHandler;
 use iroh::Endpoint;
 use iroh_gossip::net::GossipSender;
@@ -110,9 +110,8 @@ impl ProtocolHandler for Server {
                 let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
                 match read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await? {
                     Some(bytes) => {
-                        let (signing_device, message) =
-                            SignedMessage::verify_and_decode(bytes.as_ref())?;
-                        if signing_device == *device_id.as_bytes() {
+                        let message = SignedMessage::from_bytes(bytes.as_ref())?;
+                        if device_id.as_bytes() == message.get_signer() {
                             match message.get_type() {
                                 MembershipRequest::TYPE => {
                                     let request: MembershipRequest = message.decode()?;

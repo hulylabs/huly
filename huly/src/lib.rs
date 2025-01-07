@@ -44,8 +44,6 @@ impl std::fmt::Display for ObjId {
 pub type AccId = ObjId;
 pub type OrgId = ObjId;
 
-pub mod client;
 pub mod db;
 pub mod proto;
 pub mod server;
-pub mod topic;

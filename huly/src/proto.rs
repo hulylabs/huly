@@ -38,15 +38,47 @@ pub enum Data {
     Blob(BlobId),
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Message {
-    message_type: Uuid,
-    format: Uuid,
-    timestamp: Timestamp,
-    data: Data,
+impl Data {
+    pub fn decode<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        match &self {
+            Self::Bytes(bytes) => postcard::from_bytes(bytes.as_ref()).map_err(Into::into),
+            Self::Blob(_) => anyhow::bail!("blob decoding not implemented"),
+        }
+    }
 }
 
-impl Message {
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SignedMessage {
+    message_type: Uuid,
+    format: Uuid,
+    data: Data,
+    by: PublicKey,
+    signature: Signature,
+}
+
+impl SignedMessage {
+    pub fn from_bytes(bytes: &[u8]) -> Result<SignedMessage> {
+        let signed_message: Self = postcard::from_bytes(bytes)?;
+        signed_message.verify().map(|_| signed_message)
+    }
+
+    pub fn verify(&self) -> Result<()> {
+        let key = iroh::PublicKey::from_bytes(&self.by)?;
+        if let Data::Bytes(data) = &self.data {
+            key.verify(&data, &self.signature)?;
+            Ok(())
+        } else {
+            anyhow::bail!("blob verification not implemented");
+        }
+    }
+
+    pub fn get_signer(&self) -> &PublicKey {
+        &self.by
+    }
+
     pub fn get_type(&self) -> Uuid {
         self.message_type
     }
@@ -55,31 +87,7 @@ impl Message {
     where
         T: DeserializeOwned,
     {
-        match &self.data {
-            Data::Bytes(bytes) => postcard::from_bytes(bytes.as_ref()).map_err(Into::into),
-            Data::Blob(_) => anyhow::bail!("blob decoding not implemented"),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SignedMessage {
-    message: Data,
-    by: PublicKey,
-    signature: Signature,
-}
-
-impl SignedMessage {
-    pub fn verify_and_decode(bytes: &[u8]) -> Result<(PublicKey, Message)> {
-        let signed_message: Self = postcard::from_bytes(bytes)?;
-        if let Data::Bytes(data) = &signed_message.message {
-            let key = iroh::PublicKey::from_bytes(&signed_message.by)?;
-            key.verify(&data, &signed_message.signature)?;
-            let message: Message = postcard::from_bytes(&data)?;
-            Ok((signed_message.by, message))
-        } else {
-            anyhow::bail!("blob verification not implemented");
-        }
+        self.data.decode()
     }
 
     // pub fn sign_and_encode(secret_key: &SecretKey, message: &Message) -> Result<Bytes> {
@@ -95,6 +103,23 @@ impl SignedMessage {
     //     Ok(encoded.into())
     // }
 }
+
+pub struct TypedMessage<T> {
+    message: SignedMessage,
+    _phantom: std::marker::PhantomData<T>,
+}
+
+impl<T> TypedMessage<T>
+where
+    T: DeserializeOwned,
+{
+    pub fn verify_and_decode(&self) -> Result<T> {
+        self.message.verify()?;
+        self.message.decode::<T>()
+    }
+}
+
+//
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DeviceOwnership {
@@ -124,5 +149,3 @@ pub struct MembershipResponse {
 }
 
 //
-
-pub fn
