@@ -36,27 +36,15 @@ impl Membership {
     }
 }
 
-pub const MAX_MESSAGE_SIZE: usize = 4096;
-
 async fn account_loop(mut sender: GossipSender, mut receiver: GossipReceiver) -> Result<()> {
+    println!("Account loop started");
     while let Some(event) = receiver.try_next().await? {
+        println!("Server received gossip event: {:?}", event);
         if let Event::Gossip(GossipEvent::Received(msg)) = event {
-
-            // let (from, message) = SignedMessage::verify_and_decode(&msg.content)?;
-            // match message {
-            //     Message::AboutMe { name } => {
-            //         names.insert(from, name.clone());
-            //         println!("> {} is now known as {}", from.fmt_short(), name);
-            //     }
-            //     Message::Message { text } => {
-            //         let name = names
-            //             .get(&from)
-            //             .map_or_else(|| from.fmt_short(), String::to_string);
-            //         println!("{}: {}", name, text);
-            //     }
-            // }
+            println!("Server received message: {:?}", msg);
         }
     }
+    println!("Account loop ended");
     Ok(())
 }
 
@@ -119,14 +107,11 @@ impl ProtocolHandler for Membership {
                         let topic = TopicId::from_bytes(account_id.into());
 
                         println!("subscribing");
-                        let (sender, receiver) = this
-                            .gossip
-                            .subscribe_and_join(topic, vec![device_id])
-                            .await?
-                            .split();
+                        let (sender, receiver) =
+                            this.gossip.subscribe(topic, vec![device_id])?.split();
 
                         println!("spawning account loop");
-                        let x = tokio::spawn(account_loop(sender, receiver));
+                        let _handle = tokio::spawn(account_loop(sender, receiver));
                         println!("spawned");
 
                         let response = Empty {};

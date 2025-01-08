@@ -6,12 +6,9 @@ use crate::membership::{
 };
 use crate::message::{Message, SignedMessage, SignedMessageType};
 use anyhow::Result;
+use futures_lite::StreamExt;
 use iroh::{Endpoint, NodeId, SecretKey};
-use iroh_gossip::net::GossipSender;
-use iroh_gossip::{
-    net::{Event, Gossip, GossipEvent, GossipReceiver},
-    proto::TopicId,
-};
+use iroh_gossip::{net::Gossip, proto::TopicId};
 
 pub async fn request_membership(
     secret_key: &SecretKey,
@@ -38,12 +35,17 @@ pub async fn request_membership(
     let topic = TopicId::from_bytes(account.into());
     // let gossip = Gossip::builder().spawn(endpoint.clone()).await?;
 
-    let (sender, receiver) = gossip
-        .subscribe_and_join(topic, vec![node_id])
-        .await?
-        .split();
+    let (sender, mut receiver) = gossip.subscribe(topic, vec![node_id])?.split();
 
     println!("started gossip proto");
+
+    // Spawn a task to handle received messages
+    let gossip_handle = tokio::spawn(async move {
+        while let Some(event) = receiver.try_next().await? {
+            println!("Client received gossip event: {:?}", event);
+        }
+        Ok::<_, anyhow::Error>(())
+    });
 
     let request = ServeMeRequestType::encode(&Empty {})?;
     request.write_async(&mut send).await?;
@@ -52,7 +54,17 @@ pub async fn request_membership(
     let response = Message::read_async(&mut recv).await?;
     println!("got serve me response: {:?}", response);
 
-    tokio::signal::ctrl_c().await?;
+    // Wait for Ctrl-C while keeping gossip connection alive
+    tokio::select! {
+        _ = tokio::signal::ctrl_c() => {
+            println!("Received Ctrl-C, shutting down");
+        }
+        res = gossip_handle => {
+            if let Err(e) = res {
+                println!("Gossip task error: {:?}", e);
+            }
+        }
+    }
 
     send.finish()?;
     send.stopped().await?;
