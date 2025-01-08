@@ -2,9 +2,8 @@
 
 use crate::db::Db;
 use crate::id::{AccId, NodeId, OrgId};
-use crate::message::{read_lp, write_lp, Message, Timestamp};
+use crate::message::{Message, SignedMessage, SignedMessageType, Timestamp};
 use anyhow::Result;
-use bytes::BytesMut;
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_lite::StreamExt;
 use iroh::endpoint::{get_remote_node_id, Connecting};
@@ -91,34 +90,29 @@ impl ProtocolHandler for Membership {
             println!("spawned");
             let (mut send, mut recv) = connection.accept_bi().await?;
             loop {
-                let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
-                match read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await? {
-                    Some(bytes) => {
-                        let message = Message::decode(&bytes)?;
-                        match message.get_type() {
-                            MembershipRequestType::TAG => {
-                                if message.verify()? != device_id.into() {
-                                    anyhow::bail!("message must be signed by the device");
-                                }
-
-                                let request = MembershipRequestType::decode(&message)?;
-                                let device = request.device_ownership.device;
-                                let account = request.device_ownership.account;
-
-                                this.db.insert_device_account(device, account)?;
-                                println!("added device `{}` to account `{}`", device, account);
-
-                                let response = MembershipResponseType::make();
-                                let encoded = MembershipResponseType::sign_and_encode(
-                                    &this.endpoint.secret_key(),
-                                    &response,
-                                )?;
-                                write_lp(&mut send, &encoded, MAX_MESSAGE_SIZE).await?;
-                            }
-                            _ => anyhow::bail!("unknown message type"),
+                let message = Message::read_async(&mut recv).await?;
+                match message.get_type_unwrap() {
+                    MembershipRequestType::TAG => {
+                        let signed = SignedMessageType::decode(&message)?;
+                        if signed.verify()? != device_id.into() {
+                            anyhow::bail!("message must be signed by the device");
                         }
+
+                        // let message = Message::decode(signed.get_payload().as_bytes())?;
+                        let request = MembershipRequestType::decode(signed.get_message())?;
+                        let device = request.device_ownership.device;
+                        let account = request.device_ownership.account;
+
+                        this.db.insert_device_account(device, account)?;
+                        println!("added device `{}` to account `{}`", device, account);
+
+                        let response = MembershipResponse::new(true, None);
+                        let encoded = MembershipResponseType::encode(&response)?;
+                        let signed = SignedMessage::sign(&this.endpoint.secret_key(), encoded)?;
+                        let message = SignedMessageType::encode(&signed)?;
+                        message.write_async(&mut send).await?;
                     }
-                    None => break Ok(()),
+                    _ => anyhow::bail!("unknown message type"),
                 }
             }
         })
@@ -139,16 +133,16 @@ pub struct MembershipRequest {
     org: OrgId,
 }
 
-pub type MembershipRequestType = crate::message::MessageType<MembershipRequest, 0x483A130AB92F3040>;
-
-impl MembershipRequestType {
-    pub fn make(device: NodeId, account: AccId, org: OrgId) -> MembershipRequest {
-        MembershipRequest {
+impl MembershipRequest {
+    pub fn new(device: NodeId, account: AccId, org: OrgId) -> Self {
+        Self {
             device_ownership: DeviceOwnership { account, device },
             org,
         }
     }
 }
+
+pub type MembershipRequestType = crate::message::MessageType<MembershipRequest, 0x483A130AB92F3040>;
 
 //
 
@@ -159,17 +153,17 @@ pub struct MembershipResponse {
     expiration: Option<Timestamp>,
 }
 
-pub type MembershipResponseType =
-    crate::message::MessageType<MembershipResponse, 0xE6DD0F88165F0752>;
-
-impl MembershipResponseType {
-    pub fn make() -> MembershipResponse {
-        MembershipResponse {
-            accepted: true,
-            expiration: None,
+impl MembershipResponse {
+    pub fn new(accepted: bool, expiration: Option<Timestamp>) -> Self {
+        Self {
+            accepted,
+            expiration,
         }
     }
 }
+
+pub type MembershipResponseType =
+    crate::message::MessageType<MembershipResponse, 0xE6DD0F88165F0752>;
 
 //
 
@@ -177,5 +171,4 @@ impl MembershipResponseType {
 pub struct Empty {}
 
 pub type ServeMeRequestType = crate::message::MessageType<Empty, 0xBA030E95BD57F286>;
-
 pub type ServeMeResponseType = crate::message::MessageType<Empty, 0x73D6A76A63E79C06>;

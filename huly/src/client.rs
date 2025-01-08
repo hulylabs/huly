@@ -1,12 +1,9 @@
 //
 
-use crate::id::{AccId, Hash, OrgId, Uid};
-use crate::membership::{
-    Membership, MembershipRequestType, MembershipResponseType, MAX_MESSAGE_SIZE,
-};
-use crate::message::{read_lp, write_lp, Message};
+use crate::id::{AccId, OrgId};
+use crate::membership::{Membership, MembershipRequest, MembershipRequestType};
+use crate::message::{Message, SignedMessage, SignedMessageType};
 use anyhow::Result;
-use bytes::BytesMut;
 use iroh::{Endpoint, NodeId, SecretKey};
 
 pub async fn request_membership(
@@ -19,19 +16,20 @@ pub async fn request_membership(
     let conn = endpoint.connect(node_id, Membership::ALPN).await?;
     let (mut send, mut recv) = conn.open_bi().await?;
 
-    let request = MembershipRequestType::make(secret_key.public().into(), account, org);
-    let encoded = MembershipRequestType::sign_and_encode(secret_key, &request)?;
-    write_lp(&mut send, &encoded, MAX_MESSAGE_SIZE).await?;
+    let request = MembershipRequest::new(secret_key.public().into(), account, org);
+    let encoded = MembershipRequestType::encode(&request)?;
+    let signed = SignedMessage::sign(secret_key, encoded)?;
+    let encoded = SignedMessageType::encode(&signed)?;
+    encoded.write_async(&mut send).await?;
 
-    let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
-    let encoded = read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await?;
+    let response = Message::read_async(&mut recv).await?;
 
-    if let Some(encoded) = encoded {
-        let message = Message::decode(encoded.as_ref())?;
-        println!("got membership response: {:?}", message);
-    } else {
-        println!("unexpected end of stream?")
-    }
+    // if let Some(encoded) = encoded {
+    //     let message = Message::decode(encoded.as_ref())?;
+    println!("got membership response: {:?}", response);
+    // } else {
+    //     println!("unexpected end of stream?")
+    // }
 
     send.finish()?;
     send.stopped().await?;

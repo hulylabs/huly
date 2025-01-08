@@ -10,8 +10,116 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 type Tag = u64;
+type Format = u16;
 
-const POSTCARD_FORMAT: Tag = 0;
+pub const UNDEFINED_FORMAT: Format = 0x0000;
+pub const POSTCARD_FORMAT: Format = 0x0001;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+enum Data {
+    Blob(Hash),
+    Inline(Bytes),
+}
+
+impl Data {
+    pub fn decode<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        match &self {
+            Self::Inline(bytes) => postcard::from_bytes(bytes.as_ref()).map_err(Into::into),
+            Self::Blob(_) => Err(anyhow::anyhow!("blob decoding not implemented")),
+        }
+    }
+
+    pub fn as_bytes(&self) -> &[u8] {
+        match self {
+            Self::Inline(bytes) => bytes.as_ref(),
+            Self::Blob(_) => panic!("blob decoding not implemented"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+pub enum TypeParams {
+    Zero(),
+    One(Tag),
+    Two(Tag, Tag),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Message {
+    message_type: Tag,
+    type_params: TypeParams,
+    data_format: Format,
+    data: Data,
+}
+
+impl Message {
+    const MAX_MESSAGE_SIZE: usize = 0x10000;
+
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        postcard::from_bytes(bytes).map_err(Into::into)
+    }
+
+    pub fn encode(&self) -> Result<Bytes> {
+        postcard::to_stdvec(self)
+            .map(Into::into)
+            .map_err(Into::into)
+    }
+
+    pub async fn read_async(mut reader: impl AsyncRead + Unpin) -> Result<Self> {
+        let mut buffer = BytesMut::new();
+        let size = reader.read_u32().await?;
+        if size > Self::MAX_MESSAGE_SIZE as u32 {
+            anyhow::bail!("Incoming message exceeds the maximum message size");
+        }
+        let size = usize::try_from(size).context("frame larger than usize")?;
+        buffer.reserve(size);
+        loop {
+            let r = reader.read_buf(&mut buffer).await?;
+            if r == 0 {
+                break;
+            }
+        }
+        Self::decode(&buffer)
+    }
+
+    pub async fn write_async(&self, mut writer: impl AsyncWrite + Unpin) -> Result<()> {
+        let buffer = self.encode()?;
+        let size = if buffer.len() > Self::MAX_MESSAGE_SIZE {
+            anyhow::bail!("message too large");
+        } else {
+            buffer.len() as u32
+        };
+        writer.write_u32(size).await?;
+        writer.write_all(&buffer).await?;
+        Ok(())
+    }
+
+    pub fn get_type(&self) -> Tag {
+        self.message_type
+    }
+
+    pub fn get_type_unwrap(&self) -> Tag {
+        match self.type_params {
+            TypeParams::Zero() => self.message_type,
+            TypeParams::One(tag) => tag,
+            TypeParams::Two(_, _) => self.message_type,
+        }
+    }
+
+    pub fn get_type_params(&self) -> TypeParams {
+        self.type_params
+    }
+
+    pub fn get_payload<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        self.data.decode::<T>()
+    }
+}
 
 pub struct MessageType<T, const ID: Tag>
 where
@@ -26,30 +134,35 @@ where
 {
     pub const TAG: Tag = ID;
 
-    fn format(message: &T) -> Result<(Tag, Data)> {
-        Ok((Self::TAG, Data::Bytes(postcard::to_stdvec(message)?.into())))
+    // fn format(message: &T) -> Result<(Tag, Data)> {
+    //     Ok((Self::TAG, Data::Bytes(postcard::to_stdvec(message)?.into())))
+    // }
+
+    // fn encode_message(format: (Tag, Data), signature: Option<(PKey, Signature)>) -> Result<Bytes> {
+    //     let message = Message {
+    //         message_type: format.0,
+    //         format: POSTCARD_FORMAT,
+    //         data: format.1,
+    //         signature,
+    //     };
+    //     let encoded = postcard::to_stdvec(&message)?;
+    //     Ok(encoded.into())
+    // }
+
+    pub fn encode(message: &T) -> Result<Message> {
+        Ok(Message {
+            message_type: Self::TAG,
+            type_params: TypeParams::Zero(),
+            data_format: POSTCARD_FORMAT,
+            data: Data::Inline(postcard::to_stdvec(message)?.into()),
+        })
     }
 
-    fn encode_message(format: (Tag, Data), signature: Option<(PKey, Signature)>) -> Result<Bytes> {
-        let message = Message {
-            message_type: format.0,
-            format: POSTCARD_FORMAT,
-            data: format.1,
-            signature,
-        };
-        let encoded = postcard::to_stdvec(&message)?;
-        Ok(encoded.into())
-    }
-
-    pub fn encode(message: &T) -> Result<Bytes> {
-        Self::encode_message(Self::format(message)?, None)
-    }
-
-    pub fn sign_and_encode(secret_key: &SecretKey, message: &T) -> Result<Bytes> {
-        let format = Self::format(message)?;
-        let signature = format.1.sign(secret_key)?;
-        Self::encode_message(format, Some(signature))
-    }
+    // pub fn sign_and_encode(secret_key: &SecretKey, message: &T) -> Result<Bytes> {
+    //     let format = Self::format(message)?;
+    //     let signature = format.1.sign(secret_key)?;
+    //     Self::encode_message(format, Some(signature))
+    // }
 
     pub fn decode(message: &Message) -> Result<T> {
         if message.get_type() != Self::TAG {
@@ -60,69 +173,58 @@ where
     }
 }
 
+// impl Data {
+//     fn sign(&self, secret_key: &SecretKey) -> Result<(PKey, Signature)> {
+//         match self {
+//             Self::Bytes(bytes) => Ok((secret_key.public().into(), secret_key.sign(bytes))),
+//             Self::Blob(_) => Err(anyhow::anyhow!("blob signing not implemented")),
+//         }
+//     }
+// }
+
+// #[derive(Debug, Serialize, Deserialize)]
+// pub struct Message {
+//     message_type: Tag,
+//     format: Tag,
+//     data: Data,
+//     signature: Option<(PKey, Signature)>,
+// }
+
+//
+
 #[derive(Debug, Serialize, Deserialize)]
-enum Data {
-    Bytes(Bytes),
-    Blob(Hash),
+pub struct SignedMessage {
+    message: Message,
+    by: PKey,
+    signature: Signature,
 }
 
-impl Data {
-    fn sign(&self, secret_key: &SecretKey) -> Result<(PKey, Signature)> {
-        match self {
-            Self::Bytes(bytes) => Ok((secret_key.public().into(), secret_key.sign(bytes))),
-            Self::Blob(_) => Err(anyhow::anyhow!("blob signing not implemented")),
-        }
-    }
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct Message {
-    message_type: Tag,
-    format: Tag,
-    data: Data,
-    signature: Option<(PKey, Signature)>,
-}
-
-impl Message {
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).map_err(Into::into)
+impl SignedMessage {
+    pub fn sign(secret_key: &SecretKey, message: Message) -> Result<Self> {
+        let signature = secret_key.sign(message.data.as_bytes());
+        Ok(SignedMessage {
+            message,
+            signature,
+            by: secret_key.public().into(),
+        })
     }
 
     pub fn verify(&self) -> Result<PKey> {
-        match self.signature {
-            Some((by, signature)) => {
-                let key: PublicKey = by.into();
-                let data = match &self.data {
-                    Data::Bytes(bytes) => bytes,
-                    Data::Blob(_) => anyhow::bail!("blob verification not implemented"),
-                };
-                key.verify(&data, &signature)?;
-                Ok(by)
-            }
-            None => Err(anyhow::anyhow!("message is not signed")),
-        }
+        let key: PublicKey = self.by.into();
+        key.verify(self.message.data.as_bytes(), &self.signature)?;
+        Ok(self.by)
     }
 
-    pub fn get_signature(&self) -> Option<(PKey, Signature)> {
-        self.signature
+    pub fn get_message(&self) -> &Message {
+        &self.message
     }
 
-    pub fn get_type(&self) -> Tag {
-        self.message_type
-    }
+    // pub fn get_signature(&self) -> Option<(PKey, Signature)> {
+    //     self.signature
+    // }
 }
 
-impl Data {
-    pub fn decode<T>(&self) -> Result<T>
-    where
-        T: DeserializeOwned,
-    {
-        match &self {
-            Self::Bytes(bytes) => postcard::from_bytes(bytes.as_ref()).map_err(Into::into),
-            Self::Blob(_) => Err(anyhow::anyhow!("blob decoding not implemented")),
-        }
-    }
-}
+pub type SignedMessageType = crate::message::MessageType<SignedMessage, 0x131C5_FACADE_699EA>;
 
 // Timestamp
 
@@ -149,44 +251,44 @@ impl TryInto<DateTime<Utc>> for Timestamp {
 
 //
 
-pub async fn read_lp(
-    mut reader: impl AsyncRead + Unpin,
-    buffer: &mut BytesMut,
-    max_message_size: usize,
-) -> Result<Option<Bytes>> {
-    let size = match reader.read_u32().await {
-        Ok(size) => size,
-        Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-    let mut reader = reader.take(size as u64);
-    let size = usize::try_from(size).context("frame larger than usize")?;
-    if size > max_message_size {
-        anyhow::bail!(
-            "Incoming message exceeds the maximum message size of {max_message_size} bytes"
-        );
-    }
-    buffer.reserve(size);
-    loop {
-        let r = reader.read_buf(buffer).await?;
-        if r == 0 {
-            break;
-        }
-    }
-    Ok(Some(buffer.split_to(size).freeze()))
-}
+// async fn read_lp(
+//     mut reader: impl AsyncRead + Unpin,
+//     buffer: &mut BytesMut,
+//     max_message_size: usize,
+// ) -> Result<Option<Bytes>> {
+//     let size = match reader.read_u32().await {
+//         Ok(size) => size,
+//         Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+//         Err(err) => return Err(err.into()),
+//     };
+//     let mut reader = reader.take(size as u64);
+//     let size = usize::try_from(size).context("frame larger than usize")?;
+//     if size > max_message_size {
+//         anyhow::bail!(
+//             "Incoming message exceeds the maximum message size of {max_message_size} bytes"
+//         );
+//     }
+//     buffer.reserve(size);
+//     loop {
+//         let r = reader.read_buf(buffer).await?;
+//         if r == 0 {
+//             break;
+//         }
+//     }
+//     Ok(Some(buffer.split_to(size).freeze()))
+// }
 
-pub async fn write_lp(
-    mut writer: impl AsyncWrite + Unpin,
-    buffer: &Bytes,
-    max_message_size: usize,
-) -> Result<()> {
-    let size = if buffer.len() > max_message_size {
-        anyhow::bail!("message too large");
-    } else {
-        buffer.len() as u32
-    };
-    writer.write_u32(size).await?;
-    writer.write_all(&buffer).await?;
-    Ok(())
-}
+// async fn write_lp(
+//     mut writer: impl AsyncWrite + Unpin,
+//     buffer: &Bytes,
+//     max_message_size: usize,
+// ) -> Result<()> {
+//     let size = if buffer.len() > max_message_size {
+//         anyhow::bail!("message too large");
+//     } else {
+//         buffer.len() as u32
+//     };
+//     writer.write_u32(size).await?;
+//     writer.write_all(&buffer).await?;
+//     Ok(())
+// }
