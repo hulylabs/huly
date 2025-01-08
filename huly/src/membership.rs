@@ -170,3 +170,12 @@ impl MembershipResponseType {
         }
     }
 }
+
+//
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Empty {}
+
+pub type ServeMeRequestType = crate::message::MessageType<Empty, 0xBA030E95BD57F286>;
+
+pub type ServeMeResponseType = crate::message::MessageType<Empty, 0x73D6A76A63E79C06>;
