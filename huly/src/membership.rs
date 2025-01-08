@@ -81,11 +81,15 @@ impl ProtocolHandler for Membership {
             // fetch account's organizations
 
             let topic = TopicId::from_bytes(account_id.into());
+
+            println!("subscribing");
             let (sender, receiver) = this.gossip.subscribe_and_join(topic, vec![]).await?.split();
-            tokio::spawn(account_loop(sender, receiver));
 
+            println!("spawning account loop");
+            let x = tokio::spawn(account_loop(sender, receiver));
+
+            println!("spawned");
             let (mut send, mut recv) = connection.accept_bi().await?;
-
             loop {
                 let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
                 match read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await? {
