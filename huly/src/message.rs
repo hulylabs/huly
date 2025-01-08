@@ -50,6 +50,14 @@ where
         let signature = format.1.sign(secret_key)?;
         Self::encode_message(format, Some(signature))
     }
+
+    pub fn decode(message: &Message) -> Result<T> {
+        if message.get_type() != Self::TAG {
+            Err(anyhow::anyhow!("unexpected message type"))
+        } else {
+            message.data.decode()
+        }
+    }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,28 +87,28 @@ impl Message {
     pub fn decode(bytes: &[u8]) -> Result<Self> {
         postcard::from_bytes(bytes).map_err(Into::into)
     }
-}
 
-impl SignedMessage {
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).map_err(Into::into)
+    pub fn verify(&self) -> Result<PKey> {
+        match self.signature {
+            Some((by, signature)) => {
+                let key: PublicKey = by.into();
+                let data = match &self.data {
+                    Data::Bytes(bytes) => bytes,
+                    Data::Blob(_) => anyhow::bail!("blob verification not implemented"),
+                };
+                key.verify(&data, &signature)?;
+                Ok(by)
+            }
+            None => Err(anyhow::anyhow!("message is not signed")),
+        }
     }
 
-    pub fn verify(&self) -> Result<()> {
-        let key: PublicKey = self.signature.0.into();
-        let data = match &self.message.data {
-            Data::Bytes(bytes) => bytes,
-            Data::Blob(_) => anyhow::bail!("blob verification not implemented"),
-        };
-        key.verify(&data, &self.signature.1).map_err(Into::into)
-    }
-
-    pub fn get_signer(&self) -> PKey {
-        self.signature.0
+    pub fn get_signature(&self) -> Option<(PKey, Signature)> {
+        self.signature
     }
 
     pub fn get_type(&self) -> Tag {
-        self.message.message_type
+        self.message_type
     }
 }
 

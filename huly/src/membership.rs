@@ -2,7 +2,7 @@
 
 use crate::db::Db;
 use crate::id::{AccId, NodeId, OrgId};
-use crate::message::{read_lp, write_lp, SignedMessage, Timestamp};
+use crate::message::{read_lp, write_lp, Message, Timestamp};
 use anyhow::Result;
 use bytes::BytesMut;
 use futures_lite::future::Boxed as BoxedFuture;
@@ -94,28 +94,28 @@ impl ProtocolHandler for Membership {
                 let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
                 match read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await? {
                     Some(bytes) => {
-                        let message = SignedMessage::decode_and_verify(bytes.as_ref())?;
-                        if message.get_signer() == device_id.into() {
-                            match message.get_type() {
-                                MembershipRequestType::TAG => {
-                                    let request = MembershipRequestType::decode(message)?;
-                                    let device = request.device_ownership.device;
-                                    let account = request.device_ownership.account;
-
-                                    this.db.insert_device_account(device, account)?;
-                                    println!("added device `{}` to account `{}`", device, account);
-
-                                    let response = MembershipResponseType::make();
-                                    let encoded = MembershipResponseType::sign_and_encode(
-                                        &this.endpoint.secret_key(),
-                                        response,
-                                    )?;
-                                    write_lp(&mut send, &encoded, MAX_MESSAGE_SIZE).await?;
+                        let message = Message::decode(&bytes)?;
+                        match message.get_type() {
+                            MembershipRequestType::TAG => {
+                                if message.verify()? != device_id.into() {
+                                    anyhow::bail!("message must be signed by the device");
                                 }
-                                _ => anyhow::bail!("unknown message type"),
+
+                                let request = MembershipRequestType::decode(&message)?;
+                                let device = request.device_ownership.device;
+                                let account = request.device_ownership.account;
+
+                                this.db.insert_device_account(device, account)?;
+                                println!("added device `{}` to account `{}`", device, account);
+
+                                let response = MembershipResponseType::make();
+                                let encoded = MembershipResponseType::sign_and_encode(
+                                    &this.endpoint.secret_key(),
+                                    &response,
+                                )?;
+                                write_lp(&mut send, &encoded, MAX_MESSAGE_SIZE).await?;
                             }
-                        } else {
-                            anyhow::bail!("message must be signed by the device");
+                            _ => anyhow::bail!("unknown message type"),
                         }
                     }
                     None => break Ok(()),

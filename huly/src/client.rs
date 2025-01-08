@@ -4,7 +4,7 @@ use crate::id::{AccId, Hash, OrgId, Uid};
 use crate::membership::{
     Membership, MembershipRequestType, MembershipResponseType, MAX_MESSAGE_SIZE,
 };
-use crate::message::{read_lp, write_lp, SignedMessage};
+use crate::message::{read_lp, write_lp, Message};
 use anyhow::Result;
 use bytes::BytesMut;
 use iroh::{Endpoint, NodeId, SecretKey};
@@ -20,14 +20,14 @@ pub async fn request_membership(
     let (mut send, mut recv) = conn.open_bi().await?;
 
     let request = MembershipRequestType::make(secret_key.public().into(), account, org);
-    let encoded = MembershipRequestType::sign_and_encode(secret_key, request)?;
+    let encoded = MembershipRequestType::sign_and_encode(secret_key, &request)?;
     write_lp(&mut send, &encoded, MAX_MESSAGE_SIZE).await?;
 
     let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
     let encoded = read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await?;
 
     if let Some(encoded) = encoded {
-        let message = SignedMessage::decode_and_verify(encoded.as_ref())?;
+        let message = Message::decode(encoded.as_ref())?;
         println!("got membership response: {:?}", message);
     } else {
         println!("unexpected end of stream?")
