@@ -4,6 +4,7 @@ use crate::id::{AccId, Hash, OrgId, Uid};
 use crate::membership::{Membership, MembershipRequestType};
 use anyhow::Result;
 use iroh::{Endpoint, NodeId, SecretKey};
+use tokio::io::AsyncWriteExt;
 
 pub async fn request_membership(
     secret_key: &SecretKey,
@@ -18,7 +19,15 @@ pub async fn request_membership(
     let request = MembershipRequestType::make(secret_key.public().into(), account, org);
     let encoded = MembershipRequestType::sign_and_encode(secret_key, request)?;
 
+    let len = if encoded.len() > 4096 {
+        anyhow::bail!("message too large");
+    } else {
+        encoded.len() as u32
+    };
+
+    send.write_u32(len).await?;
     send.write_all(&encoded).await?;
+
     send.finish()?;
     send.stopped().await?;
 

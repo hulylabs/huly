@@ -38,6 +38,16 @@ impl Db {
             .map(|x| x.value().into()))
     }
 
+    pub fn insert_device_account(&self, device: DeviceId, account: AccId) -> Result<()> {
+        let write_tx = self.db.begin_write()?;
+        {
+            let mut table = write_tx.open_table(DEVICE_ACCOUNT)?;
+            table.insert(device, account)?;
+        }
+        write_tx.commit()?;
+        Ok(())
+    }
+
     pub fn get_account_orgs(&self, acc: AccId) -> Result<HashSet<OrgId>> {
         let read_tx = self.db.begin_read()?;
         let table = read_tx.open_multimap_table(ACCOUNT_ORGS)?;

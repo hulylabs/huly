@@ -15,14 +15,16 @@ use std::net::{Ipv4Addr, SocketAddrV4};
 /// in another terminal and then set the `-d http://localhost:3340` flag on this example.
 #[derive(Parser, Debug)]
 struct Args {
-    #[clap(long)]
-    secret_key: Option<String>,
+    // #[clap(long)]
+    // secret_key: Option<String>,
     #[clap(short, long)]
     relay: Option<RelayUrl>,
     #[clap(long)]
     no_relay: bool,
     #[clap(short, long)]
-    name: Option<String>,
+    db: String,
+    #[clap(long)]
+    db_init: bool,
     #[clap(short, long, default_value = "0")]
     bind_port: u16,
     #[clap(subcommand)]
@@ -33,6 +35,7 @@ struct Args {
 enum Command {
     Client { server: String, account: String },
     Server {},
+    CreateDb,
 }
 
 #[tokio::main]
@@ -46,7 +49,7 @@ async fn main() -> Result<()> {
         .build()
         .unwrap();
 
-    let secret_key = match args.secret_key {
+    let secret_key = match settings.get::<Option<String>>("secret")? {
         None => SecretKey::generate(rand::rngs::OsRng),
         Some(key) => key.parse()?,
     };
@@ -76,12 +79,15 @@ async fn main() -> Result<()> {
 
     println!("ready with node id: {}", endpoint.node_id());
 
-    let builder = Router::builder(endpoint.clone());
+    let router = Router::builder(endpoint.clone());
 
-    let db = Db::open("huly.redb")?;
-    let membership = Membership::new(db, builder.endpoint().clone());
+    let db = match args.db_init {
+        true => Db::create(&args.db)?,
+        false => Db::open(&args.db)?,
+    };
+    let membership = Membership::new(db, endpoint.clone());
 
-    let builder = builder.accept(Membership::ALPN, membership.clone());
+    let builder = router.accept(Membership::ALPN, membership.clone());
     let node = builder.spawn().await?;
 
     match args.command {
@@ -102,6 +108,9 @@ async fn main() -> Result<()> {
             huly::client::request_membership(&secret_key.clone(), endpoint.clone(), account, org)
                 .await?;
         }
+        Command::CreateDb => {
+            let _ = Db::create(&args.db)?;
+        }
     }
 
     // sleep(Duration::from_secs(60)).await;
@@ -112,6 +121,7 @@ async fn main() -> Result<()> {
     // 802ec3ff23cdd6bc67b4b45c9d3dd92bd518c1b4c6708fcde1ce2a1a7abc6aef
     // b60988059e237d6e1ccc9f1b9985123a3db34b21a527e14b4bad99574aeabed9
 
+    // Account:
     // d28aeaafe8e8c70f16bc862085795dfcb45c083ab8ff0754654b0e35a45fe339
     // 22cfbf283eb134a3cde229fec9de9f97aa946021d484e66a308b7a79b005c814
 

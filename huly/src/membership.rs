@@ -124,7 +124,10 @@ impl ProtocolHandler for Membership {
                             match message.get_type() {
                                 MembershipRequestType::TAG => {
                                     let request = MembershipRequestType::decode(message)?;
-                                    println!("membership request: {:?}", request);
+                                    let device = request.device_ownership.device;
+                                    let account = request.device_ownership.account;
+                                    this.db.insert_device_account(device, account)?;
+                                    println!("added device `{}` to account `{}`", device, account);
                                 }
                                 _ => anyhow::bail!("unknown message type"),
                             }
