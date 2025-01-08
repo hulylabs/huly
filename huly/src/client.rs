@@ -1,10 +1,13 @@
 //
 
 use crate::id::{AccId, OrgId};
-use crate::membership::{Membership, MembershipRequest, MembershipRequestType};
+use crate::membership::{
+    Empty, Membership, MembershipRequest, MembershipRequestType, ServeMeRequestType,
+};
 use crate::message::{Message, SignedMessage, SignedMessageType};
 use anyhow::Result;
 use iroh::{Endpoint, NodeId, SecretKey};
+use tokio::io::AsyncWriteExt;
 
 pub async fn request_membership(
     secret_key: &SecretKey,
@@ -20,16 +23,21 @@ pub async fn request_membership(
     let encoded = MembershipRequestType::encode(&request)?;
     let signed = SignedMessage::sign(secret_key, encoded)?;
     let encoded = SignedMessageType::encode(&signed)?;
+
     encoded.write_async(&mut send).await?;
+    println!("sent membership request: {:?}", request);
 
     let response = Message::read_async(&mut recv).await?;
-
-    // if let Some(encoded) = encoded {
-    //     let message = Message::decode(encoded.as_ref())?;
     println!("got membership response: {:?}", response);
-    // } else {
-    //     println!("unexpected end of stream?")
-    // }
+
+    let request = ServeMeRequestType::encode(&Empty {})?;
+    request.write_async(&mut send).await?;
+    println!("sent serve me request");
+
+    let response = Message::read_async(&mut recv).await?;
+    println!("got serve me response: {:?}", response);
+
+    tokio::signal::ctrl_c().await?;
 
     send.finish()?;
     send.stopped().await?;

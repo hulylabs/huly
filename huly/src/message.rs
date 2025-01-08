@@ -40,17 +40,9 @@ impl Data {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
-pub enum TypeParams {
-    Zero(),
-    One(Tag),
-    Two(Tag, Tag),
-}
-
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Message {
     message_type: Tag,
-    type_params: TypeParams,
     data_format: Format,
     data: Data,
 }
@@ -69,18 +61,20 @@ impl Message {
     }
 
     pub async fn read_async(mut reader: impl AsyncRead + Unpin) -> Result<Self> {
-        let mut buffer = BytesMut::new();
         let size = reader.read_u32().await?;
         if size > Self::MAX_MESSAGE_SIZE as u32 {
             anyhow::bail!("Incoming message exceeds the maximum message size");
         }
         let size = usize::try_from(size).context("frame larger than usize")?;
-        buffer.reserve(size);
-        loop {
+        let mut buffer = BytesMut::with_capacity(size);
+        let mut remaining = size;
+
+        while remaining > 0 {
             let r = reader.read_buf(&mut buffer).await?;
             if r == 0 {
-                break;
+                anyhow::bail!("Unexpected EOF");
             }
+            remaining = remaining.saturating_sub(r);
         }
         Self::decode(&buffer)
     }
@@ -99,18 +93,6 @@ impl Message {
 
     pub fn get_type(&self) -> Tag {
         self.message_type
-    }
-
-    pub fn get_type_unwrap(&self) -> Tag {
-        match self.type_params {
-            TypeParams::Zero() => self.message_type,
-            TypeParams::One(tag) => tag,
-            TypeParams::Two(_, _) => self.message_type,
-        }
-    }
-
-    pub fn get_type_params(&self) -> TypeParams {
-        self.type_params
     }
 
     pub fn get_payload<T>(&self) -> Result<T>
@@ -152,7 +134,6 @@ where
     pub fn encode(message: &T) -> Result<Message> {
         Ok(Message {
             message_type: Self::TAG,
-            type_params: TypeParams::Zero(),
             data_format: POSTCARD_FORMAT,
             data: Data::Inline(postcard::to_stdvec(message)?.into()),
         })

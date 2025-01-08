@@ -79,38 +79,56 @@ impl ProtocolHandler for Membership {
 
             // fetch account's organizations
 
-            let topic = TopicId::from_bytes(account_id.into());
-
-            println!("subscribing");
-            let (sender, receiver) = this.gossip.subscribe_and_join(topic, vec![]).await?.split();
-
-            println!("spawning account loop");
-            let x = tokio::spawn(account_loop(sender, receiver));
-
-            println!("spawned");
             let (mut send, mut recv) = connection.accept_bi().await?;
+
+            println!("accepted connection");
+
             loop {
                 let message = Message::read_async(&mut recv).await?;
-                match message.get_type_unwrap() {
-                    MembershipRequestType::TAG => {
+                println!("got message");
+                match message.get_type() {
+                    SignedMessageType::TAG => {
+                        println!("got signed message");
+
                         let signed = SignedMessageType::decode(&message)?;
                         if signed.verify()? != device_id.into() {
                             anyhow::bail!("message must be signed by the device");
                         }
 
-                        // let message = Message::decode(signed.get_payload().as_bytes())?;
-                        let request = MembershipRequestType::decode(signed.get_message())?;
-                        let device = request.device_ownership.device;
-                        let account = request.device_ownership.account;
+                        match signed.get_message().get_type() {
+                            MembershipRequestType::TAG => {
+                                let request = MembershipRequestType::decode(signed.get_message())?;
+                                let device = request.device_ownership.device;
+                                let account = request.device_ownership.account;
 
-                        this.db.insert_device_account(device, account)?;
-                        println!("added device `{}` to account `{}`", device, account);
+                                this.db.insert_device_account(device, account)?;
+                                println!("added device `{}` to account `{}`", device, account);
 
-                        let response = MembershipResponse::new(true, None);
-                        let encoded = MembershipResponseType::encode(&response)?;
-                        let signed = SignedMessage::sign(&this.endpoint.secret_key(), encoded)?;
-                        let message = SignedMessageType::encode(&signed)?;
-                        message.write_async(&mut send).await?;
+                                let response = MembershipResponse::new(true, None);
+                                let encoded = MembershipResponseType::encode(&response)?;
+                                let signed =
+                                    SignedMessage::sign(&this.endpoint.secret_key(), encoded)?;
+                                let encoded = SignedMessageType::encode(&signed)?;
+                                encoded.write_async(&mut send).await?;
+                            }
+                            _ => anyhow::bail!("unknown message type"),
+                        }
+                    }
+                    ServeMeRequestType::TAG => {
+                        println!("got serve me request");
+                        let topic = TopicId::from_bytes(account_id.into());
+
+                        println!("subscribing");
+                        let (sender, receiver) =
+                            this.gossip.subscribe_and_join(topic, vec![]).await?.split();
+
+                        println!("spawning account loop");
+                        let x = tokio::spawn(account_loop(sender, receiver));
+                        println!("spawned");
+
+                        let response = Empty {};
+                        let encoded = ServeMeResponseType::encode(&response)?;
+                        encoded.write_async(&mut send).await?;
                     }
                     _ => anyhow::bail!("unknown message type"),
                 }
