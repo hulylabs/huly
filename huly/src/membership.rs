@@ -23,13 +23,18 @@ use tokio::io::{AsyncRead, AsyncReadExt};
 pub struct Membership {
     db: Db,
     endpoint: Endpoint,
+    gossip: Gossip,
 }
 
 impl Membership {
     pub const ALPN: &[u8] = b"huly/membership/0";
 
-    pub fn new(db: Db, endpoint: Endpoint) -> Arc<Self> {
-        Arc::new(Self { db, endpoint })
+    pub fn new(db: Db, endpoint: Endpoint, gossip: Gossip) -> Arc<Self> {
+        Arc::new(Self {
+            db,
+            endpoint,
+            gossip,
+        })
     }
 }
 
@@ -103,14 +108,14 @@ impl ProtocolHandler for Membership {
 
             // fetch account's organizations
 
-            let gossip = Gossip::builder().spawn(this.endpoint.clone()).await?;
+            // let gossip = Gossip::builder().spawn(this.endpoint.clone()).await?;
             let topic = TopicId::from_bytes(account_id.into());
-            let router = iroh::protocol::Router::builder(this.endpoint)
-                .accept(GOSSIP_ALPN, gossip.clone())
-                .spawn()
-                .await?;
+            // let router = iroh::protocol::Router::builder(this.endpoint)
+            //     .accept(GOSSIP_ALPN, gossip.clone())
+            //     .spawn()
+            //     .await?;
 
-            let (sender, receiver) = gossip.subscribe_and_join(topic, vec![]).await?.split();
+            let (sender, receiver) = this.gossip.subscribe_and_join(topic, vec![]).await?.split();
             tokio::spawn(account_loop(sender, receiver));
 
             let (mut send, mut recv) = connection.accept_bi().await?;

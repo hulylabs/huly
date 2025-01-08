@@ -8,6 +8,11 @@ use huly::id::{AccId, OrgId};
 use huly::membership::Membership;
 use iroh::protocol::Router;
 use iroh::{Endpoint, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey};
+use iroh_gossip::net::GossipSender;
+use iroh_gossip::{
+    net::{Event, Gossip, GossipEvent, GossipReceiver, GOSSIP_ALPN},
+    proto::TopicId,
+};
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 /// By default, the relay server run by n0 is used. To use a local relay server, run
@@ -79,20 +84,24 @@ async fn main() -> Result<()> {
 
     println!("ready with node id: {}", endpoint.node_id());
 
-    let router = Router::builder(endpoint.clone());
-
     let db = match args.db_init {
         true => Db::create(&args.db)?,
         false => Db::open(&args.db)?,
     };
-    let membership = Membership::new(db, endpoint.clone());
 
-    let builder = router.accept(Membership::ALPN, membership.clone());
-    let node = builder.spawn().await?;
+    let router_builder = Router::builder(endpoint.clone());
+
+    let gossip = Gossip::builder().spawn(endpoint.clone()).await?;
+    let router_builder = router_builder.accept(GOSSIP_ALPN, gossip.clone());
+
+    let membership = Membership::new(db, endpoint.clone(), gossip.clone());
+    let router_builder = router_builder.accept(Membership::ALPN, membership.clone());
+
+    let router = router_builder.spawn().await?;
 
     match args.command {
         Command::Server {} => {
-            let node_id = node.endpoint().node_id();
+            let node_id = router.endpoint().node_id();
             println!("membership proto started on node id: {node_id}");
 
             // for text in text.into_iter() {
@@ -143,7 +152,7 @@ async fn main() -> Result<()> {
 
     // client.run().await
 
-    node.shutdown().await?;
+    router.shutdown().await?;
 
     Ok(())
 }
