@@ -26,25 +26,29 @@ where
 {
     pub const TAG: Tag = ID;
 
-    pub fn sign_and_encode(secret_key: &SecretKey, message: T) -> Result<Bytes> {
-        let data: Bytes = postcard::to_stdvec(&message)?.into();
-        let signature = secret_key.sign(&data);
-        let signed_message = SignedMessage {
-            message_type: Self::TAG,
+    fn format(message: &T) -> Result<(Tag, Data)> {
+        Ok((Self::TAG, Data::Bytes(postcard::to_stdvec(message)?.into())))
+    }
+
+    fn encode_message(format: (Tag, Data), signature: Option<(PKey, Signature)>) -> Result<Bytes> {
+        let message = Message {
+            message_type: format.0,
             format: POSTCARD_FORMAT,
-            data: Data::Bytes(data),
-            by: secret_key.public().into(),
+            data: format.1,
             signature,
         };
-        let encoded = postcard::to_stdvec(&signed_message)?;
+        let encoded = postcard::to_stdvec(&message)?;
         Ok(encoded.into())
     }
 
-    pub fn decode(message: SignedMessage) -> Result<T> {
-        if message.message_type != Self::TAG {
-            anyhow::bail!("unexpected message type");
-        }
-        message.data.decode()
+    pub fn encode(message: &T) -> Result<Bytes> {
+        Self::encode_message(Self::format(message)?, None)
+    }
+
+    pub fn sign_and_encode(secret_key: &SecretKey, message: &T) -> Result<Bytes> {
+        let format = Self::format(message)?;
+        let signature = format.1.sign(secret_key)?;
+        Self::encode_message(format, Some(signature))
     }
 }
 
@@ -54,33 +58,49 @@ enum Data {
     Blob(Hash),
 }
 
+impl Data {
+    fn sign(&self, secret_key: &SecretKey) -> Result<(PKey, Signature)> {
+        match self {
+            Self::Bytes(bytes) => Ok((secret_key.public().into(), secret_key.sign(bytes))),
+            Self::Blob(_) => Err(anyhow::anyhow!("blob signing not implemented")),
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize)]
-pub struct SignedMessage {
+pub struct Message {
     message_type: Tag,
     format: Tag,
     data: Data,
-    by: PKey,
-    signature: Signature,
+    signature: Option<(PKey, Signature)>,
+}
+
+impl Message {
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        postcard::from_bytes(bytes).map_err(Into::into)
+    }
 }
 
 impl SignedMessage {
-    pub fn decode_and_verify(bytes: &[u8]) -> Result<Self> {
-        let this: Self = postcard::from_bytes(bytes)?;
-        let key: PublicKey = this.by.into();
-        if let Data::Bytes(data) = &this.data {
-            key.verify(&data, &this.signature)?;
-            Ok(this)
-        } else {
-            Err(anyhow::anyhow!("blob verification not implemented"))
-        }
+    pub fn decode(bytes: &[u8]) -> Result<Self> {
+        postcard::from_bytes(bytes).map_err(Into::into)
+    }
+
+    pub fn verify(&self) -> Result<()> {
+        let key: PublicKey = self.signature.0.into();
+        let data = match &self.message.data {
+            Data::Bytes(bytes) => bytes,
+            Data::Blob(_) => anyhow::bail!("blob verification not implemented"),
+        };
+        key.verify(&data, &self.signature.1).map_err(Into::into)
     }
 
     pub fn get_signer(&self) -> PKey {
-        self.by
+        self.signature.0
     }
 
     pub fn get_type(&self) -> Tag {
-        self.message_type
+        self.message.message_type
     }
 }
 
