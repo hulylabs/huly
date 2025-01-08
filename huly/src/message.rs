@@ -50,16 +50,6 @@ pub struct Message {
 impl Message {
     const MAX_MESSAGE_SIZE: usize = 0x10000;
 
-    pub fn decode(bytes: &[u8]) -> Result<Self> {
-        postcard::from_bytes(bytes).map_err(Into::into)
-    }
-
-    pub fn encode(&self) -> Result<Bytes> {
-        postcard::to_stdvec(self)
-            .map(Into::into)
-            .map_err(Into::into)
-    }
-
     pub async fn read_async(mut reader: impl AsyncRead + Unpin) -> Result<Self> {
         let size = reader.read_u32().await?;
         if size > Self::MAX_MESSAGE_SIZE as u32 {
@@ -76,11 +66,11 @@ impl Message {
             }
             remaining = remaining.saturating_sub(r);
         }
-        Self::decode(&buffer)
+        postcard::from_bytes(&buffer).map_err(Into::into)
     }
 
     pub async fn write_async(&self, mut writer: impl AsyncWrite + Unpin) -> Result<()> {
-        let buffer = self.encode()?;
+        let buffer = postcard::to_stdvec(self)?;
         let size = if buffer.len() > Self::MAX_MESSAGE_SIZE {
             anyhow::bail!("message too large");
         } else {
@@ -116,21 +106,6 @@ where
 {
     pub const TAG: Tag = ID;
 
-    // fn format(message: &T) -> Result<(Tag, Data)> {
-    //     Ok((Self::TAG, Data::Bytes(postcard::to_stdvec(message)?.into())))
-    // }
-
-    // fn encode_message(format: (Tag, Data), signature: Option<(PKey, Signature)>) -> Result<Bytes> {
-    //     let message = Message {
-    //         message_type: format.0,
-    //         format: POSTCARD_FORMAT,
-    //         data: format.1,
-    //         signature,
-    //     };
-    //     let encoded = postcard::to_stdvec(&message)?;
-    //     Ok(encoded.into())
-    // }
-
     pub fn encode(message: &T) -> Result<Message> {
         Ok(Message {
             message_type: Self::TAG,
@@ -138,12 +113,6 @@ where
             data: Data::Inline(postcard::to_stdvec(message)?.into()),
         })
     }
-
-    // pub fn sign_and_encode(secret_key: &SecretKey, message: &T) -> Result<Bytes> {
-    //     let format = Self::format(message)?;
-    //     let signature = format.1.sign(secret_key)?;
-    //     Self::encode_message(format, Some(signature))
-    // }
 
     pub fn decode(message: &Message) -> Result<T> {
         if message.get_type() != Self::TAG {
@@ -153,23 +122,6 @@ where
         }
     }
 }
-
-// impl Data {
-//     fn sign(&self, secret_key: &SecretKey) -> Result<(PKey, Signature)> {
-//         match self {
-//             Self::Bytes(bytes) => Ok((secret_key.public().into(), secret_key.sign(bytes))),
-//             Self::Blob(_) => Err(anyhow::anyhow!("blob signing not implemented")),
-//         }
-//     }
-// }
-
-// #[derive(Debug, Serialize, Deserialize)]
-// pub struct Message {
-//     message_type: Tag,
-//     format: Tag,
-//     data: Data,
-//     signature: Option<(PKey, Signature)>,
-// }
 
 //
 
@@ -199,10 +151,6 @@ impl SignedMessage {
     pub fn get_message(&self) -> &Message {
         &self.message
     }
-
-    // pub fn get_signature(&self) -> Option<(PKey, Signature)> {
-    //     self.signature
-    // }
 }
 
 pub type SignedMessageType = crate::message::MessageType<SignedMessage, 0x131C5_FACADE_699EA>;
