@@ -1,10 +1,13 @@
 //
 
 use crate::id::{AccId, Hash, OrgId, Uid};
-use crate::membership::{Membership, MembershipRequestType};
+use crate::membership::{
+    Membership, MembershipRequestType, MembershipResponseType, MAX_MESSAGE_SIZE,
+};
+use crate::message::{read_lp, write_lp, SignedMessage};
 use anyhow::Result;
+use bytes::BytesMut;
 use iroh::{Endpoint, NodeId, SecretKey};
-use tokio::io::AsyncWriteExt;
 
 pub async fn request_membership(
     secret_key: &SecretKey,
@@ -18,15 +21,17 @@ pub async fn request_membership(
 
     let request = MembershipRequestType::make(secret_key.public().into(), account, org);
     let encoded = MembershipRequestType::sign_and_encode(secret_key, request)?;
+    write_lp(&mut send, &encoded, MAX_MESSAGE_SIZE).await?;
 
-    let len = if encoded.len() > 4096 {
-        anyhow::bail!("message too large");
+    let mut buffer = BytesMut::with_capacity(MAX_MESSAGE_SIZE);
+    let encoded = read_lp(&mut recv, &mut buffer, MAX_MESSAGE_SIZE).await?;
+
+    if let Some(encoded) = encoded {
+        let message = SignedMessage::decode_and_verify(encoded.as_ref())?;
+        println!("got membership response: {:?}", message);
     } else {
-        encoded.len() as u32
-    };
-
-    send.write_u32(len).await?;
-    send.write_all(&encoded).await?;
+        println!("unexpected end of stream?")
+    }
 
     send.finish()?;
     send.stopped().await?;

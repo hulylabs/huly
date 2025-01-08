@@ -1,12 +1,13 @@
 //
 
 use crate::id::{Hash, PKey};
-use anyhow::Result;
-use bytes::Bytes;
+use anyhow::{Context, Result};
+use bytes::{Bytes, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signature;
 use iroh::{PublicKey, SecretKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 
 type Tag = u64;
 
@@ -98,7 +99,7 @@ impl Data {
 // Timestamp
 
 #[derive(Debug, Serialize, Deserialize)]
-struct Timestamp(i64);
+pub struct Timestamp(i64);
 
 impl From<DateTime<Utc>> for Timestamp {
     fn from(dt: DateTime<Utc>) -> Self {
@@ -116,4 +117,48 @@ impl TryInto<DateTime<Utc>> for Timestamp {
             chrono::LocalResult::Ambiguous(_, _) => anyhow::bail!("timestamp is ambiguous"),
         }
     }
+}
+
+//
+
+pub async fn read_lp(
+    mut reader: impl AsyncRead + Unpin,
+    buffer: &mut BytesMut,
+    max_message_size: usize,
+) -> Result<Option<Bytes>> {
+    let size = match reader.read_u32().await {
+        Ok(size) => size,
+        Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut reader = reader.take(size as u64);
+    let size = usize::try_from(size).context("frame larger than usize")?;
+    if size > max_message_size {
+        anyhow::bail!(
+            "Incoming message exceeds the maximum message size of {max_message_size} bytes"
+        );
+    }
+    buffer.reserve(size);
+    loop {
+        let r = reader.read_buf(buffer).await?;
+        if r == 0 {
+            break;
+        }
+    }
+    Ok(Some(buffer.split_to(size).freeze()))
+}
+
+pub async fn write_lp(
+    mut writer: impl AsyncWrite + Unpin,
+    buffer: &Bytes,
+    max_message_size: usize,
+) -> Result<()> {
+    let size = if buffer.len() > max_message_size {
+        anyhow::bail!("message too large");
+    } else {
+        buffer.len() as u32
+    };
+    writer.write_u32(size).await?;
+    writer.write_all(&buffer).await?;
+    Ok(())
 }

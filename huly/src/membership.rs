@@ -2,9 +2,9 @@
 
 use crate::db::Db;
 use crate::id::{AccId, NodeId, OrgId};
-use crate::message::SignedMessage;
-use anyhow::{Context, Result};
-use bytes::{Bytes, BytesMut};
+use crate::message::{read_lp, write_lp, SignedMessage, Timestamp};
+use anyhow::Result;
+use bytes::BytesMut;
 use futures_lite::future::Boxed as BoxedFuture;
 use futures_lite::StreamExt;
 use iroh::endpoint::{get_remote_node_id, Connecting};
@@ -12,12 +12,11 @@ use iroh::protocol::ProtocolHandler;
 use iroh::Endpoint;
 use iroh_gossip::net::GossipSender;
 use iroh_gossip::{
-    net::{Event, Gossip, GossipEvent, GossipReceiver, GOSSIP_ALPN},
+    net::{Event, Gossip, GossipEvent, GossipReceiver},
     proto::TopicId,
 };
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt};
 
 #[derive(Debug, Clone)]
 pub struct Membership {
@@ -38,34 +37,7 @@ impl Membership {
     }
 }
 
-async fn read_lp(
-    mut reader: impl AsyncRead + Unpin,
-    buffer: &mut BytesMut,
-    max_message_size: usize,
-) -> Result<Option<Bytes>> {
-    let size = match reader.read_u32().await {
-        Ok(size) => size,
-        Err(err) if err.kind() == std::io::ErrorKind::UnexpectedEof => return Ok(None),
-        Err(err) => return Err(err.into()),
-    };
-    let mut reader = reader.take(size as u64);
-    let size = usize::try_from(size).context("frame larger than usize")?;
-    if size > max_message_size {
-        anyhow::bail!(
-            "Incoming message exceeds the maximum message size of {max_message_size} bytes"
-        );
-    }
-    buffer.reserve(size);
-    loop {
-        let r = reader.read_buf(buffer).await?;
-        if r == 0 {
-            break;
-        }
-    }
-    Ok(Some(buffer.split_to(size).freeze()))
-}
-
-const MAX_MESSAGE_SIZE: usize = 4096;
+pub const MAX_MESSAGE_SIZE: usize = 4096;
 
 async fn account_loop(mut sender: GossipSender, mut receiver: GossipReceiver) -> Result<()> {
     while let Some(event) = receiver.try_next().await? {
@@ -108,13 +80,7 @@ impl ProtocolHandler for Membership {
 
             // fetch account's organizations
 
-            // let gossip = Gossip::builder().spawn(this.endpoint.clone()).await?;
             let topic = TopicId::from_bytes(account_id.into());
-            // let router = iroh::protocol::Router::builder(this.endpoint)
-            //     .accept(GOSSIP_ALPN, gossip.clone())
-            //     .spawn()
-            //     .await?;
-
             let (sender, receiver) = this.gossip.subscribe_and_join(topic, vec![]).await?.split();
             tokio::spawn(account_loop(sender, receiver));
 
@@ -131,8 +97,16 @@ impl ProtocolHandler for Membership {
                                     let request = MembershipRequestType::decode(message)?;
                                     let device = request.device_ownership.device;
                                     let account = request.device_ownership.account;
+
                                     this.db.insert_device_account(device, account)?;
                                     println!("added device `{}` to account `{}`", device, account);
+
+                                    let response = MembershipResponseType::make();
+                                    let encoded = MembershipResponseType::sign_and_encode(
+                                        &this.endpoint.secret_key(),
+                                        response,
+                                    )?;
+                                    write_lp(&mut send, &encoded, MAX_MESSAGE_SIZE).await?;
                                 }
                                 _ => anyhow::bail!("unknown message type"),
                             }
@@ -168,6 +142,27 @@ impl MembershipRequestType {
         MembershipRequest {
             device_ownership: DeviceOwnership { account, device },
             org,
+        }
+    }
+}
+
+//
+
+#[derive(Serialize, Deserialize)]
+pub struct MembershipResponse {
+    // request: SignedMessage,
+    accepted: bool,
+    expiration: Option<Timestamp>,
+}
+
+pub type MembershipResponseType =
+    crate::message::MessageType<MembershipResponse, 0xE6DD0F88165F0752>;
+
+impl MembershipResponseType {
+    pub fn make() -> MembershipResponse {
+        MembershipResponse {
+            accepted: true,
+            expiration: None,
         }
     }
 }
