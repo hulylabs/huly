@@ -119,8 +119,11 @@ impl ProtocolHandler for Membership {
                         let topic = TopicId::from_bytes(account_id.into());
 
                         println!("subscribing");
-                        let (sender, receiver) =
-                            this.gossip.subscribe_and_join(topic, vec![]).await?.split();
+                        let (sender, receiver) = this
+                            .gossip
+                            .subscribe_and_join(topic, vec![device_id])
+                            .await?
+                            .split();
 
                         println!("spawning account loop");
                         let x = tokio::spawn(account_loop(sender, receiver));

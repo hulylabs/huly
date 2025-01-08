@@ -114,8 +114,14 @@ async fn main() -> Result<()> {
         Command::Client { server, account } => {
             let account: AccId = account.parse()?;
             let org: OrgId = server.parse()?;
-            huly::client::request_membership(&secret_key.clone(), endpoint.clone(), account, org)
-                .await?;
+            huly::client::request_membership(
+                &secret_key.clone(),
+                endpoint.clone(),
+                account,
+                org,
+                gossip,
+            )
+            .await?;
         }
         Command::CreateDb => {
             let _ = Db::create(&args.db)?;
