@@ -36,7 +36,7 @@ impl Membership {
     }
 }
 
-async fn account_loop(mut sender: GossipSender, mut receiver: GossipReceiver) -> Result<()> {
+async fn account_loop(_sender: GossipSender, mut receiver: GossipReceiver) -> Result<()> {
     println!("Account loop started");
     while let Some(event) = receiver.try_next().await? {
         println!("Server received gossip event: {:?}", event);
@@ -95,7 +95,7 @@ impl ProtocolHandler for Membership {
                                 let response = MembershipResponse::new(true, None);
                                 let encoded = MembershipResponse::encode(&response)?;
                                 let signed =
-                                    SignedMessage::sign(&this.endpoint.secret_key(), encoded)?;
+                                    SignedMessage::sign(this.endpoint.secret_key(), encoded)?;
                                 let encoded = SignedMessage::encode(&signed)?;
                                 encoded.write_async(&mut send).await?;
                             }

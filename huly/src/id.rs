@@ -29,9 +29,9 @@ impl From<PublicKey> for PKey {
     }
 }
 
-impl Into<PublicKey> for PKey {
-    fn into(self) -> PublicKey {
-        PublicKey::from_bytes(&self.0).expect("no way")
+impl From<PKey> for PublicKey {
+    fn from(val: PKey) -> Self {
+        PublicKey::from_bytes(&val.0).expect("no way")
     }
 }
 

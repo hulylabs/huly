@@ -1,7 +1,7 @@
 //
 
 use crate::id::{Hash, PKey};
-use anyhow::{Context, Result};
+use anyhow::Result;
 use bytes::{Buf, Bytes, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signature;
@@ -60,8 +60,7 @@ impl Message {
         let is_inline = header.get_u8() == 0;
 
         if is_inline {
-            let size = reader.read_u16_le().await?;
-            let size = usize::try_from(size).context("frame larger than usize")?;
+            let size = reader.read_u16_le().await? as usize;
             if size > Self::MAX_MESSAGE_SIZE {
                 anyhow::bail!("Incoming message exceeds the maximum message size");
             }
@@ -195,6 +194,7 @@ impl MessageType for SignedMessage {
 }
 
 impl SignedMessage {
+    #[allow(clippy::unusual_byte_groupings)]
     pub const TAG: Tag = 0x131C5_FACADE_699EA;
 
     pub fn sign(secret_key: &SecretKey, message: Message) -> Result<Self> {

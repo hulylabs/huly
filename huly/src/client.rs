@@ -33,7 +33,7 @@ pub async fn request_membership(
     let topic = TopicId::from_bytes(account.into());
     // let gossip = Gossip::builder().spawn(endpoint.clone()).await?;
 
-    let (sender, mut receiver) = gossip.subscribe(topic, vec![node_id])?.split();
+    let (_sender, mut receiver) = gossip.subscribe(topic, vec![node_id])?.split();
 
     println!("started gossip proto");
 

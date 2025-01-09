@@ -7,12 +7,8 @@ use huly::db::Db;
 use huly::id::{AccId, OrgId};
 use huly::membership::Membership;
 use iroh::protocol::Router;
-use iroh::{Endpoint, PublicKey, RelayMap, RelayMode, RelayUrl, SecretKey};
-use iroh_gossip::net::GossipSender;
-use iroh_gossip::{
-    net::{Event, Gossip, GossipEvent, GossipReceiver, GOSSIP_ALPN},
-    proto::TopicId,
-};
+use iroh::{Endpoint, RelayMap, RelayMode, RelayUrl, SecretKey};
+use iroh_gossip::net::{Gossip, GOSSIP_ALPN};
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 /// By default, the relay server run by n0 is used. To use a local relay server, run
