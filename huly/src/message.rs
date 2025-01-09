@@ -2,15 +2,15 @@
 
 use crate::id::{Hash, PKey};
 use anyhow::{Context, Result};
-use bytes::{Bytes, BytesMut};
+use bytes::{Buf, Bytes, BytesMut};
 use chrono::{DateTime, TimeZone, Utc};
 use ed25519_dalek::Signature;
 use iroh::{PublicKey, SecretKey};
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 
 type Tag = u64;
-type Format = u16;
+type Format = u8;
 
 pub const UNDEFINED_FORMAT: Format = 0x0000;
 pub const POSTCARD_FORMAT: Format = 0x0001;
@@ -49,35 +49,67 @@ pub struct Message {
 
 impl Message {
     const MAX_MESSAGE_SIZE: usize = 0x10000;
+    const HEADER_SIZE: usize = 10;
 
     pub async fn read_async(mut reader: impl AsyncRead + Unpin) -> Result<Self> {
-        let size = reader.read_u32().await?;
-        if size > Self::MAX_MESSAGE_SIZE as u32 {
-            anyhow::bail!("Incoming message exceeds the maximum message size");
-        }
-        let size = usize::try_from(size).context("frame larger than usize")?;
-        let mut buffer = BytesMut::with_capacity(size);
-        let mut remaining = size;
+        let mut header = [0u8; Self::HEADER_SIZE];
+        reader.read_exact(&mut header).await?;
 
-        while remaining > 0 {
-            let r = reader.read_buf(&mut buffer).await?;
-            if r == 0 {
-                anyhow::bail!("Unexpected EOF");
+        let mut header = Bytes::copy_from_slice(&header);
+        let tag = header.get_u64_le();
+        let format = header.get_u8();
+        let is_inline = header.get_u8() == 0;
+
+        if is_inline {
+            let size = reader.read_u16_le().await?;
+            let size = usize::try_from(size).context("frame larger than usize")?;
+            if size > Self::MAX_MESSAGE_SIZE {
+                anyhow::bail!("Incoming message exceeds the maximum message size");
             }
-            remaining = remaining.saturating_sub(r);
+            let mut buffer = BytesMut::with_capacity(size);
+            let mut remaining = size;
+
+            while remaining > 0 {
+                let r = reader.read_buf(&mut buffer).await?;
+                if r == 0 {
+                    anyhow::bail!("Unexpected EOF");
+                }
+                remaining = remaining.saturating_sub(r);
+            }
+            Ok(Message {
+                message_type: tag,
+                data_format: format,
+                data: Data::Inline(buffer.freeze()),
+            })
+        } else {
+            let mut hash: [u8; 32] = [0; 32];
+            let _ = reader.read_exact(&mut hash).await?;
+            Ok(Message {
+                message_type: tag,
+                data_format: format,
+                data: Data::Blob(hash),
+            })
         }
-        postcard::from_bytes(&buffer).map_err(Into::into)
     }
 
-    pub async fn write_async(&self, mut writer: impl AsyncWrite + Unpin) -> Result<()> {
-        let buffer = postcard::to_stdvec(self)?;
-        let size = if buffer.len() > Self::MAX_MESSAGE_SIZE {
-            anyhow::bail!("message too large");
-        } else {
-            buffer.len() as u32
-        };
-        writer.write_u32(size).await?;
-        writer.write_all(&buffer).await?;
+    pub async fn write_async(&self, writer: impl AsyncWrite + Unpin) -> Result<()> {
+        let mut writer = BufWriter::new(writer);
+
+        writer.write_u64_le(self.message_type).await?;
+        writer.write_u8(self.data_format).await?;
+        match &self.data {
+            Data::Inline(bytes) => {
+                writer.write_u8(0).await?;
+                writer.write_u16_le(bytes.len() as u16).await?;
+                writer.write_all(bytes).await?;
+            }
+            Data::Blob(hash) => {
+                writer.write_u8(0xff).await?;
+                writer.write_all(hash).await?;
+            }
+        }
+
+        writer.flush().await?;
         Ok(())
     }
 
