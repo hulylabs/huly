@@ -12,8 +12,7 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufWriter};
 type Tag = u64;
 type Format = u8;
 
-pub const UNDEFINED_FORMAT: Format = 0x0000;
-pub const POSTCARD_FORMAT: Format = 0x0001;
+const POSTCARD_FORMAT: Format = 0x00;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 enum Data {
@@ -113,6 +112,21 @@ impl Message {
         Ok(())
     }
 
+    pub fn decode<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned + MessageType,
+    {
+        if self.message_type != T::TAG {
+            Err(anyhow::anyhow!(
+                "wrong message type, expected {} got {}",
+                T::TAG,
+                self.message_type
+            ))
+        } else {
+            self.data.decode::<T>()
+        }
+    }
+
     pub fn get_type(&self) -> Tag {
         self.message_type
     }
@@ -125,35 +139,47 @@ impl Message {
     }
 }
 
-pub struct MessageType<T, const ID: Tag>
-where
-    T: Serialize + DeserializeOwned,
-{
-    _marker: std::marker::PhantomData<T>,
-}
+pub trait MessageType: Serialize + DeserializeOwned {
+    const TAG: Tag;
 
-impl<T, const ID: Tag> MessageType<T, ID>
-where
-    T: Serialize + DeserializeOwned,
-{
-    pub const TAG: Tag = ID;
-
-    pub fn encode(message: &T) -> Result<Message> {
+    fn encode(&self) -> Result<Message> {
         Ok(Message {
             message_type: Self::TAG,
             data_format: POSTCARD_FORMAT,
-            data: Data::Inline(postcard::to_stdvec(message)?.into()),
+            data: Data::Inline(postcard::to_stdvec(self)?.into()),
         })
     }
-
-    pub fn decode(message: &Message) -> Result<T> {
-        if message.get_type() != Self::TAG {
-            Err(anyhow::anyhow!("unexpected message type"))
-        } else {
-            message.data.decode()
-        }
-    }
 }
+
+// pub struct MessageType<T, const ID: Tag>
+// where
+//     T: Serialize + DeserializeOwned,
+// {
+//     _marker: std::marker::PhantomData<T>,
+// }
+
+// impl<T, const ID: Tag> MessageType<T, ID>
+// where
+//     T: Serialize + DeserializeOwned,
+// {
+//     pub const TAG: Tag = ID;
+
+//     pub fn encode(message: &T) -> Result<Message> {
+//         Ok(Message {
+//             message_type: Self::TAG,
+//             data_format: POSTCARD_FORMAT,
+//             data: Data::Inline(postcard::to_stdvec(message)?.into()),
+//         })
+//     }
+
+//     pub fn decode(message: &Message) -> Result<T> {
+//         if message.get_type() != Self::TAG {
+//             Err(anyhow::anyhow!("unexpected message type"))
+//         } else {
+//             message.data.decode()
+//         }
+//     }
+// }
 
 //
 
@@ -164,7 +190,13 @@ pub struct SignedMessage {
     signature: Signature,
 }
 
+impl MessageType for SignedMessage {
+    const TAG: Tag = SignedMessage::TAG;
+}
+
 impl SignedMessage {
+    pub const TAG: Tag = 0x131C5_FACADE_699EA;
+
     pub fn sign(secret_key: &SecretKey, message: Message) -> Result<Self> {
         let signature = secret_key.sign(message.data.as_bytes());
         Ok(SignedMessage {
@@ -184,8 +216,6 @@ impl SignedMessage {
         &self.message
     }
 }
-
-pub type SignedMessageType = crate::message::MessageType<SignedMessage, 0x131C5_FACADE_699EA>;
 
 // Timestamp
 
