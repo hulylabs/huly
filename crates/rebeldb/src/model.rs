@@ -5,7 +5,7 @@ use std::fmt;
 
 pub type Hash = [u8; 32];
 
-#[derive(PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub enum Value {
     Uint64(u64),
     Int64(i64),
@@ -19,7 +19,7 @@ pub enum Value {
 }
 
 pub struct Transaction {
-    blobs: HashMap<Hash, Vec<u8>>,
+    pub blobs: HashMap<Hash, Vec<u8>>,
     root: Option<Value>,
 }
 

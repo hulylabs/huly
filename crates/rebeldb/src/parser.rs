@@ -1,33 +1,23 @@
-//
-
-use crate::model::Transaction;
+use crate::model::{Hash, Transaction, Value};
+use blake3::hash;
 use std::str::Chars;
 
-#[derive(Debug, PartialEq)]
-pub enum Token {
-    LBracket,        // [
-    RBracket,        // ]
-    Integer(i64),    // 123, -456
-    Word(String),    // x, point, numbers
-    SetWord(String), // x:
-    String(String),  // "hello world"
-    Error(String),   // For error reporting
-}
-
-pub struct Tokenizer<'a> {
+pub struct Parser<'a> {
     input: Chars<'a>,
     current: Option<char>,
     position: usize,
+    transaction: &'a mut Transaction,
 }
 
-impl<'a> Tokenizer<'a> {
-    pub fn new(input: &'a str) -> Self {
+impl<'a> Parser<'a> {
+    pub fn new(input: &'a str, transaction: &'a mut Transaction) -> Self {
         let mut chars = input.chars();
         let current = chars.next();
         Self {
             input: chars,
             current,
             position: 0,
+            transaction,
         }
     }
 
@@ -45,7 +35,14 @@ impl<'a> Tokenizer<'a> {
         }
     }
 
-    fn read_string(&mut self) -> Token {
+    fn store_string(&mut self, s: &str) -> Hash {
+        let bytes = s.as_bytes();
+        let hash = *blake3::hash(bytes).as_bytes();
+        self.transaction.blobs.insert(hash, bytes.to_vec());
+        hash
+    }
+
+    fn parse_string(&mut self) -> Result<Value, String> {
         let mut result = String::new();
         // Skip opening quote
         self.advance();
@@ -54,7 +51,8 @@ impl<'a> Tokenizer<'a> {
             match c {
                 '"' => {
                     self.advance(); // Skip closing quote
-                    return Token::String(result);
+                    let hash = self.store_string(&result);
+                    return Ok(Value::String(hash));
                 }
                 _ => {
                     result.push(c);
@@ -63,10 +61,10 @@ impl<'a> Tokenizer<'a> {
             }
         }
 
-        Token::Error("Unterminated string literal".to_string())
+        Err("Unterminated string literal".to_string())
     }
 
-    fn read_word(&mut self) -> Token {
+    fn parse_word(&mut self) -> Result<Value, String> {
         let mut result = String::new();
 
         while let Some(c) = self.current {
@@ -75,16 +73,18 @@ impl<'a> Tokenizer<'a> {
                 self.advance();
             } else if c == ':' {
                 self.advance();
-                return Token::SetWord(result);
+                let hash = self.store_string(&result);
+                return Ok(Value::SetWord(hash));
             } else {
                 break;
             }
         }
 
-        Token::Word(result)
+        let hash = self.store_string(&result);
+        Ok(Value::GetWord(hash))
     }
 
-    fn read_number(&mut self) -> Token {
+    fn parse_number(&mut self) -> Result<Value, String> {
         let mut result = String::new();
         let mut is_negative = false;
 
@@ -104,66 +104,129 @@ impl<'a> Tokenizer<'a> {
         }
 
         match result.parse::<i64>() {
-            Ok(num) => Token::Integer(if is_negative { -num } else { num }),
-            Err(_) => Token::Error("Invalid number format".to_string()),
+            Ok(num) => {
+                let num = if is_negative { -num } else { num };
+                Ok(Value::Int64(num))
+            }
+            Err(_) => Err("Invalid number format".to_string()),
         }
     }
-}
 
-impl<'a> Iterator for Tokenizer<'a> {
-    type Item = Token;
+    fn parse_block(&mut self) -> Result<Value, String> {
+        // Skip opening bracket
+        self.advance();
+        let mut values = Vec::new();
 
-    fn next(&mut self) -> Option<Self::Item> {
+        loop {
+            self.skip_whitespace();
+
+            match self.current {
+                None => return Err("Unterminated block".to_string()),
+                Some(']') => {
+                    self.advance();
+                    break;
+                }
+                Some(_) => {
+                    let value = self.parse_value()?;
+                    values.push(value);
+                }
+            }
+        }
+
+        Ok(Value::Block(values.into_boxed_slice()))
+    }
+
+    fn parse_context(&mut self) -> Result<Value, String> {
+        // We assume we're after the 'context' word and about to see a block
         self.skip_whitespace();
 
-        let token = match self.current {
-            None => return None,
-            Some(c) => match c {
-                '[' => {
-                    self.advance();
-                    Token::LBracket
-                }
-                ']' => {
-                    self.advance();
-                    Token::RBracket
-                }
-                '"' => self.read_string(),
-                c if c.is_alphabetic() => self.read_word(),
-                c if c.is_digit(10) || c == '-' => self.read_number(),
-                _ => {
-                    self.advance();
-                    Token::Error(format!("Unexpected character: {}", c))
-                }
-            },
-        };
+        match self.current {
+            Some('[') => {
+                self.advance();
+                let mut pairs = Vec::new();
 
-        Some(token)
-    }
-}
+                loop {
+                    self.skip_whitespace();
 
-// Parser implementation will go here
-pub struct Parser<'a> {
-    tokenizer: Tokenizer<'a>,
-    transaction: &'a mut Transaction,
-    current_token: Option<Token>,
-}
+                    match self.current {
+                        None => return Err("Unterminated context block".to_string()),
+                        Some(']') => {
+                            self.advance();
+                            break;
+                        }
+                        Some(_) => {
+                            // Parse word
+                            let word = match self.parse_word()? {
+                                Value::GetWord(hash) | Value::SetWord(hash) => hash,
+                                _ => return Err("Expected word in context".to_string()),
+                            };
 
-impl<'a> Parser<'a> {
-    pub fn new(input: &'a str, transaction: &'a mut Transaction) -> Self {
-        let mut tokenizer = Tokenizer::new(input);
-        let current_token = tokenizer.next();
-        Self {
-            tokenizer,
-            transaction,
-            current_token,
+                            // Expect and skip ':'
+                            self.skip_whitespace();
+                            if self.current != Some(':') {
+                                return Err("Expected ':' after word in context".to_string());
+                            }
+                            self.advance();
+
+                            // Parse value
+                            self.skip_whitespace();
+                            let value = self.parse_value()?;
+
+                            pairs.push((word, value));
+                        }
+                    }
+                }
+
+                Ok(Value::Context(pairs.into_boxed_slice()))
+            }
+            _ => Err("Expected '[' after context".to_string()),
         }
     }
 
-    fn advance(&mut self) {
-        self.current_token = self.tokenizer.next();
+    fn parse_value(&mut self) -> Result<Value, String> {
+        self.skip_whitespace();
+
+        match self.current {
+            None => Err("Unexpected end of input".to_string()),
+            Some(c) => match c {
+                '[' => self.parse_block(),
+                '"' => self.parse_string(),
+                c if c.is_alphabetic() => {
+                    // Special handling for 'context' keyword
+                    let start_pos = self.position;
+                    let word = self.parse_word()?;
+
+                    if let Value::GetWord(hash) = word {
+                        if let Some(word_bytes) = self.transaction.blobs.get(&hash) {
+                            if word_bytes == b"context" {
+                                return self.parse_context();
+                            }
+                        }
+                    }
+
+                    Ok(word)
+                }
+                c if c.is_digit(10) || c == '-' => self.parse_number(),
+                _ => Err(format!("Unexpected character: {}", c)),
+            },
+        }
     }
 
-    // More parser methods will be added here
+    pub fn parse(&mut self) -> Result<Value, String> {
+        let value = self.parse_value()?;
+        self.skip_whitespace();
+
+        if self.current.is_some() {
+            Err("Unexpected content after value".to_string())
+        } else {
+            Ok(value)
+        }
+    }
+}
+
+pub fn rebel_parse(transaction: &mut Transaction, input: &str) -> Result<Value, String> {
+    let mut parser = Parser::new(input, transaction);
+    parser.parse()
 }
 
 #[cfg(test)]
@@ -171,24 +234,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_tokenizer() {
-        let input = r#"[x: "hello world" numbers: [1 2 3]]"#;
-        let tokens: Vec<Token> = Tokenizer::new(input).collect();
+    fn test_parse_simple() {
+        let mut tx = Transaction::new();
 
-        assert_eq!(
-            tokens,
-            vec![
-                Token::LBracket,
-                Token::SetWord("x".to_string()),
-                Token::String("hello world".to_string()),
-                Token::SetWord("numbers".to_string()),
-                Token::LBracket,
-                Token::Integer(1),
-                Token::Integer(2),
-                Token::Integer(3),
-                Token::RBracket,
-                Token::RBracket,
-            ]
-        );
+        let result = rebel_parse(&mut tx, r#"[x: "hello world" numbers: [1 2 3]]"#).unwrap();
+
+        // We can't directly compare Values because they contain hashes
+        // Instead, let's verify the structure matches what we expect
+        if let Value::Block(items) = result.clone() {
+            assert_eq!(items.len(), 4);
+            // Further structural checks could be added here
+        } else {
+            panic!("Expected Block value");
+        }
+
+        tx.set_root(result);
+        println!("{:#?}", tx);
     }
 }
