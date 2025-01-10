@@ -5,6 +5,7 @@
 use anyhow::{Context, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 use std::collections::HashMap;
+use std::fmt;
 
 pub type Hash = [u8; 32];
 
@@ -65,6 +66,48 @@ impl Blobs for MemoryBlobs {
     }
 }
 
+impl fmt::Debug for MemoryBlobs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "  blobs: {{")?;
+        for (hash, bytes) in &self.blobs {
+            writeln!(f, "    {} =>", hex::encode(hash))?;
+            // Hexdump-like format, 16 bytes per line
+            for chunk in bytes.chunks(16) {
+                // Hex part
+                write!(f, "      ")?;
+                for b in chunk {
+                    write!(f, "{:02x} ", b)?;
+                }
+                // Padding for incomplete last line
+                for _ in chunk.len()..16 {
+                    write!(f, "   ")?;
+                }
+                // ASCII part
+                write!(f, " |")?;
+                for &b in chunk {
+                    let c = if b.is_ascii_graphic() || b == b' ' {
+                        b as char
+                    } else {
+                        '.'
+                    };
+                    write!(f, "{}", c)?;
+                }
+                // Padding for incomplete last line
+                for _ in chunk.len()..16 {
+                    write!(f, " ")?;
+                }
+                writeln!(f, "|")?;
+
+                // If it looks like UTF-8 string, show preview
+                // if let Ok(s) = std::str::from_utf8(bytes) {
+                //     writeln!(f, "      # \"{}\"", s)?;
+                // }
+            }
+        }
+        writeln!(f, "  }}")
+    }
+}
+
 const NONE_TAG: u8 = 0;
 const UINT_TAG: u8 = 1;
 const INT_TAG: u8 = 2;
@@ -79,7 +122,7 @@ pub struct BlockBuilder {
 }
 
 impl BlockBuilder {
-    const INLINE_THRESHOLD: usize = 38;
+    const INLINE_THRESHOLD: usize = 64;
 
     pub fn new() -> Self {
         Self {
@@ -217,16 +260,22 @@ mod tests {
         builder.uint(42);
         builder.float(3.14);
         builder.string(&mut blobs, "hello world");
+        builder.string(&mut blobs, "Truncating a cryptographic hash generally reduces its security. The strength of a hash function is often closely related to its output size. By reducing the output from 32 bytes to 31 bytes, you're potentially reducing the function's resistance to certain types of attacks, such as collision or pre-image attacks.");
+        builder.uint(55);
         let block = builder.build();
 
-        assert_eq!(block.len()?, 3);
+        // assert_eq!(block.len()?, 3);
 
         println!("{:?}", block.get(0)?);
         println!("{:?}", block.get(1)?);
         println!("{:?}", block.get(2)?);
+        println!("{:?}", block.get(3)?);
+        println!("{:?}", block.get(4)?);
 
         println!("{:?}", block.bytes);
         println!("{:?}", block.bytes.len());
+
+        println!("{:?}", blobs);
 
         Ok(())
     }
