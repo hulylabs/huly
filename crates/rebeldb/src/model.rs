@@ -9,6 +9,7 @@ pub type Hash = [u8; 32];
 pub enum Value {
     Uint64(u64),
     Int64(i64),
+    String(Hash),
     SetWord(Hash),
     GetWord(Hash),
     LitWord(Hash),
@@ -30,10 +31,14 @@ impl Transaction {
         }
     }
 
-    pub fn store_bytes(&mut self, bytes: &[u8]) -> Hash {
+    fn store_bytes(&mut self, bytes: &[u8]) -> Hash {
         let hash = blake3::hash(bytes).into();
         self.blobs.insert(hash, bytes.to_vec());
         hash
+    }
+
+    pub fn string(&mut self, s: &str) -> Value {
+        Value::String(self.store_bytes(s.as_bytes()))
     }
 
     pub fn set_word(&mut self, s: &str) -> Value {
@@ -75,6 +80,7 @@ impl fmt::Debug for Value {
         match self {
             Value::Int64(n) => write!(f, "{}", n),
             Value::Uint64(n) => write!(f, "{}", n),
+            Value::String(hash) => write!(f, "\"{}\"", hex::encode(hash)),
             Value::SetWord(hash) => write!(f, "{}:", hex::encode(hash)),
             Value::GetWord(hash) => write!(f, "{}", hex::encode(hash)),
             Value::LitWord(hash) => write!(f, "'{}", hex::encode(hash)),
