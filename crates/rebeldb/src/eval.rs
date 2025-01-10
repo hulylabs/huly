@@ -225,6 +225,9 @@ mod tests {
         println!("{:?}", block.get(1)?);
         println!("{:?}", block.get(2)?);
 
+        println!("{:?}", block.bytes);
+        println!("{:?}", block.bytes.len());
+
         Ok(())
     }
 }
