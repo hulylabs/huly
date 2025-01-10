@@ -1,4 +1,4 @@
-// Huly™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+// RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 //
 // parser.rs:
 
