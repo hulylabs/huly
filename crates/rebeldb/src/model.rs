@@ -151,6 +151,11 @@ impl fmt::Debug for Transaction {
                     write!(f, " ")?;
                 }
                 writeln!(f, "|")?;
+
+                // If it looks like UTF-8 string, show preview
+                if let Ok(s) = std::str::from_utf8(bytes) {
+                    writeln!(f, "      # \"{}\"", s)?;
+                }
             }
         }
         writeln!(f, "  }}")?;
