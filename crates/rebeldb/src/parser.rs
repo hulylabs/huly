@@ -1,29 +1,25 @@
-use crate::model::{Hash, Transaction, Value};
-use blake3::hash;
+use crate::core::{Blobs, Block, Value};
 use std::str::Chars;
 
-pub struct Parser<'a> {
+struct Parser<'a> {
     input: Chars<'a>,
     current: Option<char>,
-    position: usize,
-    transaction: &'a mut Transaction,
+    blobs: &'a mut Blobs,
 }
 
 impl<'a> Parser<'a> {
-    pub fn new(input: &'a str, transaction: &'a mut Transaction) -> Self {
+    fn new(input: &'a str, blobs: &'a mut Blobs) -> Self {
         let mut chars = input.chars();
         let current = chars.next();
         Self {
             input: chars,
             current,
-            position: 0,
-            transaction,
+            blobs,
         }
     }
 
     fn advance(&mut self) {
         self.current = self.input.next();
-        self.position += 1;
     }
 
     fn skip_whitespace(&mut self) {
@@ -35,13 +31,6 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn store_string(&mut self, s: &str) -> Hash {
-        let bytes = s.as_bytes();
-        let hash = *blake3::hash(bytes).as_bytes();
-        self.transaction.blobs.insert(hash, bytes.to_vec());
-        hash
-    }
-
     fn parse_string(&mut self) -> Result<Value, String> {
         let mut result = String::new();
         // Skip opening quote
@@ -51,8 +40,20 @@ impl<'a> Parser<'a> {
             match c {
                 '"' => {
                     self.advance(); // Skip closing quote
-                    let hash = self.store_string(&result);
-                    return Ok(Value::String(hash));
+                    return Ok(self.blobs.string(&result));
+                }
+                '\\' => {
+                    self.advance();
+                    match self.current {
+                        Some('"') => result.push('"'),
+                        Some('\\') => result.push('\\'),
+                        Some('n') => result.push('\n'),
+                        Some('r') => result.push('\r'),
+                        Some('t') => result.push('\t'),
+                        Some(c) => return Err(format!("Invalid escape sequence: \\{}", c)),
+                        None => return Err("Unexpected end of string after \\".to_string()),
+                    }
+                    self.advance();
                 }
                 _ => {
                     result.push(c);
@@ -68,20 +69,18 @@ impl<'a> Parser<'a> {
         let mut result = String::new();
 
         while let Some(c) = self.current {
-            if c.is_alphanumeric() || c == '_' || c == '-' {
+            if c.is_alphanumeric() || c == '_' || c == '-' || c == '/' {
                 result.push(c);
                 self.advance();
             } else if c == ':' {
                 self.advance();
-                let hash = self.store_string(&result);
-                return Ok(Value::SetWord(hash));
+                return Ok(self.blobs.set_word(&result));
             } else {
                 break;
             }
         }
 
-        let hash = self.store_string(&result);
-        Ok(Value::GetWord(hash))
+        Ok(self.blobs.get_word(&result))
     }
 
     fn parse_number(&mut self) -> Result<Value, String> {
@@ -106,7 +105,7 @@ impl<'a> Parser<'a> {
         match result.parse::<i64>() {
             Ok(num) => {
                 let num = if is_negative { -num } else { num };
-                Ok(Value::Int64(num))
+                Ok(Value::int64(num))
             }
             Err(_) => Err("Invalid number format".to_string()),
         }
@@ -136,53 +135,6 @@ impl<'a> Parser<'a> {
         Ok(Value::Block(values.into_boxed_slice()))
     }
 
-    fn parse_context(&mut self) -> Result<Value, String> {
-        // We assume we're after the 'context' word and about to see a block
-        self.skip_whitespace();
-
-        match self.current {
-            Some('[') => {
-                self.advance();
-                let mut pairs = Vec::new();
-
-                loop {
-                    self.skip_whitespace();
-
-                    match self.current {
-                        None => return Err("Unterminated context block".to_string()),
-                        Some(']') => {
-                            self.advance();
-                            break;
-                        }
-                        Some(_) => {
-                            // Parse word
-                            let word = match self.parse_word()? {
-                                Value::GetWord(hash) | Value::SetWord(hash) => hash,
-                                _ => return Err("Expected word in context".to_string()),
-                            };
-
-                            // Expect and skip ':'
-                            self.skip_whitespace();
-                            if self.current != Some(':') {
-                                return Err("Expected ':' after word in context".to_string());
-                            }
-                            self.advance();
-
-                            // Parse value
-                            self.skip_whitespace();
-                            let value = self.parse_value()?;
-
-                            pairs.push((word, value));
-                        }
-                    }
-                }
-
-                Ok(Value::Context(pairs.into_boxed_slice()))
-            }
-            _ => Err("Expected '[' after context".to_string()),
-        }
-    }
-
     fn parse_value(&mut self) -> Result<Value, String> {
         self.skip_whitespace();
 
@@ -191,64 +143,84 @@ impl<'a> Parser<'a> {
             Some(c) => match c {
                 '[' => self.parse_block(),
                 '"' => self.parse_string(),
-                c if c.is_alphabetic() => {
-                    // Special handling for 'context' keyword
-                    let start_pos = self.position;
-                    let word = self.parse_word()?;
-
-                    if let Value::GetWord(hash) = word {
-                        if let Some(word_bytes) = self.transaction.blobs.get(&hash) {
-                            if word_bytes == b"context" {
-                                return self.parse_context();
-                            }
-                        }
-                    }
-
-                    Ok(word)
-                }
+                c if c.is_alphabetic() => self.parse_word(),
                 c if c.is_digit(10) || c == '-' => self.parse_number(),
                 _ => Err(format!("Unexpected character: {}", c)),
             },
         }
     }
-
-    pub fn parse(&mut self) -> Result<Value, String> {
-        let value = self.parse_value()?;
-        self.skip_whitespace();
-
-        if self.current.is_some() {
-            Err("Unexpected content after value".to_string())
-        } else {
-            Ok(value)
-        }
-    }
 }
 
-pub fn rebel_parse(transaction: &mut Transaction, input: &str) -> Result<Value, String> {
-    let mut parser = Parser::new(input, transaction);
-    parser.parse()
+pub fn parse(input: &str) -> Result<Block, String> {
+    let mut blobs = Blobs::new();
+    let value = {
+        let mut parser = Parser::new(input, &mut blobs);
+        parser.parse_value()?
+    };
+    Ok(Block::new(value, blobs))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::str;
 
     #[test]
-    fn test_parse_simple() {
-        let mut tx = Transaction::new();
+    fn test_parse_string() -> Result<(), String> {
+        let block = parse(r#""hello world""#)?;
 
-        let result = rebel_parse(&mut tx, r#"[x: "hello world" numbers: [1 2 3]]"#).unwrap();
+        if let Value::String(hash) = block.root() {
+            assert_eq!(
+                str::from_utf8(block.get_blob(hash).unwrap()).unwrap(),
+                "hello world"
+            );
+        } else {
+            panic!("Expected String value");
+        }
+        Ok(())
+    }
 
-        // We can't directly compare Values because they contain hashes
-        // Instead, let's verify the structure matches what we expect
-        if let Value::Block(items) = result.clone() {
+    #[test]
+    fn test_parse_block() -> Result<(), String> {
+        let block = parse(r#"[x: 1 y: "test"]"#)?;
+
+        if let Value::Block(items) = block.root() {
             assert_eq!(items.len(), 4);
-            // Further structural checks could be added here
         } else {
             panic!("Expected Block value");
         }
+        Ok(())
+    }
 
-        tx.set_root(result);
-        println!("{:#?}", tx);
+    #[test]
+    fn test_parse_nested() -> Result<(), String> {
+        let block = parse(r#"[points: [x: 10 y: 20] color: "red"]"#)?;
+
+        if let Value::Block(items) = block.root() {
+            assert_eq!(items.len(), 4);
+            if let Value::Block(nested) = &items[1] {
+                assert_eq!(nested.len(), 4);
+            } else {
+                panic!("Expected nested Block value");
+            }
+        } else {
+            panic!("Expected Block value");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_escaped_string() -> Result<(), String> {
+        let block = parse(r#""hello \"world\"""#)?;
+
+        if let Value::String(hash) = block.root() {
+            assert_eq!(
+                str::from_utf8(block.get_blob(hash).unwrap()).unwrap(),
+                r#"hello "world""#
+            );
+        } else {
+            panic!("Expected String value");
+        }
+        Ok(())
     }
 }
