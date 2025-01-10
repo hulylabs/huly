@@ -9,3 +9,4 @@ blake3 = "1.5.5"
 bytes = "1.9.0"
 hex = "0.4.3"
 tracing = "0.1.41"
+xxhash-rust = { version = "0.8.15", features = ["xxh3"] }
