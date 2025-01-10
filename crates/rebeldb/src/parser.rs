@@ -1,31 +1,35 @@
+// Huly™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+
 use crate::core::{Blobs, Block, Value};
 use anyhow::{anyhow, Result};
-use std::str::Chars;
+use bytes::BytesMut;
 
 struct Parser<'a> {
-    input: Chars<'a>,
-    current: Option<char>,
+    input: &'a [u8],
+    position: usize,
     blobs: &'a mut Blobs,
 }
 
 impl<'a> Parser<'a> {
-    fn new(input: &'a str, blobs: &'a mut Blobs) -> Self {
-        let mut chars = input.chars();
-        let current = chars.next();
+    fn new(input: &'a [u8], blobs: &'a mut Blobs) -> Self {
         Self {
-            input: chars,
-            current,
+            input,
+            position: 0,
             blobs,
         }
     }
 
+    fn current(&self) -> Option<u8> {
+        self.input.get(self.position).copied()
+    }
+
     fn advance(&mut self) {
-        self.current = self.input.next();
+        self.position += 1;
     }
 
     fn skip_whitespace(&mut self) {
-        while let Some(c) = self.current {
-            if !c.is_whitespace() {
+        while let Some(b) = self.current() {
+            if !b.is_ascii_whitespace() {
                 break;
             }
             self.advance();
@@ -33,31 +37,32 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_string(&mut self) -> Result<Value> {
-        let mut result = String::new();
         // Skip opening quote
         self.advance();
+        let mut buf = BytesMut::new();
 
-        while let Some(c) = self.current {
-            match c {
-                '"' => {
+        while let Some(b) = self.current() {
+            match b {
+                b'"' => {
                     self.advance(); // Skip closing quote
-                    return Ok(self.blobs.string(&result));
+                    let hash = self.blobs.store(&buf);
+                    return Ok(Value::String(hash));
                 }
-                '\\' => {
+                b'\\' => {
                     self.advance();
-                    match self.current {
-                        Some('"') => result.push('"'),
-                        Some('\\') => result.push('\\'),
-                        Some('n') => result.push('\n'),
-                        Some('r') => result.push('\r'),
-                        Some('t') => result.push('\t'),
-                        Some(c) => return Err(anyhow!("Invalid escape sequence: \\{}", c)),
+                    match self.current() {
+                        Some(b'"') => buf.extend_from_slice(&[b'"']),
+                        Some(b'\\') => buf.extend_from_slice(&[b'\\']),
+                        Some(b'n') => buf.extend_from_slice(&[b'\n']),
+                        Some(b'r') => buf.extend_from_slice(&[b'\r']),
+                        Some(b't') => buf.extend_from_slice(&[b'\t']),
+                        Some(c) => return Err(anyhow!("Invalid escape sequence: \\{}", c as char)),
                         None => return Err(anyhow!("Unexpected end of string after \\")),
                     }
                     self.advance();
                 }
                 _ => {
-                    result.push(c);
+                    buf.extend_from_slice(&[b]);
                     self.advance();
                 }
             }
@@ -67,48 +72,79 @@ impl<'a> Parser<'a> {
     }
 
     fn parse_word(&mut self) -> Result<Value> {
-        let mut result = String::new();
+        let start = self.position;
 
-        while let Some(c) = self.current {
-            if c.is_alphanumeric() || c == '_' || c == '-' || c == '/' {
-                result.push(c);
-                self.advance();
-            } else if c == ':' {
-                self.advance();
-                return Ok(self.blobs.set_word(&result));
-            } else {
-                break;
+        while let Some(b) = self.current() {
+            match b {
+                b if b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'/' => {
+                    self.advance();
+                }
+                b':' => {
+                    let word = &self.input[start..self.position];
+                    self.advance();
+                    let hash = self.blobs.store(word);
+                    return Ok(Value::SetWord(hash));
+                }
+                _ => break,
             }
         }
 
-        Ok(self.blobs.get_word(&result))
+        let word = &self.input[start..self.position];
+        let hash = self.blobs.store(word);
+        Ok(Value::GetWord(hash))
     }
 
     fn parse_number(&mut self) -> Result<Value> {
-        let mut result = String::new();
+        let mut value: u64 = 0;
+        let mut has_sign = false;
         let mut is_negative = false;
 
-        // Handle negative numbers
-        if self.current == Some('-') {
-            is_negative = true;
-            self.advance();
+        // Handle sign
+        match self.current() {
+            Some(b'+') => {
+                has_sign = true;
+                self.advance();
+            }
+            Some(b'-') => {
+                has_sign = true;
+                is_negative = true;
+                self.advance();
+            }
+            _ => {}
         }
 
-        while let Some(c) = self.current {
-            if c.is_digit(10) {
-                result.push(c);
+        // Parse integer part
+        let mut has_digits = false;
+        while let Some(b) = self.current() {
+            if b.is_ascii_digit() {
+                has_digits = true;
+                value = value
+                    .checked_mul(10)
+                    .and_then(|v| v.checked_add((b - b'0') as u64))
+                    .ok_or_else(|| anyhow!("Number too large"))?;
                 self.advance();
             } else {
                 break;
             }
         }
 
-        match result.parse::<i64>() {
-            Ok(num) => {
-                let num = if is_negative { -num } else { num };
-                Ok(Value::int64(num))
+        if !has_digits {
+            return Err(anyhow!("Expected digits in number"));
+        }
+
+        // Return appropriate integer type
+        if has_sign {
+            if is_negative {
+                let neg_value =
+                    i64::try_from(value).map_err(|_| anyhow!("Number too large for i64"))?;
+                Ok(Value::Int64(-neg_value))
+            } else {
+                let pos_value =
+                    i64::try_from(value).map_err(|_| anyhow!("Number too large for i64"))?;
+                Ok(Value::Int64(pos_value))
             }
-            Err(_) => Err(anyhow!("Invalid number format")),
+        } else {
+            Ok(Value::Uint64(value))
         }
     }
 
@@ -120,9 +156,9 @@ impl<'a> Parser<'a> {
         loop {
             self.skip_whitespace();
 
-            match self.current {
+            match self.current() {
                 None => return Err(anyhow!("Unterminated block")),
-                Some(']') => {
+                Some(b']') => {
                     self.advance();
                     break;
                 }
@@ -139,14 +175,14 @@ impl<'a> Parser<'a> {
     fn parse_value(&mut self) -> Result<Value> {
         self.skip_whitespace();
 
-        match self.current {
+        match self.current() {
             None => Err(anyhow!("Unexpected end of input")),
-            Some(c) => match c {
-                '[' => self.parse_block(),
-                '"' => self.parse_string(),
-                c if c.is_alphabetic() => self.parse_word(),
-                c if c.is_digit(10) || c == '-' => self.parse_number(),
-                _ => Err(anyhow!("Unexpected character: {}", c)),
+            Some(b) => match b {
+                b'[' => self.parse_block(),
+                b'"' => self.parse_string(),
+                b if b.is_ascii_alphabetic() => self.parse_word(),
+                b if b.is_ascii_digit() || b == b'+' || b == b'-' => self.parse_number(),
+                _ => Err(anyhow!("Unexpected byte: {}", b)),
             },
         }
     }
@@ -155,17 +191,15 @@ impl<'a> Parser<'a> {
 pub fn parse(input: &str) -> Result<Block> {
     let mut blobs = Blobs::new();
     let value = {
-        let mut parser = Parser::new(input, &mut blobs);
+        let mut parser = Parser::new(input.as_bytes(), &mut blobs);
         parser.parse_value()?
     };
-
     Ok(Block::new(value, blobs))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::str;
 
     #[test]
     fn test_parse_string() -> Result<()> {
@@ -173,7 +207,7 @@ mod tests {
 
         if let Value::String(hash) = block.root() {
             assert_eq!(
-                str::from_utf8(block.get_blob(hash).unwrap()).unwrap(),
+                String::from_utf8_lossy(block.get_blob(hash).unwrap()),
                 "hello world"
             );
         } else {
@@ -217,12 +251,54 @@ mod tests {
 
         if let Value::String(hash) = block.root() {
             assert_eq!(
-                str::from_utf8(block.get_blob(hash).unwrap()).unwrap(),
+                String::from_utf8_lossy(block.get_blob(hash).unwrap()),
                 r#"hello "world""#
             );
         } else {
             panic!("Expected String value");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_numbers() -> Result<()> {
+        // Uint64
+        let block = parse("123")?;
+        assert!(matches!(block.root(), Value::Uint64(123)));
+
+        // Int64 positive
+        let block = parse("+123")?;
+        assert!(matches!(block.root(), Value::Int64(123)));
+
+        // Int64 negative
+        let block = parse("-123")?;
+        assert!(matches!(block.root(), Value::Int64(-123)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_parse_words() -> Result<()> {
+        // GetWord
+        let block = parse("hello")?;
+        assert!(matches!(block.root(), Value::GetWord(_)));
+
+        // SetWord
+        let block = parse("hello:")?;
+        assert!(matches!(block.root(), Value::SetWord(_)));
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_number_errors() -> Result<()> {
+        // Just a sign
+        assert!(parse("+").is_err());
+        assert!(parse("-").is_err());
+
+        // Number too large for i64
+        assert!(parse("-9223372036854775809").is_err());
+
         Ok(())
     }
 }

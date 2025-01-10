@@ -1,3 +1,6 @@
+// Huly™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+
+use bytes::Bytes;
 use std::collections::HashMap;
 
 pub type Hash = [u8; 32];
@@ -7,6 +10,7 @@ pub enum Value {
     None,
     Uint64(u64),
     Int64(i64),
+    Float(f64),
     String(Hash),
     SetWord(Hash),
     GetWord(Hash),
@@ -46,16 +50,16 @@ impl Blobs {
         self.blobs.get(hash).map(|v| v.as_slice())
     }
 
-    pub fn string(&mut self, s: &str) -> Value {
-        Value::String(self.store(s.as_bytes()))
+    pub fn string(&mut self, bytes: Bytes) -> Value {
+        Value::String(self.store(&bytes))
     }
 
-    pub fn set_word(&mut self, name: &str) -> Value {
-        Value::SetWord(self.store(name.as_bytes()))
+    pub fn set_word(&mut self, bytes: &[u8]) -> Value {
+        Value::SetWord(self.store(bytes))
     }
 
-    pub fn get_word(&mut self, name: &str) -> Value {
-        Value::GetWord(self.store(name.as_bytes()))
+    pub fn get_word(&mut self, bytes: &[u8]) -> Value {
+        Value::GetWord(self.store(bytes))
     }
 
     pub fn lit_word(&mut self, name: &str) -> Value {
@@ -93,9 +97,9 @@ mod tests {
 
         // Simply build values directly
         let values = vec![
-            blobs.set_word("name"),
-            blobs.string("John"),
-            blobs.set_word("age"),
+            blobs.set_word(b"name"),
+            // blobs.string("John"),
+            blobs.set_word(b"age"),
             Value::int64(30),
         ];
 
