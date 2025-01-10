@@ -4,7 +4,6 @@
 
 use crate::blob::Blobs;
 use crate::core::{Content, Hash, InlineBytes, Value};
-use anyhow::{Context, Result};
 use bytes::{BufMut, Bytes, BytesMut};
 
 const NONE_TAG: u8 = 0;
@@ -82,72 +81,75 @@ impl Block {
         b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
     }
 
-    pub fn len(&self) -> Result<usize> {
+    pub fn len(&self) -> Option<usize> {
         let size = self.bytes.len();
         if size < std::mem::size_of::<u32>() {
-            Err(anyhow::anyhow!("block is too short (incorrect size)"))
+            None
         } else {
-            Ok(self.read_u32(size - std::mem::size_of::<u32>()))
+            Some(self.read_u32(size - std::mem::size_of::<u32>()))
         }
     }
 
-    pub fn get(&self, index: usize) -> Result<Value> {
-        let item = self.get_item(index)?;
-        let tag = *item.get(0).context("can't read value tag")?;
-        match tag {
-            NONE_TAG => Ok(Value::None),
-            UINT_TAG => {
-                let mut buf: [u8; 4] = [0; 4];
-                buf.copy_from_slice(&item[1..5]);
-                Ok(Value::Uint(u32::from_le_bytes(buf)))
+    pub fn get(&self, index: usize) -> Option<Value> {
+        if let Some(item) = self.get_item(index) {
+            let tag = item[0];
+            match tag {
+                NONE_TAG => Some(Value::None),
+                UINT_TAG => {
+                    let mut buf: [u8; 4] = [0; 4];
+                    buf.copy_from_slice(&item[1..5]);
+                    Some(Value::Uint(u32::from_le_bytes(buf)))
+                }
+                INT_TAG => {
+                    let mut buf: [u8; 4] = [0; 4];
+                    buf.copy_from_slice(&item[1..5]);
+                    Some(Value::Int(i32::from_le_bytes(buf)))
+                }
+                FLOAT_TAG => {
+                    let mut buf: [u8; 4] = [0; 4];
+                    buf.copy_from_slice(&item[1..5]);
+                    Some(Value::Float(f32::from_le_bytes(buf)))
+                }
+                STRING_TAG => {
+                    let mut tag: [u8; 1] = [0; 1];
+                    tag.copy_from_slice(&item[1..2]);
+                    if tag[0] == HASH_TAG {
+                        let mut hash: Hash = [0; 32];
+                        hash.copy_from_slice(&item[2..34]);
+                        Some(Value::String(Content::Hash(hash)))
+                    } else {
+                        let len = tag[0] as usize;
+                        let mut buf: InlineBytes = [0; 37];
+                        buf[..len].copy_from_slice(&item[2..2 + len]);
+                        Some(Value::String(Content::Inline((tag[0], buf))))
+                    }
+                }
+                _ => None,
             }
-            INT_TAG => {
-                let mut buf: [u8; 4] = [0; 4];
-                buf.copy_from_slice(&item[1..5]);
-                Ok(Value::Int(i32::from_le_bytes(buf)))
-            }
-            FLOAT_TAG => {
-                let mut buf: [u8; 4] = [0; 4];
-                buf.copy_from_slice(&item[1..5]);
-                Ok(Value::Float(f32::from_le_bytes(buf)))
-            }
-            STRING_TAG => {
-                let mut tag: [u8; 1] = [0; 1];
-                tag.copy_from_slice(&item[1..2]);
-                if tag[0] == HASH_TAG {
-                    let mut hash: Hash = [0; 32];
-                    hash.copy_from_slice(&item[2..34]);
-                    Ok(Value::String(Content::Hash(hash)))
-                } else {
-                    let len = tag[0] as usize;
-                    let mut buf: InlineBytes = [0; 37];
-                    buf[..len].copy_from_slice(&item[2..2 + len]);
-                    Ok(Value::String(Content::Inline((tag[0], buf))))
+        } else {
+            None
+        }
+    }
+
+    fn get_item(&self, index: usize) -> Option<&[u8]> {
+        let len = self.bytes.len();
+        if let Some(count_offset) = len.checked_sub(std::mem::size_of::<u32>()) {
+            let count = self.read_u32(count_offset) as usize;
+            if index < count {
+                if let Some(end) =
+                    count_offset.checked_sub(std::mem::size_of::<u32>() * (index + 1))
+                {
+                    let end_offset = self.read_u32(end) as usize;
+                    let start_offset = if index == 0 {
+                        0
+                    } else {
+                        self.read_u32(end + std::mem::size_of::<u32>()) as usize
+                    };
+                    return Some(&self.bytes[start_offset..end_offset]);
                 }
             }
-            _ => Err(anyhow::anyhow!("unknown tag")),
         }
-    }
-
-    fn get_item(&self, index: usize) -> Result<Bytes> {
-        if index < self.len()? {
-            let end = self
-                .bytes
-                .len()
-                .checked_sub(std::mem::size_of::<u32>() * (index + 2))
-                .context("bad offset")?;
-
-            let end_offset = self.read_u32(end) as usize;
-            let start_offset = if index == 0 {
-                0
-            } else {
-                self.read_u32(end + std::mem::size_of::<u32>()) as usize
-            };
-
-            Ok(self.bytes.slice(start_offset..end_offset))
-        } else {
-            Err(anyhow::anyhow!("index out of bounds {}", index))
-        }
+        None
     }
 }
 
@@ -172,7 +174,7 @@ mod tests {
     fn test_block_builder() -> Result<()> {
         let mut blobs = NullBlobs {};
         let mut builder = BlockBuilder::new();
-        builder.uint(99);
+        builder.uint(199);
         builder.float(3.14);
         builder.string(&mut blobs, "hello world");
         builder.uint(55);
@@ -180,10 +182,10 @@ mod tests {
 
         // assert_eq!(block.len()?, 3);
 
-        println!("{:?}", block.get(0)?);
-        println!("{:?}", block.get(1)?);
-        println!("{:?}", block.get(2)?);
-        println!("{:?}", block.get(3)?);
+        println!("{:?}", block.get(0));
+        println!("{:?}", block.get(1));
+        println!("{:?}", block.get(2));
+        println!("{:?}", block.get(3));
 
         Ok(())
     }
