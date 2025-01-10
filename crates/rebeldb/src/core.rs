@@ -1,4 +1,6 @@
 // Huly™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+//
+// core.rs:
 
 use bytes::Bytes;
 use std::collections::HashMap;
