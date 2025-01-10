@@ -91,5 +91,6 @@ pub type OrgId = PKey;
 
 //
 
+pub type ObjId = PKey;
 pub type NodeId = PKey;
 pub type DeviceId = NodeId;
