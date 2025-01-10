@@ -1,4 +1,5 @@
 use crate::core::{Blobs, Block, Value};
+use anyhow::{anyhow, Result};
 use std::str::Chars;
 
 struct Parser<'a> {
@@ -31,7 +32,7 @@ impl<'a> Parser<'a> {
         }
     }
 
-    fn parse_string(&mut self) -> Result<Value, String> {
+    fn parse_string(&mut self) -> Result<Value> {
         let mut result = String::new();
         // Skip opening quote
         self.advance();
@@ -50,8 +51,8 @@ impl<'a> Parser<'a> {
                         Some('n') => result.push('\n'),
                         Some('r') => result.push('\r'),
                         Some('t') => result.push('\t'),
-                        Some(c) => return Err(format!("Invalid escape sequence: \\{}", c)),
-                        None => return Err("Unexpected end of string after \\".to_string()),
+                        Some(c) => return Err(anyhow!("Invalid escape sequence: \\{}", c)),
+                        None => return Err(anyhow!("Unexpected end of string after \\")),
                     }
                     self.advance();
                 }
@@ -62,10 +63,10 @@ impl<'a> Parser<'a> {
             }
         }
 
-        Err("Unterminated string literal".to_string())
+        Err(anyhow!("Unterminated string literal"))
     }
 
-    fn parse_word(&mut self) -> Result<Value, String> {
+    fn parse_word(&mut self) -> Result<Value> {
         let mut result = String::new();
 
         while let Some(c) = self.current {
@@ -83,7 +84,7 @@ impl<'a> Parser<'a> {
         Ok(self.blobs.get_word(&result))
     }
 
-    fn parse_number(&mut self) -> Result<Value, String> {
+    fn parse_number(&mut self) -> Result<Value> {
         let mut result = String::new();
         let mut is_negative = false;
 
@@ -107,11 +108,11 @@ impl<'a> Parser<'a> {
                 let num = if is_negative { -num } else { num };
                 Ok(Value::int64(num))
             }
-            Err(_) => Err("Invalid number format".to_string()),
+            Err(_) => Err(anyhow!("Invalid number format")),
         }
     }
 
-    fn parse_block(&mut self) -> Result<Value, String> {
+    fn parse_block(&mut self) -> Result<Value> {
         // Skip opening bracket
         self.advance();
         let mut values = Vec::new();
@@ -120,7 +121,7 @@ impl<'a> Parser<'a> {
             self.skip_whitespace();
 
             match self.current {
-                None => return Err("Unterminated block".to_string()),
+                None => return Err(anyhow!("Unterminated block")),
                 Some(']') => {
                     self.advance();
                     break;
@@ -135,28 +136,29 @@ impl<'a> Parser<'a> {
         Ok(Value::Block(values.into_boxed_slice()))
     }
 
-    fn parse_value(&mut self) -> Result<Value, String> {
+    fn parse_value(&mut self) -> Result<Value> {
         self.skip_whitespace();
 
         match self.current {
-            None => Err("Unexpected end of input".to_string()),
+            None => Err(anyhow!("Unexpected end of input")),
             Some(c) => match c {
                 '[' => self.parse_block(),
                 '"' => self.parse_string(),
                 c if c.is_alphabetic() => self.parse_word(),
                 c if c.is_digit(10) || c == '-' => self.parse_number(),
-                _ => Err(format!("Unexpected character: {}", c)),
+                _ => Err(anyhow!("Unexpected character: {}", c)),
             },
         }
     }
 }
 
-pub fn parse(input: &str) -> Result<Block, String> {
+pub fn parse(input: &str) -> Result<Block> {
     let mut blobs = Blobs::new();
     let value = {
         let mut parser = Parser::new(input, &mut blobs);
         parser.parse_value()?
     };
+
     Ok(Block::new(value, blobs))
 }
 
@@ -166,7 +168,7 @@ mod tests {
     use std::str;
 
     #[test]
-    fn test_parse_string() -> Result<(), String> {
+    fn test_parse_string() -> Result<()> {
         let block = parse(r#""hello world""#)?;
 
         if let Value::String(hash) = block.root() {
@@ -181,7 +183,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_block() -> Result<(), String> {
+    fn test_parse_block() -> Result<()> {
         let block = parse(r#"[x: 1 y: "test"]"#)?;
 
         if let Value::Block(items) = block.root() {
@@ -193,7 +195,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_nested() -> Result<(), String> {
+    fn test_parse_nested() -> Result<()> {
         let block = parse(r#"[points: [x: 10 y: 20] color: "red"]"#)?;
 
         if let Value::Block(items) = block.root() {
@@ -210,7 +212,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_escaped_string() -> Result<(), String> {
+    fn test_parse_escaped_string() -> Result<()> {
         let block = parse(r#""hello \"world\"""#)?;
 
         if let Value::String(hash) = block.root() {
