@@ -383,6 +383,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blake3"
+version = "1.5.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b8ee0c1824c4dea5b5f81736aff91bae041d2c07ee1192bec91054e10e3e601e"
+dependencies = [
+ "arrayref",
+ "arrayvec",
+ "cc",
+ "cfg-if",
+ "constant_time_eq",
+]
+
+[[package]]
 name = "block-buffer"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1086,7 +1099,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "33d852cb9b869c2a9b3df2f71a3074817f01e1844f839a144f5fcef059a4eb5d"
 dependencies = [
  "libc",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
@@ -4116,6 +4129,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rebeldb"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blake3",
+ "bytes",
+ "hex",
+]
+
+[[package]]
 name = "redb"
 version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4387,7 +4410,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.52.0",
+ "windows-sys 0.59.0",
 ]
 
 [[package]]
