@@ -3,4 +3,5 @@
 // lib.rs:
 
 pub mod core;
+pub mod eval;
 pub mod parser;
