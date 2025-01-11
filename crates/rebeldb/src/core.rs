@@ -2,6 +2,17 @@
 //
 // core.rs:
 
+use std::result::Result;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ValueError {
+    #[error("uft8 error: {0}")]
+    Utf8Error(#[from] std::str::Utf8Error),
+    #[error("conversion error")]
+    ConversionError,
+}
+
 pub type Hash = [u8; 32];
 // pub type Symbol = [u8; 32];
 
@@ -29,6 +40,7 @@ pub enum Value {
     PubKey(Hash),
     String(Content),
 
+    Word(Symbol),
     SetWord(Symbol),
     GetWord(Symbol),
     LitWord(Symbol),
@@ -115,6 +127,15 @@ impl Value {
         }
     }
 
+    pub fn as_str(&self) -> Result<&str, ValueError> {
+        match self {
+            Value::String(Content::Inline((len, buf))) => {
+                std::str::from_utf8(&buf[..*len as usize]).map_err(ValueError::Utf8Error)
+            }
+            _ => Err(ValueError::ConversionError),
+        }
+    }
+
     pub fn uint(x: u32) -> Self {
         Value::Uint(x)
     }
@@ -125,6 +146,21 @@ impl Value {
 
     pub fn float(x: f32) -> Self {
         Value::Float(x)
+    }
+
+    fn to_symbol(x: &str) -> Symbol {
+        assert!(x.len() <= INLINE_CONTENT_LEN);
+        let mut buf = [0u8; INLINE_CONTENT_LEN];
+        buf[..x.len()].copy_from_slice(x.as_bytes());
+        (x.len() as u8, buf)
+    }
+
+    pub fn word(x: &str) -> Self {
+        Self::Word(Self::to_symbol(x))
+    }
+
+    pub fn set_word(x: &str) -> Self {
+        Self::SetWord(Self::to_symbol(x))
     }
 
     pub fn string(x: &str, blobs: &mut impl Storage) -> Self {

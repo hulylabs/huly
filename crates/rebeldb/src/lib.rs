@@ -6,3 +6,4 @@ pub mod blob;
 // pub mod block;
 pub mod core;
 pub mod eval;
+pub mod parser;
