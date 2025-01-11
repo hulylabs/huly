@@ -4,10 +4,21 @@
 
 use anyhow::Result;
 use colored::*;
+use rebeldb::eval::Context;
+use rebeldb::heap::TempHeap;
+use rebeldb::parser::ValueIterator;
+use rebeldb::value::Value;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
-fn evaluate(line: &str) -> Result<String> {
-    Ok(line.to_string())
+fn evaluate(line: &str) -> Result<Value> {
+    let mut blobs = TempHeap::new();
+    let iter = ValueIterator::new(line, &mut blobs);
+
+    let mut ctx = Context::new();
+    ctx.read_all(iter)?;
+    let result = ctx.eval()?;
+
+    Ok(result)
 }
 
 fn main() -> Result<()> {
@@ -16,7 +27,7 @@ fn main() -> Result<()> {
         "RebelDB™".bold(),
         "https://hulylabs.com".underline()
     );
-    println!("Type {} to exit", ":quit".red().bold());
+    println!("Type {} or press Ctrl+D to exit\n", ":quit".red().bold());
 
     // Initialize interpreter
     // let mut interpreter = Interpreter::new();
@@ -33,7 +44,8 @@ fn main() -> Result<()> {
     // REPL loop
     loop {
         // Read
-        let readline = rl.readline(&"RebelDB™ • ".to_string());
+        let readline = rl.readline(&"RebelDB™ ❯ ".to_string());
+        // let readline = rl.readline(&"RebelDB™ • ".to_string());
 
         match readline {
             Ok(line) => {
@@ -47,8 +59,8 @@ fn main() -> Result<()> {
                 // Eval & Print
                 // match evaluate(&mut interpreter, &line) {
                 match evaluate(&line) {
-                    Ok(result) => println!("{}", result.bright_green()),
-                    Err(err) => eprintln!("{}: {}", "Error".red().bold(), err),
+                    Ok(result) => println!("{}:  {}", "OK".green(), result),
+                    Err(err) => eprintln!("{}: {}", "ERR".red().bold(), err),
                 }
             }
             Err(ReadlineError::Interrupted) => {

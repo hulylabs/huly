@@ -3,6 +3,7 @@
 // value.rs:
 
 use crate::heap::Heap;
+use std::fmt;
 use std::io::{self, Write};
 use thiserror::Error;
 
@@ -208,6 +209,23 @@ impl Deserialize for Value {
                 let (content, len) = Content::deserialize(&bytes[1..])?;
                 Ok((Value::Block(content), len + 1))
             }
+            _ => unimplemented!(),
+        }
+    }
+}
+
+impl fmt::Display for Value {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Value::None => write!(f, "None"),
+            Value::Uint(x) => write!(f, "{}", x),
+            Value::Int(x) => write!(f, "{}", x),
+            Value::Float(x) => write!(f, "{}", x),
+            Value::String(x) => write!(f, "{}", unsafe { x.inlined_as_str().unwrap() }),
+            Value::Word(x) => write!(f, "{}", unsafe { x.symbol() }),
+            Value::SetWord(x) => write!(f, "{}:", unsafe { x.symbol() }),
+            Value::Block(_) => write!(f, "Block(...)"),
+            Value::NativeFn(_) => write!(f, "NativeFn(...)"),
             _ => unimplemented!(),
         }
     }
