@@ -66,7 +66,8 @@ impl Context {
         match value {
             Value::Word(word) => {
                 if let Some(value) = self.env.get(&word) {
-                    Ok(self.push(value.clone()))
+                    self.push(value.clone());
+                    Ok(())
                 } else {
                     Err(EvalError::WordNotFound(word))
                 }
@@ -78,7 +79,7 @@ impl Context {
         }
     }
 
-    pub fn read_all<'a, T>(&mut self, values: ValueIterator<'a, T>) -> Result<(), EvalError>
+    pub fn read_all<T>(&mut self, values: ValueIterator<'_, T>) -> Result<(), EvalError>
     where
         T: Heap,
     {
