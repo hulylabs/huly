@@ -93,28 +93,29 @@ impl Context {
     }
 }
 
-// pub fn eval(iter: &mut impl Iterator<Item = Value>) -> Result<Value> {
-//     let mut value_stack: Vec<Value> = Vec::new();
-//     let mut operation_stack: Vec<Inline> = Vec::new();
-//     // let mut env: HashMap<Inline, Value> = HashMap::new();
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::Hash;
 
-//     for value in iter {
-//         match value {
-//             Value::GetWord(word) => match word {
-//                 (5, [b'p', b'r', b'i', b'n', b't', ..]) => {
-//                     operation_stack.push(word);
-//                 }
-//                 (3, [b'a', b'd', b'd', ..]) => operation_stack.push(word),
-//                 _ => {
-//                     // let value = env.get(&word).context("word not found")?;
-//                     value_stack.push(value)
-//                 }
-//             },
-//             // let value = env.get(&word).context("word not found").unwrap();
-//             // value_stack.push(value)
-//             _ => value_stack.push(value),
-//         }
-//     }
+    struct NoHeap;
 
-//     Ok(Value::None)
-// }
+    impl Heap for NoHeap {
+        fn put(&mut self, _data: &[u8]) -> Hash {
+            unreachable!()
+        }
+    }
+
+    #[test]
+    fn test_read_all_1() {
+        let input = "5";
+        let mut blobs = NoHeap;
+        let iter = ValueIterator::new(input, &mut blobs);
+
+        let mut ctx = Context::new();
+        ctx.read_all(iter).unwrap();
+
+        assert!(ctx.stack.len() == 1);
+        assert_eq!(ctx.pop().unwrap().as_int().unwrap(), 5);
+    }
+}
