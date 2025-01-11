@@ -160,11 +160,64 @@ impl Serialize for Value {
     }
 }
 
+impl Deserialize for Value {
+    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)> {
+        if bytes.is_empty() {
+            return Err(ValueError::OutOfBounds(0, 1));
+        }
+        let tag = bytes[0];
+        match tag {
+            TAG_NONE => Ok((Value::None, 1)),
+            TAG_UINT => {
+                if bytes.len() < 5 {
+                    return Err(ValueError::OutOfBounds(5, bytes.len()));
+                }
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(&bytes[1..5]);
+                Ok((Value::Uint(u32::from_le_bytes(buf)), 5))
+            }
+            TAG_INT => {
+                if bytes.len() < 5 {
+                    return Err(ValueError::OutOfBounds(5, bytes.len()));
+                }
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(&bytes[1..5]);
+                Ok((Value::Int(i32::from_le_bytes(buf)), 5))
+            }
+            TAG_FLOAT => {
+                if bytes.len() < 5 {
+                    return Err(ValueError::OutOfBounds(5, bytes.len()));
+                }
+                let mut buf = [0u8; 4];
+                buf.copy_from_slice(&bytes[1..5]);
+                Ok((Value::Float(f32::from_le_bytes(buf)), 5))
+            }
+            TAG_STRING => {
+                let (content, len) = Content::deserialize(&bytes[1..])?;
+                Ok((Value::String(content), len + 1))
+            }
+            TAG_WORD => {
+                let (symbol, len) = Symbol::deserialize(&bytes[1..])?;
+                Ok((Value::Word(symbol), len + 1))
+            }
+            TAG_SET_WORD => {
+                let (symbol, len) = Symbol::deserialize(&bytes[1..])?;
+                Ok((Value::SetWord(symbol), len + 1))
+            }
+            TAG_BLOCK => {
+                let (content, len) = Content::deserialize(&bytes[1..])?;
+                Ok((Value::Block(content), len + 1))
+            }
+            _ => unimplemented!(),
+        }
+    }
+}
+
 // C O N T E N T
 
 const INLINE_CONTENT_BUFFER: usize = 38;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct Content {
     content: [u8; INLINE_CONTENT_BUFFER],
 }
@@ -200,7 +253,7 @@ impl Serialize for Content {
     fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
         let len = self.content[0] as usize;
         let len = if len < INLINE_CONTENT_BUFFER { len } else { 32 };
-        writer.write_all(&self.content[1..len + 1])?;
+        writer.write_all(&self.content[0..len + 1])?;
         Ok(())
     }
 }
@@ -218,6 +271,37 @@ impl Deserialize for Content {
         }
         content[..len + 1].copy_from_slice(&bytes[..len + 1]);
         Ok((Self { content }, len + 1))
+    }
+}
+
+impl std::fmt::Debug for Content {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // dump content in hexdump format with ascii representation
+        // Hexdump-like format, 16 bytes per line
+        for chunk in self.content.to_vec().chunks(16) {
+            write!(f, "      ")?;
+            for b in chunk {
+                write!(f, "{:02x} ", b)?;
+            }
+            for _ in chunk.len()..16 {
+                write!(f, "   ")?;
+            }
+            write!(f, " |")?;
+            for &b in chunk {
+                let c = if b.is_ascii_graphic() || b == b' ' {
+                    b as char
+                } else {
+                    '.'
+                };
+                write!(f, "{}", c)?;
+            }
+            for _ in chunk.len()..16 {
+                write!(f, " ")?;
+            }
+            writeln!(f, "|")?;
+        }
+        write!(f, "\n")?;
+        Ok(())
     }
 }
 
@@ -267,5 +351,48 @@ impl Deserialize for Symbol {
         }
         symbol[..len + 1].copy_from_slice(&bytes[..len + 1]);
         Ok((Self { symbol }, len + 1))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_content() {
+        let mut heap = crate::heap::TempHeap::new();
+        let content = Content::new(b"hello", &mut heap);
+        assert_eq!(content.content[0], 5);
+        assert_eq!(&content.content[1..6], b"hello");
+        let (deserialized, _) = Content::deserialize(&content.content).unwrap();
+        assert_eq!(content.content, deserialized.content);
+    }
+
+    #[test]
+    fn test_symbol() {
+        let symbol = Symbol::new("hello").unwrap();
+        assert_eq!(symbol.symbol[0], 5);
+        assert_eq!(&symbol.symbol[1..6], b"hello");
+        let (deserialized, _) = Symbol::deserialize(&symbol.symbol).unwrap();
+        assert_eq!(symbol.symbol, deserialized.symbol);
+    }
+
+    #[test]
+    fn test_value() -> Result<()> {
+        let mut heap = crate::heap::TempHeap::new();
+        let value = Value::string("hello", &mut heap);
+        match &value {
+            Value::String(content) => {
+                println!("{:?}", content);
+            }
+            _ => panic!("expected Value::String"),
+        }
+        let mut bytes = Vec::new();
+        value.serialize(&mut bytes)?;
+        let (deserialized, _) = Value::deserialize(&bytes).unwrap();
+        unsafe {
+            assert_eq!(deserialized.inlined_as_str(), Some("hello"));
+        }
+        Ok(())
     }
 }
