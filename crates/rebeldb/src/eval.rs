@@ -20,6 +20,10 @@ pub enum EvalError {
     ParseError(#[from] crate::parser::ParseError),
     #[error(transparent)]
     ValueError(#[from] crate::core::ValueError),
+    #[error("arity mismatch: expecting {0} parameters, provided {1}")]
+    ArityMismatch(usize, usize),
+    #[error("stack underflow")]
+    StackUnderflow,
 }
 
 pub struct Context {
@@ -45,7 +49,7 @@ impl Context {
 
     pub fn push(&mut self, value: Value) {
         match value {
-            Value::NativeFn(_, _) => self.op_stack.push(value),
+            Value::NativeFn(_) => self.op_stack.push(value),
             _ => self.stack.push(value),
         }
     }
@@ -87,9 +91,21 @@ impl Context {
     pub fn eval(&mut self) -> Result<Value, EvalError> {
         while let Some(value) = self.op_stack.pop() {
             match value {
-                Value::NativeFn(proc, arity) => {
-                    let args = self.stack.split_off(self.stack.len() - arity);
-                    self.stack.push(proc(&args)?);
+                Value::NativeFn(func) => {
+                    let stack_len = self.stack.len();
+                    let func_arity = func.arity();
+
+                    if stack_len < func_arity {
+                        return Err(EvalError::StackUnderflow);
+                    }
+
+                    let args = &self.stack[stack_len - func_arity..];
+                    let result = func.call(args)?;
+
+                    self.stack.truncate(stack_len - func_arity);
+                    self.stack.push(result);
+                    // let args = self.stack.split_off(self.stack.len() - arity);
+                    // self.stack.push(proc(&args)?);
                 }
                 // Value::Block(block) => {
                 //     self.op_stack.extend(block.iter().cloned());
@@ -98,6 +114,29 @@ impl Context {
             }
         }
         Ok(self.stack.pop().unwrap_or(Value::None))
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct NativeFn {
+    func: fn(&[Value]) -> Result<Value, EvalError>,
+    arity: usize,
+}
+
+impl NativeFn {
+    pub fn new(func: fn(&[Value]) -> Result<Value, EvalError>, arity: usize) -> Self {
+        Self { func, arity }
+    }
+
+    pub fn arity(&self) -> usize {
+        self.arity
+    }
+
+    pub fn call(&self, args: &[Value]) -> Result<Value, EvalError> {
+        if args.len() != self.arity {
+            return Err(EvalError::ArityMismatch(self.arity, args.len()));
+        }
+        (self.func)(args)
     }
 }
 
@@ -114,13 +153,14 @@ mod tests {
         }
     }
 
-    fn add(stack: &Vec<Value>) -> Result<Value, EvalError> {
-        let b = &stack[1];
-        let a = &stack[0];
-        match (a, b) {
-            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-            (Value::Uint(a), Value::Uint(b)) => Ok(Value::Uint(a + b)),
-            _ => Err(EvalError::MismatchedType(b.clone())),
+    fn add(stack: &[Value]) -> Result<Value, EvalError> {
+        match stack {
+            [a, b] => match (a, b) {
+                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+                (Value::Uint(a), Value::Uint(b)) => Ok(Value::Uint(a + b)),
+                _ => Err(EvalError::MismatchedType(b.clone())),
+            },
+            _ => Err(EvalError::ArityMismatch(2, stack.len())), // Belt and suspenders
         }
     }
 
@@ -159,7 +199,10 @@ mod tests {
         let iter = ValueIterator::new(input, &mut blobs);
 
         let mut ctx = Context::new();
-        ctx.ctx_put(Value::new_symbol("add")?, Value::NativeFn(add, 2));
+        ctx.ctx_put(
+            Value::new_symbol("add")?,
+            Value::NativeFn(NativeFn::new(add, 2)),
+        );
         ctx.read_all(iter)?;
 
         let result = ctx.eval()?;

@@ -2,7 +2,6 @@
 //
 // core.rs:
 
-use crate::eval::EvalError;
 use std::result::Result;
 use thiserror::Error;
 
@@ -50,7 +49,11 @@ pub enum Value {
 
     Block(Box<[Value]>),
     // Context(Box<[(Cav<'a>, Value<'a>)]>),
-    NativeFn(fn(&Vec<Value>) -> Result<Value, EvalError>, usize), // (fn(stack), arity) -> Value
+    NativeFn(crate::eval::NativeFn),
+    // {
+    //     proc: fn(&[Value]) -> Result<Value, EvalError>,
+    //     arity: usize,
+    // },
 }
 
 pub trait Heap {
@@ -185,10 +188,6 @@ impl Value {
         } else {
             Value::String(Content::Hash(blobs.put(x.as_bytes())))
         }
-    }
-
-    pub fn native_fn(f: fn(&Vec<Value>) -> Result<Value, EvalError>, arity: usize) -> Self {
-        Value::NativeFn(f, arity)
     }
 
     pub fn block(values: Vec<Value>) -> Self {
