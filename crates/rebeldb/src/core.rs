@@ -2,6 +2,7 @@
 //
 // core.rs:
 
+use crate::eval::EvalError;
 use std::result::Result;
 use thiserror::Error;
 
@@ -9,6 +10,8 @@ use thiserror::Error;
 pub enum ValueError {
     #[error(transparent)]
     Utf8Error(#[from] std::str::Utf8Error),
+    #[error("symbol too long: {0}")]
+    SymbolTooLong(usize),
     #[error("conversion error")]
     ConversionError,
 }
@@ -47,7 +50,7 @@ pub enum Value {
 
     Block(Box<[Value]>),
     // Context(Box<[(Cav<'a>, Value<'a>)]>),
-    NativeFn(fn(&Vec<Value>) -> Value, usize), // (fn(stack), arity) -> Value
+    NativeFn(fn(&Vec<Value>) -> Result<Value, EvalError>, usize), // (fn(stack), arity) -> Value
 }
 
 pub trait Heap {
@@ -155,19 +158,22 @@ impl Value {
         Value::Float(x)
     }
 
-    fn to_symbol(x: &str) -> Symbol {
-        assert!(x.len() <= INLINE_CONTENT_LEN);
-        let mut buf = [0u8; INLINE_CONTENT_LEN];
-        buf[..x.len()].copy_from_slice(x.as_bytes());
-        (x.len() as u8, buf)
+    pub fn new_symbol(x: &str) -> Result<Symbol, ValueError> {
+        if x.len() <= INLINE_CONTENT_LEN {
+            let mut buf = [0u8; INLINE_CONTENT_LEN];
+            buf[..x.len()].copy_from_slice(x.as_bytes());
+            Ok((x.len() as u8, buf))
+        } else {
+            Err(ValueError::SymbolTooLong(x.len()))
+        }
     }
 
-    pub fn word(x: &str) -> Self {
-        Self::Word(Self::to_symbol(x))
+    pub fn word(x: &str) -> Result<Self, ValueError> {
+        Ok(Self::Word(Self::new_symbol(x)?))
     }
 
-    pub fn set_word(x: &str) -> Self {
-        Self::SetWord(Self::to_symbol(x))
+    pub fn set_word(x: &str) -> Result<Self, ValueError> {
+        Ok(Self::SetWord(Self::new_symbol(x)?))
     }
 
     pub fn string(x: &str, blobs: &mut impl Heap) -> Self {
@@ -179,6 +185,10 @@ impl Value {
         } else {
             Value::String(Content::Hash(blobs.put(x.as_bytes())))
         }
+    }
+
+    pub fn native_fn(f: fn(&Vec<Value>) -> Result<Value, EvalError>, arity: usize) -> Self {
+        Value::NativeFn(f, arity)
     }
 
     pub fn block(values: Vec<Value>) -> Self {

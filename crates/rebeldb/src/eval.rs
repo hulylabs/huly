@@ -12,12 +12,14 @@ use thiserror::Error;
 pub enum EvalError {
     #[error("word not found: {0:?}")]
     WordNotFound(Symbol),
-    #[error("unexpected value: {0:?}")]
-    UnexpectedValue(Value),
+    #[error("mismatched type: {0:?}")]
+    MismatchedType(Value),
     #[error("not enough arguments")]
     NotEnoughArgs,
     #[error(transparent)]
     ParseError(#[from] crate::parser::ParseError),
+    #[error(transparent)]
+    ValueError(#[from] crate::core::ValueError),
 }
 
 pub struct Context {
@@ -42,25 +44,31 @@ impl Context {
     }
 
     pub fn push(&mut self, value: Value) {
-        self.stack.push(value);
+        match value {
+            Value::NativeFn(_, _) => self.op_stack.push(value),
+            _ => self.stack.push(value),
+        }
     }
 
     pub fn pop(&mut self) -> Option<Value> {
         self.stack.pop()
     }
 
+    pub fn ctx_put(&mut self, symbol: Symbol, value: Value) {
+        self.env.insert(symbol, value);
+    }
+
     pub fn read(&mut self, value: Value) -> Result<(), EvalError> {
         match value {
-            Value::GetWord(word) => {
+            Value::Word(word) => {
                 if let Some(value) = self.env.get(&word) {
-                    self.stack.push(value.clone());
-                    Ok(())
+                    Ok(self.push(value.clone()))
                 } else {
                     Err(EvalError::WordNotFound(word))
                 }
             }
             _ => {
-                self.stack.push(value);
+                self.push(value);
                 Ok(())
             }
         }
@@ -81,15 +89,15 @@ impl Context {
             match value {
                 Value::NativeFn(proc, arity) => {
                     let args = self.stack.split_off(self.stack.len() - arity);
-                    self.stack.push(proc(&args));
+                    self.stack.push(proc(&args)?);
                 }
                 // Value::Block(block) => {
                 //     self.op_stack.extend(block.iter().cloned());
                 // }
-                _ => return Err(EvalError::UnexpectedValue(value)),
+                _ => return Err(EvalError::MismatchedType(value)),
             }
         }
-        self.stack.pop().ok_or(EvalError::NotEnoughArgs)
+        Ok(self.stack.pop().unwrap_or(Value::None))
     }
 }
 
@@ -106,16 +114,57 @@ mod tests {
         }
     }
 
+    fn add(stack: &Vec<Value>) -> Result<Value, EvalError> {
+        let b = &stack[1];
+        let a = &stack[0];
+        match (a, b) {
+            (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
+            (Value::Uint(a), Value::Uint(b)) => Ok(Value::Uint(a + b)),
+            _ => Err(EvalError::MismatchedType(b.clone())),
+        }
+    }
+
     #[test]
-    fn test_read_all_1() {
+    fn test_read_all_1() -> Result<(), EvalError> {
         let input = "5";
         let mut blobs = NoHeap;
         let iter = ValueIterator::new(input, &mut blobs);
 
         let mut ctx = Context::new();
-        ctx.read_all(iter).unwrap();
+        ctx.read_all(iter)?;
 
         assert!(ctx.stack.len() == 1);
-        assert_eq!(ctx.pop().unwrap().as_int().unwrap(), 5);
+        assert_eq!(ctx.pop().unwrap().as_int()?, 5);
+        Ok(())
+    }
+
+    #[test]
+    fn test_eval_1() -> Result<(), EvalError> {
+        let input = "5";
+        let mut blobs = NoHeap;
+        let iter = ValueIterator::new(input, &mut blobs);
+
+        let mut ctx = Context::new();
+        ctx.read_all(iter)?;
+        let result = ctx.eval()?;
+
+        assert!(result.as_int()? == 5);
+        Ok(())
+    }
+
+    #[test]
+    fn test_proc_1() -> Result<(), EvalError> {
+        let input = "add 7 8";
+        let mut blobs = NoHeap;
+        let iter = ValueIterator::new(input, &mut blobs);
+
+        let mut ctx = Context::new();
+        ctx.ctx_put(Value::new_symbol("add")?, Value::NativeFn(add, 2));
+        ctx.read_all(iter)?;
+
+        let result = ctx.eval()?;
+        assert!(result.as_int()? == 15);
+
+        Ok(())
     }
 }

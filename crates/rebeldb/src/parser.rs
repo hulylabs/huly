@@ -14,6 +14,8 @@ pub enum ParseError {
     UnexpectedEnd,
     #[error("Number too large")]
     NumberTooLarge,
+    #[error(transparent)]
+    ValueError(#[from] crate::core::ValueError),
 }
 
 struct Token {
@@ -92,13 +94,13 @@ where
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
                 ':' => {
                     return Ok(Token::new(
-                        Value::set_word(&self.input[start_pos..pos]),
+                        Value::set_word(&self.input[start_pos..pos])?,
                         false,
                     ))
                 }
                 c if c.is_ascii_whitespace() || c == ']' => {
                     return Ok(Token::new(
-                        Value::word(&self.input[start_pos..pos]),
+                        Value::word(&self.input[start_pos..pos])?,
                         c == ']',
                     ))
                 }
