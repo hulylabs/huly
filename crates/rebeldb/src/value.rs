@@ -1,0 +1,258 @@
+// RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+//
+// value.rs:
+
+use crate::heap::Heap;
+use std::io::{self, Write};
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ValueError {
+    #[error(transparent)]
+    Utf8Error(#[from] std::str::Utf8Error),
+    #[error(transparent)]
+    IOError(#[from] io::Error),
+    #[error("index out of bounds {0} [0..{1}]")]
+    OutOfBounds(usize, usize),
+}
+
+pub type Result<T> = std::result::Result<T, ValueError>;
+
+pub trait Serialize {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()>;
+}
+
+pub trait Deserialize: Sized {
+    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)>;
+}
+
+#[derive(Debug, Clone)]
+pub enum Value {
+    None,
+
+    Uint(u32),
+    Int(i32),
+    Float(f32),
+
+    Bytes(Content),
+    String(Content),
+
+    Word(Symbol),
+    SetWord(Symbol),
+
+    Block(Content),
+
+    NativeFn(crate::eval::NativeFn),
+}
+
+impl Value {
+    pub fn none() -> Self {
+        Self::None
+    }
+
+    pub fn uint(x: u32) -> Self {
+        Self::Uint(x)
+    }
+
+    pub fn int(x: i32) -> Self {
+        Self::Int(x)
+    }
+
+    pub fn float(x: f32) -> Self {
+        Self::Float(x)
+    }
+
+    pub fn string<'a>(str: &str, heap: &'a mut impl Heap) -> Self {
+        Self::String(Content::new(str.as_bytes(), heap))
+    }
+
+    pub fn word(str: &str) -> Result<Self> {
+        Ok(Self::Word(Symbol::new(str)?))
+    }
+
+    pub fn set_word(str: &str) -> Result<Self> {
+        Ok(Self::SetWord(Symbol::new(str)?))
+    }
+
+    pub fn block<'a>(block: &[Value], heap: &'a mut impl Heap) -> Self {
+        let mut bytes = Vec::new();
+        for value in block {
+            value.serialize(&mut bytes).unwrap();
+        }
+        Self::Block(Content::new(&bytes, heap))
+    }
+
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Value::Uint(x) => Some(*x as i64),
+            Value::Int(x) => Some(*x as i64),
+            _ => None,
+        }
+    }
+
+    pub unsafe fn inlined_as_str(&self) -> Option<&str> {
+        match self {
+            Value::String(content) => content.inlined_as_str(),
+            Value::Word(symbol) => Some(symbol.symbol()),
+            Value::SetWord(symbol) => Some(symbol.symbol()),
+            _ => None,
+        }
+    }
+}
+
+const TAG_NONE: u8 = 0x00;
+const TAG_UINT: u8 = 0x01;
+const TAG_INT: u8 = 0x02;
+const TAG_FLOAT: u8 = 0x03;
+const TAG_STRING: u8 = 0x04;
+const TAG_WORD: u8 = 0x05;
+const TAG_SET_WORD: u8 = 0x06;
+const TAG_BLOCK: u8 = 0x07;
+
+impl Serialize for Value {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
+        match self {
+            Value::None => writer.write_all(&[TAG_NONE])?,
+            Value::Uint(x) => {
+                writer.write_all(&[TAG_UINT])?;
+                writer.write_all(&x.to_le_bytes())?;
+            }
+            Value::Int(x) => {
+                writer.write_all(&[TAG_INT])?;
+                writer.write_all(&x.to_le_bytes())?;
+            }
+            Value::Float(x) => {
+                writer.write_all(&[TAG_FLOAT])?;
+                writer.write_all(&x.to_le_bytes())?;
+            }
+            Value::String(x) => {
+                writer.write_all(&[TAG_STRING])?;
+                x.serialize(writer)?;
+            }
+            Value::Word(x) => {
+                writer.write_all(&[TAG_WORD])?;
+                x.serialize(writer)?;
+            }
+            Value::SetWord(x) => {
+                writer.write_all(&[TAG_SET_WORD])?;
+                x.serialize(writer)?;
+            }
+            Value::Block(x) => {
+                writer.write_all(&[TAG_BLOCK])?;
+                x.serialize(writer)?;
+            }
+            _ => unimplemented!(),
+        }
+        Ok(())
+    }
+}
+
+// C O N T E N T
+
+const INLINE_CONTENT_BUFFER: usize = 38;
+
+#[derive(Debug, Clone)]
+pub struct Content {
+    content: [u8; INLINE_CONTENT_BUFFER],
+}
+
+impl Content {
+    pub fn new<'a>(content: &[u8], heap: &'a mut impl Heap) -> Self {
+        let len = content.len();
+        if len < INLINE_CONTENT_BUFFER {
+            let mut buffer = [0u8; INLINE_CONTENT_BUFFER];
+            buffer[0] = len as u8;
+            buffer[1..len + 1].copy_from_slice(&content[..len]);
+            Self { content: buffer }
+        } else {
+            let hash = heap.put(content);
+            let mut buffer = [0u8; INLINE_CONTENT_BUFFER];
+            buffer[0] = 0xff;
+            buffer[1..33].copy_from_slice(&hash);
+            Self { content: buffer }
+        }
+    }
+
+    unsafe fn inlined_as_str(&self) -> Option<&str> {
+        let len = self.content[0] as usize;
+        if len < INLINE_CONTENT_BUFFER {
+            Some(std::str::from_utf8_unchecked(&self.content[1..len + 1]))
+        } else {
+            None
+        }
+    }
+}
+
+impl Serialize for Content {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let len = self.content[0] as usize;
+        let len = if len < INLINE_CONTENT_BUFFER { len } else { 32 };
+        writer.write_all(&self.content[1..len + 1])?;
+        Ok(())
+    }
+}
+
+impl Deserialize for Content {
+    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)> {
+        let mut content = [0u8; INLINE_CONTENT_BUFFER];
+        let len = bytes
+            .first()
+            .copied()
+            .ok_or(ValueError::OutOfBounds(0, 1))? as usize;
+        let len = if len < INLINE_CONTENT_BUFFER { len } else { 32 };
+        if bytes.len() < len + 1 {
+            return Err(ValueError::OutOfBounds(len + 1, bytes.len()));
+        }
+        content[..len + 1].copy_from_slice(&bytes[..len + 1]);
+        Ok((Self { content }, len + 1))
+    }
+}
+
+// S Y M B O L
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Symbol {
+    symbol: [u8; INLINE_CONTENT_BUFFER],
+}
+
+impl Symbol {
+    pub fn new(content: &str) -> Result<Self> {
+        let len = content.len();
+        if len < INLINE_CONTENT_BUFFER {
+            let mut symbol = [0u8; INLINE_CONTENT_BUFFER];
+            symbol[0] = len as u8;
+            symbol[1..len + 1].copy_from_slice(&content.as_bytes()[..len]);
+            Ok(Self { symbol })
+        } else {
+            Err(ValueError::OutOfBounds(len, INLINE_CONTENT_BUFFER - 1))
+        }
+    }
+
+    unsafe fn symbol(&self) -> &str {
+        let len = self.symbol[0] as usize;
+        std::str::from_utf8_unchecked(&self.symbol[1..len + 1])
+    }
+}
+
+impl Serialize for Symbol {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let len = self.symbol[0] as usize;
+        writer.write_all(&self.symbol[0..len + 1])?;
+        Ok(())
+    }
+}
+
+impl Deserialize for Symbol {
+    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)> {
+        let mut symbol = [0u8; INLINE_CONTENT_BUFFER];
+        let len = bytes
+            .first()
+            .copied()
+            .ok_or(ValueError::OutOfBounds(0, 1))? as usize;
+        if bytes.len() < len + 1 {
+            return Err(ValueError::OutOfBounds(len + 1, bytes.len()));
+        }
+        symbol[..len + 1].copy_from_slice(&bytes[..len + 1]);
+        Ok((Self { symbol }, len + 1))
+    }
+}

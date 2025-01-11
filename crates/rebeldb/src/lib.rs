@@ -2,8 +2,7 @@
 //
 // lib.rs:
 
-pub mod blob;
-// pub mod block;
-pub mod core;
 pub mod eval;
+pub mod heap;
 pub mod parser;
+pub mod value;

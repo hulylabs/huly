@@ -2,6 +2,7 @@
 //
 // core.rs:
 
+use std::io::{Cursor, Read, Write};
 use std::result::Result;
 use thiserror::Error;
 
@@ -9,23 +10,14 @@ use thiserror::Error;
 pub enum ValueError {
     #[error(transparent)]
     Utf8Error(#[from] std::str::Utf8Error),
-    #[error("symbol too long: {0}")]
-    SymbolTooLong(usize),
+    #[error(transparent)]
+    IOError(#[from] std::io::Error),
     #[error("conversion error")]
     ConversionError,
-}
-
-pub type Hash = [u8; 32];
-// pub type Symbol = [u8; 32];
-
-const INLINE_CONTENT_LEN: usize = 37;
-pub type Inline = (u8, [u8; INLINE_CONTENT_LEN]);
-pub type Symbol = Inline;
-
-#[derive(Debug, Clone)]
-pub enum Content {
-    Inline(Inline),
-    Hash(Hash),
+    #[error("buffer overflow {0}")]
+    BufferOverflow(usize),
+    #[error("reading past end of input")]
+    InputPastEnd,
 }
 
 #[derive(Debug, Clone)]
@@ -35,17 +27,17 @@ pub enum Value {
     Uint(u32),
     Int(i32),
     Float(f32),
-    Uint64(u64),
-    Int64(i64),
-    Float64(f64),
+    // Uint64(u64),
+    // Int64(i64),
+    // Float64(f64),
 
-    PubKey(Hash),
+    // PubKey(Hash),
     String(Content),
 
-    Word(Symbol),
-    SetWord(Symbol),
-    GetWord(Symbol),
-    LitWord(Symbol),
+    Word(Content),
+    SetWord(Content),
+    // GetWord(Content),
+    // LitWord(Content),
 
     // Context(Box<[(Cav<'a>, Value<'a>)]>),
     Block(Box<[Value]>),
@@ -53,15 +45,35 @@ pub enum Value {
     NativeFn(crate::eval::NativeFn),
 }
 
-pub trait Heap {
-    fn put(&mut self, data: &[u8]) -> Hash;
+impl Serialize for Value {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<(), ValueError> {
+        match self {
+            Value::None => writer.write_all(&[Self::NONE_TAG])?,
+            Value::Uint(x) => {
+                writer.write_all(&[Self::UINT_TAG])?;
+                writer.write_all(&x.to_le_bytes())?;
+            }
+            Value::Int(x) => {
+                writer.write_all(&[Self::INT_TAG])?;
+                writer.write_all(&x.to_le_bytes())?;
+            }
+            Value::Float(x) => {
+                writer.write_all(&[Self::FLOAT_TAG])?;
+                writer.write_all(&x.to_le_bytes())?;
+            }
+            Value::String(x) => {
+                writer.write_all(&[Self::STRING_TAG])?;
+                x.serialize(writer)?;
+            }
+            Value::Word(x) => {
+                writer.write_all(&[Self::WORD_TAG])?;
+                x.serialize(writer)?;
+            }
+            _ => unimplemented!(),
+        }
+        Ok(())
+    }
 }
-
-// pub trait Context {
-//     fn get_storage(&self) -> &impl Storage;
-//     // fn get_value(&self, symbol: &Symbol) -> Option<Value>;
-//     fn get_stack(&self) -> &Vec<Value>;
-// }
 
 impl Value {
     const NONE_TAG: u8 = 0;
@@ -69,6 +81,7 @@ impl Value {
     const INT_TAG: u8 = 2;
     const FLOAT_TAG: u8 = 3;
     const STRING_TAG: u8 = 4;
+    const WORD_TAG: u8 = 5;
 
     pub fn from_slice(bytes: &[u8]) -> Option<Value> {
         if bytes.is_empty() {

@@ -2,8 +2,9 @@
 //
 // eval.rs:
 
-use crate::core::{Heap, Symbol, Value};
+use crate::heap::Heap;
 use crate::parser::ValueIterator;
+use crate::value::{Symbol, Value};
 use std::collections::HashMap;
 use std::result::Result;
 use thiserror::Error;
@@ -19,7 +20,7 @@ pub enum EvalError {
     #[error(transparent)]
     ParseError(#[from] crate::parser::ParseError),
     #[error(transparent)]
-    ValueError(#[from] crate::core::ValueError),
+    ValueError(#[from] crate::value::ValueError),
     #[error("arity mismatch: expecting {0} parameters, provided {1}")]
     ArityMismatch(usize, usize),
     #[error("stack underflow")]
@@ -144,7 +145,7 @@ impl NativeFn {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Hash;
+    use crate::heap::Hash;
 
     struct NoHeap;
 
@@ -175,7 +176,7 @@ mod tests {
         ctx.read_all(iter)?;
 
         assert!(ctx.stack.len() == 1);
-        assert_eq!(ctx.pop().unwrap().as_int()?, 5);
+        assert_eq!(ctx.pop().unwrap().as_int(), Some(5));
         Ok(())
     }
 
@@ -189,7 +190,7 @@ mod tests {
         ctx.read_all(iter)?;
         let result = ctx.eval()?;
 
-        assert!(result.as_int()? == 5);
+        assert_eq!(result.as_int(), Some(5));
         Ok(())
     }
 
@@ -200,14 +201,11 @@ mod tests {
         let iter = ValueIterator::new(input, &mut blobs);
 
         let mut ctx = Context::new();
-        ctx.ctx_put(
-            Value::new_symbol("add")?,
-            Value::NativeFn(NativeFn::new(add, 2)),
-        );
+        ctx.ctx_put(Symbol::new("add")?, Value::NativeFn(NativeFn::new(add, 2)));
         ctx.read_all(iter)?;
 
         let result = ctx.eval()?;
-        assert!(result.as_int()? == 15);
+        assert_eq!(result.as_int(), Some(15));
 
         Ok(())
     }

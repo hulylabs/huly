@@ -2,7 +2,8 @@
 //
 // parser.rs:
 
-use crate::core::{Heap, Value};
+use crate::heap::Heap;
+use crate::value::Value;
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -15,7 +16,7 @@ pub enum ParseError {
     #[error("Number too large")]
     NumberTooLarge,
     #[error(transparent)]
-    ValueError(#[from] crate::core::ValueError),
+    ValueError(#[from] crate::value::ValueError),
 }
 
 struct Token {
@@ -194,14 +195,14 @@ where
                 }
             }
         }
-        Some(Ok(Token::new(Value::block(values), false)))
+        Some(Ok(Token::new(Value::block(&values, self.blobs), false)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Hash;
+    use crate::heap::Hash;
 
     struct NullStorage;
 
@@ -228,7 +229,10 @@ mod tests {
         let mut iter = ValueIterator::new(input, &mut blobs);
 
         let value = iter.next().unwrap().unwrap();
-        assert_eq!(value.as_str()?, "hello");
+
+        unsafe {
+            assert_eq!(value.inlined_as_str(), Some("hello"));
+        }
 
         let value = iter.next();
         assert!(value.is_none());
@@ -243,7 +247,7 @@ mod tests {
         let mut iter = ValueIterator::new(input, &mut blobs);
 
         let value = iter.next().unwrap().unwrap();
-        assert_eq!(value.as_int()?, 42);
+        assert_eq!(value.as_int(), Some(42));
 
         let value = iter.next();
         assert!(value.is_none());
