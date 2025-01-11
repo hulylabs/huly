@@ -131,6 +131,10 @@ impl Value {
             Value::String(Content::Hash(blobs.put(x.as_bytes())))
         }
     }
+
+    pub fn block(values: Vec<Value>) -> Self {
+        Value::Block(values.into_boxed_slice())
+    }
 }
 
 #[cfg(test)]
@@ -151,11 +155,13 @@ mod tests {
         let v1 = Value::uint(18);
         let v2 = Value::float(3.14);
         let v3 = Value::string("hello world", &mut blobs);
-        let v4 = Value::uint(55);
+        let block = Value::block(vec![v1, v2, v3]);
+        let block2 = Value::block(vec![
+            Value::uint(1000),
+            Value::float(2.718),
+            Value::string("привет!", &mut blobs),
+        ]);
 
-        println!("{:?}", v1);
-        println!("{:?}", v2);
-        println!("{:?}", v3);
-        println!("{:?}", v4);
+        println!("{:?}", Value::block(vec![block, block2]));
     }
 }
