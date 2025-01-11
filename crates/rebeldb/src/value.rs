@@ -62,7 +62,7 @@ impl Value {
         Self::Float(x)
     }
 
-    pub fn string<'a>(str: &str, heap: &'a mut impl Heap) -> Self {
+    pub fn string(str: &str, heap: &mut impl Heap) -> Self {
         Self::String(Content::new(str.as_bytes(), heap))
     }
 
@@ -74,7 +74,7 @@ impl Value {
         Ok(Self::SetWord(Symbol::new(str)?))
     }
 
-    pub fn block<'a>(block: &[Value], heap: &'a mut impl Heap) -> Self {
+    pub fn block(block: &[Value], heap: &mut impl Heap) -> Self {
         let mut bytes = Vec::new();
         for value in block {
             value.serialize(&mut bytes).unwrap();
@@ -90,6 +90,15 @@ impl Value {
         }
     }
 
+    /// Extracts string content from the value if it fit inlined buffer
+    /// This should always return symbol value for words.
+    /// For strings may return None if the content is too long.
+    ///
+    /// # Safety
+    /// This method is safe because:
+    /// - The bytes were validated as UTF-8 at creation time
+    /// - Our serialization format preserves UTF-8 encoding
+    /// - The bytes cannot be modified after deserialization
     pub unsafe fn inlined_as_str(&self) -> Option<&str> {
         match self {
             Value::String(content) => content.inlined_as_str(),
@@ -157,7 +166,7 @@ pub struct Content {
 }
 
 impl Content {
-    pub fn new<'a>(content: &[u8], heap: &'a mut impl Heap) -> Self {
+    pub fn new(content: &[u8], heap: &mut impl Heap) -> Self {
         let len = content.len();
         if len < INLINE_CONTENT_BUFFER {
             let mut buffer = [0u8; INLINE_CONTENT_BUFFER];
