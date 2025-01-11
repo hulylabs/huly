@@ -3,9 +3,11 @@
 // core.rs:
 
 pub type Hash = [u8; 32];
+// pub type Symbol = [u8; 32];
 
 const INLINE_CONTENT_LEN: usize = 37;
 pub type Inline = (u8, [u8; INLINE_CONTENT_LEN]);
+pub type Symbol = Inline;
 
 #[derive(Debug, Clone)]
 pub enum Content {
@@ -25,20 +27,26 @@ pub enum Value {
     Float64(f64),
 
     PubKey(Hash),
-
     String(Content),
 
-    SetWord(Inline),
-    GetWord(Inline),
-    LitWord(Inline),
+    SetWord(Symbol),
+    GetWord(Symbol),
+    LitWord(Symbol),
 
     Block(Box<[Value]>),
     // Context(Box<[(Cav<'a>, Value<'a>)]>),
+    NativeFn(fn(&Vec<Value>) -> Value, usize), // (fn(stack), arity) -> Value
 }
 
-pub trait Blobs {
+pub trait Storage {
     fn put(&mut self, data: &[u8]) -> Hash;
 }
+
+// pub trait Context {
+//     fn get_storage(&self) -> &impl Storage;
+//     // fn get_value(&self, symbol: &Symbol) -> Option<Value>;
+//     fn get_stack(&self) -> &Vec<Value>;
+// }
 
 impl Value {
     const NONE_TAG: u8 = 0;
@@ -119,7 +127,7 @@ impl Value {
         Value::Float(x)
     }
 
-    pub fn string(x: &str, blobs: &mut impl Blobs) -> Self {
+    pub fn string(x: &str, blobs: &mut impl Storage) -> Self {
         let len = x.len();
         if len <= INLINE_CONTENT_LEN {
             let mut buf = [0u8; INLINE_CONTENT_LEN];
@@ -139,9 +147,9 @@ impl Value {
 mod tests {
     use super::*;
 
-    struct NullBlobs;
+    struct NullStorage;
 
-    impl Blobs for NullBlobs {
+    impl Storage for NullStorage {
         fn put(&mut self, _data: &[u8]) -> Hash {
             unreachable!()
         }
@@ -149,7 +157,8 @@ mod tests {
 
     #[test]
     fn test_block_builder() {
-        let mut blobs = NullBlobs {};
+        let mut blobs = NullStorage;
+
         let v1 = Value::uint(18);
         let v2 = Value::float(3.14);
         let v3 = Value::string("hello world", &mut blobs);
