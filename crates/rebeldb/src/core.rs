@@ -47,13 +47,10 @@ pub enum Value {
     GetWord(Symbol),
     LitWord(Symbol),
 
-    Block(Box<[Value]>),
     // Context(Box<[(Cav<'a>, Value<'a>)]>),
+    Block(Box<[Value]>),
+
     NativeFn(crate::eval::NativeFn),
-    // {
-    //     proc: fn(&[Value]) -> Result<Value, EvalError>,
-    //     arity: usize,
-    // },
 }
 
 pub trait Heap {
