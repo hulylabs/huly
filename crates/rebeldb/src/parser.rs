@@ -256,4 +256,19 @@ mod tests {
 
         Ok(())
     }
+
+    #[test]
+    fn test_number_1() -> anyhow::Result<()> {
+        let input = "42";
+        let mut blobs = NullStorage;
+        let mut iter = parse(input, &mut blobs);
+
+        let value = iter.next().unwrap().unwrap();
+        assert_eq!(value.as_int()?, 42);
+
+        let value = iter.next();
+        assert!(value.is_none());
+
+        Ok(())
+    }
 }

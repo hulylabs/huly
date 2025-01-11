@@ -136,6 +136,13 @@ impl Value {
         }
     }
 
+    pub fn as_int(&self) -> Result<i64, ValueError> {
+        match self {
+            Value::Uint(x) => Ok(*x as i64),
+            _ => Err(ValueError::ConversionError),
+        }
+    }
+
     pub fn uint(x: u32) -> Self {
         Value::Uint(x)
     }
