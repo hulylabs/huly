@@ -23,6 +23,12 @@ pub struct Context {
     env: HashMap<Symbol, Value>,
 }
 
+impl Default for Context {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Context {
     pub fn new() -> Self {
         Self {
@@ -44,12 +50,16 @@ impl Context {
         match value {
             Value::GetWord(word) => {
                 if let Some(value) = self.env.get(&word) {
-                    Ok(self.stack.push(value.clone()))
+                    self.stack.push(value.clone());
+                    Ok(())
                 } else {
                     Err(EvalError::WordNotFound(word))
                 }
             }
-            _ => Ok(self.stack.push(value)),
+            _ => {
+                self.stack.push(value);
+                Ok(())
+            },
         }
     }
 

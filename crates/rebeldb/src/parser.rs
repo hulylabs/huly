@@ -39,7 +39,7 @@ where
     blobs: &'a mut T,
 }
 
-impl<'a, T> Iterator for ValueIterator<'a, T>
+impl<T> Iterator for ValueIterator<'_, T>
 where
     T: Storage,
 {
@@ -64,7 +64,7 @@ where
     }
 
     fn skip_whitespace(&mut self) -> Option<(usize, char)> {
-        while let Some((pos, char)) = self.cursor.next() {
+        for (pos, char) in self.cursor.by_ref() {
             if !char.is_ascii_whitespace() {
                 return Some((pos, char));
             }
@@ -74,28 +74,12 @@ where
 
     fn parse_string(&mut self, pos: usize) -> Result<Token, ParseError> {
         let start_pos = pos + 1; // skip the opening quote
-        while let Some((pos, char)) = self.cursor.next() {
-            match char {
-                '"' => {
-                    return Ok(Token::new(
-                        Value::string(&self.input[start_pos..pos], self.blobs),
-                        false,
-                    ))
-                }
-                // '\\' => {
-                //     self.advance();
-                //     match self.current() {
-                //         Some(b'"') => buf.extend_from_slice(&[b'"']),
-                //         Some(b'\\') => buf.extend_from_slice(&[b'\\']),
-                //         Some(b'n') => buf.extend_from_slice(&[b'\n']),
-                //         Some(b'r') => buf.extend_from_slice(&[b'\r']),
-                //         Some(b't') => buf.extend_from_slice(&[b'\t']),
-                //         Some(c) => return Err(anyhow!("Invalid escape sequence: \\{}", c as char)),
-                //         None => return Err(anyhow!("Unexpected end of string after \\")),
-                //     }
-                //     self.advance();
-                // }
-                _ => {}
+        for (pos, char) in self.cursor.by_ref() {
+            if char == '"' {
+                return Ok(Token::new(
+                    Value::string(&self.input[start_pos..pos], self.blobs),
+                    false,
+                ))
             }
         }
 
@@ -103,7 +87,7 @@ where
     }
 
     fn parse_word(&mut self, start_pos: usize) -> Result<Token, ParseError> {
-        while let Some((pos, char)) = self.cursor.next() {
+        for (pos, char) in self.cursor.by_ref() {
             match char {
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
                 ':' => {
@@ -144,7 +128,7 @@ where
             _ => return Err(ParseError::UnexpectedChar(char)),
         }
 
-        while let Some((_, char)) = self.cursor.next() {
+        for (_, char) in self.cursor.by_ref() {
             match char {
                 c if c.is_ascii_digit() => {
                     has_digits = true;
