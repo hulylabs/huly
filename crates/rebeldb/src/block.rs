@@ -4,15 +4,7 @@
 
 use crate::blob::Blobs;
 use crate::core::{Content, Hash, InlineBytes, Value};
-use bytes::{BufMut, Bytes, BytesMut};
-
-const NONE_TAG: u8 = 0;
-const UINT_TAG: u8 = 1;
-const INT_TAG: u8 = 2;
-const FLOAT_TAG: u8 = 3;
-const STRING_TAG: u8 = 4;
-
-const HASH_TAG: u8 = 0x80;
+use bytes::{BufMut, BytesMut};
 
 pub struct BlockBuilder {
     bytes: BytesMut,
@@ -58,27 +50,27 @@ impl BlockBuilder {
         }
         self.bytes.put_u32_le(self.offsets.len() as u32);
         Block {
-            bytes: self.bytes.clone().freeze(),
+            bytes: &self.bytes, //.clone().freeze(),
         }
     }
 }
 
-pub struct Block {
-    bytes: Bytes,
+fn read_u32(bytes: &[u8], offset: usize) -> usize {
+    let b0 = bytes[offset] as usize;
+    let b1 = bytes[offset + 1] as usize;
+    let b2 = bytes[offset + 2] as usize;
+    let b3 = bytes[offset + 3] as usize;
+
+    b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
 }
 
-impl Block {
-    pub fn new(bytes: Bytes) -> Self {
+pub struct Block<'a> {
+    bytes: &'a [u8],
+}
+
+impl<'a> Block<'a> {
+    pub fn new(bytes: &'a [u8]) -> Self {
         Self { bytes }
-    }
-
-    fn read_u32(&self, offset: usize) -> usize {
-        let b0 = self.bytes[offset] as usize;
-        let b1 = self.bytes[offset + 1] as usize;
-        let b2 = self.bytes[offset + 2] as usize;
-        let b3 = self.bytes[offset + 3] as usize;
-
-        b0 | (b1 << 8) | (b2 << 16) | (b3 << 24)
     }
 
     pub fn len(&self) -> Option<usize> {
@@ -86,7 +78,7 @@ impl Block {
         if size < std::mem::size_of::<u32>() {
             None
         } else {
-            Some(self.read_u32(size - std::mem::size_of::<u32>()))
+            Some(read_u32(self.bytes, size - 4))
         }
     }
 
@@ -134,22 +126,64 @@ impl Block {
     fn get_item(&self, index: usize) -> Option<&[u8]> {
         let len = self.bytes.len();
         if let Some(count_offset) = len.checked_sub(std::mem::size_of::<u32>()) {
-            let count = self.read_u32(count_offset) as usize;
+            let count = read_u32(self.bytes, count_offset) as usize;
             if index < count {
-                if let Some(end) =
-                    count_offset.checked_sub(std::mem::size_of::<u32>() * (index + 1))
-                {
-                    let end_offset = self.read_u32(end) as usize;
+                if let Some(end) = count_offset.checked_sub(4 * (index + 1)) {
+                    let end_offset = read_u32(self.bytes, end) as usize;
                     let start_offset = if index == 0 {
                         0
                     } else {
-                        self.read_u32(end + std::mem::size_of::<u32>()) as usize
+                        read_u32(self.bytes, end + 4) as usize
                     };
                     return Some(&self.bytes[start_offset..end_offset]);
                 }
             }
         }
         None
+    }
+}
+
+pub struct BlockIterator<'a> {
+    block: &'a [u8],
+    count: usize,
+    position: usize,
+    offset: usize,
+}
+
+impl<'a> BlockIterator<'a> {
+    pub fn new(block: &'a [u8]) -> Option<Self> {
+        let len = block.len();
+        if let Some(count_offset) = len.checked_sub(std::mem::size_of::<u32>()) {
+            let count = read_u32(block, count_offset) as usize;
+            Some(Self {
+                block,
+                count,
+                offset: 0,
+                position: 0,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl<'a> Iterator for BlockIterator<'a> {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.position < self.count {
+            if let Some(end) = self.block.len().checked_sub(4 * (self.position + 2)) {
+                let end_offset = read_u32(self.block, end) as usize;
+                let slice = &self.block[self.offset..end_offset];
+                self.offset = end_offset;
+                self.position += 1;
+                Some(&self.block[start_offset..end_offset])
+            } else {
+                None
+            }
+        } else {
+            None
+        }
     }
 }
 
