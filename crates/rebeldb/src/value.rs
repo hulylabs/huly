@@ -90,15 +90,19 @@ impl Value {
         }
     }
 
-    /// Extracts string content from the value if it fit inlined buffer
-    /// This should always return symbol value for words.
-    /// For strings may return None if the content is too long.
+    /// Attempts to extract a string from the inline buffer.
+    ///
+    /// # Returns
+    /// - `Some(&str)`: Always returns a string for word variants
+    /// - `Some(&str)`: For `String` variant if content fits in the inline buffer
+    /// - `None`: For `String` variant if content exceeds inline buffer capacity
+    /// - `None`: For all other variants
     ///
     /// # Safety
     /// This method is safe because:
-    /// - The bytes were validated as UTF-8 at creation time
-    /// - Our serialization format preserves UTF-8 encoding
-    /// - The bytes cannot be modified after deserialization
+    /// - All bytes are validated as UTF-8 during value creation
+    /// - The serialization format preserves UTF-8 encoding
+    /// - The byte buffer is immutable after deserialization
     pub unsafe fn inlined_as_str(&self) -> Option<&str> {
         match self {
             Value::String(content) => content.inlined_as_str(),
