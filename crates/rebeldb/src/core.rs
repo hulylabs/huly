@@ -5,15 +5,15 @@
 pub type Hash = [u8; 32];
 
 const INLINE_CONTENT_LEN: usize = 37;
-type Inline = (u8, [u8; INLINE_CONTENT_LEN]);
+pub type Inline = (u8, [u8; INLINE_CONTENT_LEN]);
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Content {
     Inline(Inline),
     Hash(Hash),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum Value {
     None,
 
