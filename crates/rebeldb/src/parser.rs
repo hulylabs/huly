@@ -55,7 +55,7 @@ impl<'a, T> ValueIterator<'a, T>
 where
     T: Storage,
 {
-    fn new(input: &'a str, blobs: &'a mut T) -> Self {
+    pub fn new(input: &'a str, blobs: &'a mut T) -> Self {
         Self {
             cursor: input.char_indices(),
             input,
@@ -79,7 +79,7 @@ where
                 return Ok(Token::new(
                     Value::string(&self.input[start_pos..pos], self.blobs),
                     false,
-                ))
+                ));
             }
         }
 
@@ -196,13 +196,6 @@ where
     }
 }
 
-pub fn parse<'a, T>(input: &'a str, blobs: &'a mut T) -> ValueIterator<'a, T>
-where
-    T: Storage,
-{
-    ValueIterator::new(input, blobs)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -220,7 +213,7 @@ mod tests {
     fn test_whitespace_1() {
         let input = "  \t\n  ";
         let mut blobs = NullStorage;
-        let mut iter = parse(input, &mut blobs);
+        let mut iter = ValueIterator::new(input, &mut blobs);
 
         let value = iter.next();
         assert!(value.is_none());
@@ -230,7 +223,7 @@ mod tests {
     fn test_string_1() -> anyhow::Result<()> {
         let input = "\"hello\"  \n ";
         let mut blobs = NullStorage;
-        let mut iter = parse(input, &mut blobs);
+        let mut iter = ValueIterator::new(input, &mut blobs);
 
         let value = iter.next().unwrap().unwrap();
         assert_eq!(value.as_str()?, "hello");
@@ -245,7 +238,7 @@ mod tests {
     fn test_number_1() -> anyhow::Result<()> {
         let input = "42";
         let mut blobs = NullStorage;
-        let mut iter = parse(input, &mut blobs);
+        let mut iter = ValueIterator::new(input, &mut blobs);
 
         let value = iter.next().unwrap().unwrap();
         assert_eq!(value.as_int()?, 42);

@@ -2,7 +2,8 @@
 //
 // eval.rs:
 
-use crate::core::{Symbol, Value};
+use crate::core::{Storage, Symbol, Value};
+use crate::parser::ValueIterator;
 use std::collections::HashMap;
 use std::result::Result;
 use thiserror::Error;
@@ -15,6 +16,8 @@ pub enum EvalError {
     UnexpectedValue(Value),
     #[error("not enough arguments")]
     NotEnoughArgs,
+    #[error(transparent)]
+    ParseError(#[from] crate::parser::ParseError),
 }
 
 pub struct Context {
@@ -38,13 +41,13 @@ impl Context {
         }
     }
 
-    // pub fn push(&mut self, value: Value) {
-    //     self.stack.push(value);
-    // }
+    pub fn push(&mut self, value: Value) {
+        self.stack.push(value);
+    }
 
-    // pub fn pop(&mut self) -> Option<Value> {
-    //     self.stack.pop()
-    // }
+    pub fn pop(&mut self) -> Option<Value> {
+        self.stack.pop()
+    }
 
     pub fn read(&mut self, value: Value) -> Result<(), EvalError> {
         match value {
@@ -59,8 +62,18 @@ impl Context {
             _ => {
                 self.stack.push(value);
                 Ok(())
-            },
+            }
         }
+    }
+
+    pub fn read_all<'a, T>(&mut self, values: ValueIterator<'a, T>) -> Result<(), EvalError>
+    where
+        T: Storage,
+    {
+        for value in values {
+            self.read(value?)?;
+        }
+        Ok(())
     }
 
     pub fn eval(&mut self) -> Result<Value, EvalError> {

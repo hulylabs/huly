@@ -7,7 +7,7 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ValueError {
-    #[error("uft8 error: {0}")]
+    #[error(transparent)]
     Utf8Error(#[from] std::str::Utf8Error),
     #[error("conversion error")]
     ConversionError,
