@@ -48,7 +48,7 @@ impl Value {
     const STRING_TAG: u8 = 4;
 
     pub fn from_slice(bytes: &[u8]) -> Option<Value> {
-        if bytes.len() < 1 {
+        if bytes.is_empty() {
             return None;
         }
         let tag = bytes[0];
@@ -94,14 +94,12 @@ impl Value {
                             hash.copy_from_slice(&bytes[2..34]);
                             Some(Value::String(Content::Hash(hash)))
                         }
+                    } else if bytes.len() < 2 + len {
+                        None
                     } else {
-                        if bytes.len() < 2 + len {
-                            None
-                        } else {
-                            let mut buf = [0u8; INLINE_CONTENT_LEN];
-                            buf[..len].copy_from_slice(&bytes[2..2 + len]);
-                            Some(Value::String(Content::Inline((bytes[1], buf))))
-                        }
+                        let mut buf = [0u8; INLINE_CONTENT_LEN];
+                        buf[..len].copy_from_slice(&bytes[2..2 + len]);
+                        Some(Value::String(Content::Inline((bytes[1], buf))))
                     }
                 }
             }

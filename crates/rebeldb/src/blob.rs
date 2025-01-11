@@ -16,6 +16,12 @@ pub struct MemoryBlobs {
     blobs: HashMap<Hash, Vec<u8>>,
 }
 
+impl Default for MemoryBlobs {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MemoryBlobs {
     pub fn new() -> Self {
         Self {

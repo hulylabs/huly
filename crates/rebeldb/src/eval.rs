@@ -2,9 +2,8 @@
 //
 // eval.rs:
 
-use crate::core::{Content, Hash, Inline, Value};
-use anyhow::{Context, Result};
-use std::collections::HashMap;
+use crate::core::{Inline, Value};
+use anyhow::Result;
 
 pub fn eval(iter: &mut impl Iterator<Item = Value>) -> Result<Value> {
     let mut value_stack: Vec<Value> = Vec::new();
