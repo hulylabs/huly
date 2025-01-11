@@ -50,7 +50,7 @@ pub enum Value {
     NativeFn(fn(&Vec<Value>) -> Value, usize), // (fn(stack), arity) -> Value
 }
 
-pub trait Storage {
+pub trait Heap {
     fn put(&mut self, data: &[u8]) -> Hash;
 }
 
@@ -170,7 +170,7 @@ impl Value {
         Self::SetWord(Self::to_symbol(x))
     }
 
-    pub fn string(x: &str, blobs: &mut impl Storage) -> Self {
+    pub fn string(x: &str, blobs: &mut impl Heap) -> Self {
         let len = x.len();
         if len <= INLINE_CONTENT_LEN {
             let mut buf = [0u8; INLINE_CONTENT_LEN];
@@ -192,7 +192,7 @@ mod tests {
 
     struct NullStorage;
 
-    impl Storage for NullStorage {
+    impl Heap for NullStorage {
         fn put(&mut self, _data: &[u8]) -> Hash {
             unreachable!()
         }

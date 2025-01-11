@@ -2,7 +2,7 @@
 //
 // parser.rs:
 
-use crate::core::{Storage, Value};
+use crate::core::{Heap, Value};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -32,7 +32,7 @@ impl Token {
 
 pub struct ValueIterator<'a, T>
 where
-    T: Storage,
+    T: Heap,
 {
     input: &'a str,
     cursor: CharIndices<'a>,
@@ -41,7 +41,7 @@ where
 
 impl<T> Iterator for ValueIterator<'_, T>
 where
-    T: Storage,
+    T: Heap,
 {
     type Item = Result<Value, ParseError>;
 
@@ -53,7 +53,7 @@ where
 
 impl<'a, T> ValueIterator<'a, T>
 where
-    T: Storage,
+    T: Heap,
 {
     pub fn new(input: &'a str, blobs: &'a mut T) -> Self {
         Self {
@@ -203,7 +203,7 @@ mod tests {
 
     struct NullStorage;
 
-    impl Storage for NullStorage {
+    impl Heap for NullStorage {
         fn put(&mut self, _data: &[u8]) -> Hash {
             unreachable!()
         }

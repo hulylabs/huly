@@ -2,7 +2,7 @@
 //
 // eval.rs:
 
-use crate::core::{Storage, Symbol, Value};
+use crate::core::{Heap, Symbol, Value};
 use crate::parser::ValueIterator;
 use std::collections::HashMap;
 use std::result::Result;
@@ -68,7 +68,7 @@ impl Context {
 
     pub fn read_all<'a, T>(&mut self, values: ValueIterator<'a, T>) -> Result<(), EvalError>
     where
-        T: Storage,
+        T: Heap,
     {
         for value in values {
             self.read(value?)?;
