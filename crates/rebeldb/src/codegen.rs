@@ -14,6 +14,8 @@ use wasm_encoder::{
 pub enum CompileError {
     #[error(transparent)]
     ParseError(#[from] crate::parser::ParseError),
+    #[error(transparent)]
+    ValueError(#[from] crate::value::ValueError),
 }
 
 struct ConstantPool {
@@ -29,12 +31,12 @@ impl ConstantPool {
         }
     }
 
-    // fn add(&mut self, value: Value) -> usize {
-    //     let offset = self.offset;
-    //     value.serialize(&mut self.data);
-    //     self.offset += data.len();
-    //     offset
-    // }
+    fn add_value(&mut self, value: Value) -> Result<i32, CompileError> {
+        let offset = self.offset;
+        let value_size = value.serialize(&mut self.data)?;
+        self.offset += value_size;
+        Ok(offset as i32)
+    }
 }
 
 pub struct Compiler {
@@ -42,15 +44,19 @@ pub struct Compiler {
     types: TypeSection,
     functions: FunctionSection,
     codes: CodeSection,
+    constants: ConstantPool,
 }
 
 impl Compiler {
+    const CONSTANTS_START: i32 = 0x1000;
+
     pub fn new() -> Self {
         Self {
             module: Module::new(),
             types: TypeSection::new(),
             functions: FunctionSection::new(),
             codes: CodeSection::new(),
+            constants: ConstantPool::new(),
         }
     }
 
@@ -76,9 +82,8 @@ impl Compiler {
                 Value::F32(f) => func.instruction(&Instruction::F32Const(f)),
                 Value::F64(f) => func.instruction(&Instruction::F64Const(f)),
                 Value::Bytes(enc, content) => {
-                    // let offset = T::alloc(s);
-                    // func.instruction(&Instruction::I32Const(offset as i32));
-                    &mut func
+                    let offset = self.constants.add_value(Value::Bytes(enc, content))?;
+                    func.instruction(&Instruction::I32Const(Self::CONSTANTS_START + offset))
                 }
                 _ => unimplemented!(),
             };

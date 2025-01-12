@@ -4575,6 +4575,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rebeldb-runtime"
+version = "0.1.0"
+
+[[package]]
 name = "rebeldb-wasm"
 version = "0.1.0"
 dependencies = [
