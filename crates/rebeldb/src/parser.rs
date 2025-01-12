@@ -195,7 +195,12 @@ where
                 }
             }
         }
-        Some(Ok(Token::new(Value::block(&values, self.blobs), false)))
+
+        Some(
+            Value::block(&values, self.blobs)
+                .map_err(ParseError::ValueError)
+                .map(|v| Token::new(v, false)),
+        )
     }
 }
 

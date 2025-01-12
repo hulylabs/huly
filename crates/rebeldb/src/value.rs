@@ -45,6 +45,7 @@ pub enum Value {
     SetWord(Symbol),
 
     Block(Content),
+    Context(Content),
 
     NativeFn(usize, usize),
 }
@@ -78,12 +79,21 @@ impl Value {
         Ok(Self::SetWord(Symbol::new(str)?))
     }
 
-    pub fn block(block: &[Value], heap: &mut impl Heap) -> Self {
+    pub fn block(block: &[Value], heap: &mut impl Heap) -> Result<Self> {
         let mut bytes = Vec::new();
         for value in block {
-            value.serialize(&mut bytes).unwrap();
+            value.serialize(&mut bytes)?;
         }
-        Self::Block(Content::new(&bytes, heap))
+        Ok(Self::Block(Content::new(&bytes, heap)))
+    }
+
+    pub fn context(context: &[(Symbol, Value)], heap: &mut impl Heap) -> Result<Self> {
+        let mut bytes = Vec::new();
+        for value in context {
+            value.0.serialize(&mut bytes)?;
+            value.1.serialize(&mut bytes)?;
+        }
+        Ok(Self::Context(Content::new(&bytes, heap)))
     }
 
     pub fn as_int(&self) -> Option<i64> {
