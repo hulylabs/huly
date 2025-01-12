@@ -13,8 +13,8 @@ use thiserror::Error;
 pub enum EvalError {
     #[error("word not found: {0:?}")]
     WordNotFound(Symbol),
-    #[error("mismatched type: {0:?}")]
-    MismatchedType(Value),
+    #[error("mismatched type")]
+    MismatchedType,
     #[error("not enough arguments")]
     NotEnoughArgs,
     #[error(transparent)]
@@ -27,10 +27,15 @@ pub enum EvalError {
     StackUnderflow,
 }
 
+pub struct Module {
+    pub procs: &'static [(&'static str, NativeFn)],
+}
+
 pub struct Context {
     stack: Vec<Value>,
-    op_stack: Vec<Value>,
+    op_stack: Vec<NativeFn>,
     env: HashMap<Symbol, Value>,
+    modules: Vec<Vec<NativeFn>>,
 }
 
 impl Default for Context {
@@ -45,12 +50,25 @@ impl Context {
             stack: Vec::new(),
             op_stack: Vec::new(),
             env: HashMap::new(),
+            modules: Vec::new(),
         }
+    }
+
+    pub fn load_module(&mut self, module: &Module) {
+        let module_id = self.modules.len();
+        let mut procs: Vec<NativeFn> = Vec::new();
+
+        for (id, proc) in module.procs.iter().enumerate() {
+            procs.push(proc.1);
+            let native_fn = Value::NativeFn(module_id, id);
+            self.ctx_put(Symbol::new(proc.0).unwrap(), native_fn);
+        }
+        self.modules.push(procs);
     }
 
     pub fn push(&mut self, value: Value) {
         match value {
-            Value::NativeFn(_) => self.op_stack.push(value),
+            Value::NativeFn(module, proc) => self.op_stack.push(self.modules[module][proc]),
             _ => self.stack.push(value),
         }
     }
@@ -91,56 +109,14 @@ impl Context {
     }
 
     pub fn eval(&mut self) -> Result<Value, EvalError> {
-        while let Some(value) = self.op_stack.pop() {
-            match value {
-                Value::NativeFn(func) => {
-                    let stack_len = self.stack.len();
-                    let func_arity = func.arity();
-
-                    if stack_len < func_arity {
-                        return Err(EvalError::StackUnderflow);
-                    }
-
-                    let args = &self.stack[stack_len - func_arity..];
-                    let result = func.call(args)?;
-
-                    self.stack.truncate(stack_len - func_arity);
-                    self.stack.push(result);
-                    // let args = self.stack.split_off(self.stack.len() - arity);
-                    // self.stack.push(proc(&args)?);
-                }
-                // Value::Block(block) => {
-                //     self.op_stack.extend(block.iter().cloned());
-                // }
-                _ => return Err(EvalError::MismatchedType(value)),
-            }
+        while let Some(proc) = self.op_stack.pop() {
+            proc(&mut self.stack)?;
         }
         Ok(self.stack.pop().unwrap_or(Value::None))
     }
 }
 
-#[derive(Debug, Clone)]
-pub struct NativeFn {
-    func: fn(&[Value]) -> Result<Value, EvalError>,
-    arity: usize,
-}
-
-impl NativeFn {
-    pub fn new(func: fn(&[Value]) -> Result<Value, EvalError>, arity: usize) -> Self {
-        Self { func, arity }
-    }
-
-    pub fn arity(&self) -> usize {
-        self.arity
-    }
-
-    pub fn call(&self, args: &[Value]) -> Result<Value, EvalError> {
-        if args.len() != self.arity {
-            return Err(EvalError::ArityMismatch(self.arity, args.len()));
-        }
-        (self.func)(args)
-    }
-}
+pub type NativeFn = fn(&mut Vec<Value>) -> Result<(), EvalError>;
 
 #[cfg(test)]
 mod tests {
@@ -152,17 +128,6 @@ mod tests {
     impl Heap for NoHeap {
         fn put(&mut self, _data: &[u8]) -> Hash {
             unreachable!()
-        }
-    }
-
-    fn add(stack: &[Value]) -> Result<Value, EvalError> {
-        match stack {
-            [a, b] => match (a, b) {
-                (Value::Int(a), Value::Int(b)) => Ok(Value::Int(a + b)),
-                (Value::Uint(a), Value::Uint(b)) => Ok(Value::Uint(a + b)),
-                _ => Err(EvalError::MismatchedType(b.clone())),
-            },
-            _ => Err(EvalError::ArityMismatch(2, stack.len())), // Belt and suspenders
         }
     }
 
@@ -196,12 +161,13 @@ mod tests {
 
     #[test]
     fn test_proc_1() -> Result<(), EvalError> {
+        let mut ctx = Context::new();
+        ctx.load_module(&crate::core::CORE_MODULE);
+
         let input = "add 7 8";
         let mut blobs = NoHeap;
         let iter = ValueIterator::new(input, &mut blobs);
 
-        let mut ctx = Context::new();
-        ctx.ctx_put(Symbol::new("add")?, Value::NativeFn(NativeFn::new(add, 2)));
         ctx.read_all(iter)?;
 
         let result = ctx.eval()?;

@@ -2,7 +2,9 @@
 //
 // lib.rs:
 
+pub mod core;
 pub mod eval;
 pub mod heap;
+// pub mod host;
 pub mod parser;
 pub mod value;

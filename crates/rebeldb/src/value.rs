@@ -27,6 +27,9 @@ pub trait Deserialize: Sized {
     fn deserialize(bytes: &[u8]) -> Result<(Self, usize)>;
 }
 
+// should we stick to 32 + 4 - 1 bytes for better support of 32-bit systems?
+const INLINE_CONTENT_BUFFER: usize = 32 + 8 - 1;
+
 #[derive(Debug, Clone)]
 pub enum Value {
     None,
@@ -43,7 +46,7 @@ pub enum Value {
 
     Block(Content),
 
-    NativeFn(crate::eval::NativeFn),
+    NativeFn(usize, usize),
 }
 
 impl Value {
@@ -225,15 +228,15 @@ impl fmt::Display for Value {
             Value::Word(x) => write!(f, "{}", unsafe { x.symbol() }),
             Value::SetWord(x) => write!(f, "{}:", unsafe { x.symbol() }),
             Value::Block(_) => write!(f, "Block(...)"),
-            Value::NativeFn(_) => write!(f, "NativeFn(...)"),
+            Value::NativeFn(module, proc) => {
+                write!(f, "native proc: module {}, proc {}", module, proc)
+            }
             _ => unimplemented!(),
         }
     }
 }
 
 // C O N T E N T
-
-const INLINE_CONTENT_BUFFER: usize = 38;
 
 #[derive(Clone)]
 pub struct Content {
@@ -325,7 +328,7 @@ impl std::fmt::Debug for Content {
 
 // S Y M B O L
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Symbol {
     symbol: [u8; INLINE_CONTENT_BUFFER],
 }

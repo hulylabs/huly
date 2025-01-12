@@ -4217,6 +4217,7 @@ dependencies = [
  "blake3",
  "bytes",
  "hex",
+ "linkme",
  "thiserror 2.0.11",
  "tracing",
  "xxhash-rust",
