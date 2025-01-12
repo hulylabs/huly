@@ -1,3 +1,8 @@
 [workspace]
-members = ["huly", "huly-cli", "crates/rebeldb", "crates/rebeldb-cli"]
+members = [
+  "crates/huly",
+  "crates/huly-cli",
+  "crates/rebeldb",
+  "crates/rebeldb-cli",
+]
 resolver = "2"
