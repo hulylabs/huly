@@ -195,6 +195,25 @@ impl Serialize for Value {
     }
 }
 
+macro_rules! read_numeric_value {
+    ($bytes:expr, $type:ty, $constructor:expr) => {{
+        const LEN: usize = std::mem::size_of::<$type>() + 1;
+        if $bytes.len() < LEN {
+            return Err(ValueError::OutOfBounds(LEN, $bytes.len()));
+        }
+        let mut buf = [0u8; std::mem::size_of::<$type>()];
+        buf.copy_from_slice(&$bytes[1..LEN]);
+        Ok($constructor(<$type>::from_le_bytes(buf)))
+    }};
+}
+
+macro_rules! read_word {
+    ($bytes:expr, $constructor:expr) => {{
+        let symbol = Symbol::deserialize(&$bytes[1..])?;
+        Ok($constructor(symbol))
+    }};
+}
+
 impl Deserialize for Value {
     fn deserialize(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
@@ -203,42 +222,12 @@ impl Deserialize for Value {
         let tag = bytes[0];
         match tag {
             TAG_NONE => Ok(Value::None),
-            TAG_I32 => {
-                const LEN: usize = std::mem::size_of::<i32>() + 1;
-                if bytes.len() < LEN {
-                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
-                }
-                let mut buf = [0u8; LEN - 1];
-                buf.copy_from_slice(&bytes[1..LEN]);
-                Ok(Value::I32(i32::from_le_bytes(buf)))
-            }
-            TAG_I64 => {
-                const LEN: usize = std::mem::size_of::<i64>() + 1;
-                if bytes.len() < LEN {
-                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
-                }
-                let mut buf = [0u8; LEN - 1];
-                buf.copy_from_slice(&bytes[1..LEN]);
-                Ok(Value::I64(i64::from_le_bytes(buf)))
-            }
-            TAG_F32 => {
-                const LEN: usize = std::mem::size_of::<f32>() + 1;
-                if bytes.len() < LEN {
-                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
-                }
-                let mut buf = [0u8; LEN - 1];
-                buf.copy_from_slice(&bytes[1..LEN]);
-                Ok(Value::F32(f32::from_le_bytes(buf)))
-            }
-            TAG_F64 => {
-                const LEN: usize = std::mem::size_of::<f64>() + 1;
-                if bytes.len() < LEN {
-                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
-                }
-                let mut buf = [0u8; LEN - 1];
-                buf.copy_from_slice(&bytes[1..LEN]);
-                Ok(Value::F64(f64::from_le_bytes(buf)))
-            }
+            TAG_I32 => read_numeric_value!(bytes, i32, Value::I32),
+            TAG_I64 => read_numeric_value!(bytes, i64, Value::I64),
+            TAG_F32 => read_numeric_value!(bytes, f32, Value::F32),
+            TAG_F64 => read_numeric_value!(bytes, f64, Value::F64),
+            TAG_WORD => read_word!(bytes, Value::Word),
+            TAG_SET_WORD => read_word!(bytes, Value::SetWord),
             TAG_BYTES => {
                 if bytes.len() < 2 {
                     return Err(ValueError::OutOfBounds(2, bytes.len()));
@@ -246,14 +235,6 @@ impl Deserialize for Value {
                 let enc = bytes[1];
                 let content = Content::deserialize(&bytes[2..])?;
                 Ok(Value::Bytes(enc, content))
-            }
-            TAG_WORD => {
-                let symbol = Symbol::deserialize(&bytes[1..])?;
-                Ok(Value::Word(symbol))
-            }
-            TAG_SET_WORD => {
-                let symbol = Symbol::deserialize(&bytes[1..])?;
-                Ok(Value::SetWord(symbol))
             }
             TAG_BLOCK => {
                 let content = Content::deserialize(&bytes[1..])?;
