@@ -24,7 +24,7 @@ pub trait Serialize {
 }
 
 pub trait Deserialize: Sized {
-    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)>;
+    fn deserialize(bytes: &[u8]) -> Result<Self>;
 }
 
 // should we stick to 32 + 4 - 2 bytes for better support of 32-bit systems?
@@ -147,8 +147,6 @@ const TAG_WORD: u8 = 0x05;
 const TAG_SET_WORD: u8 = 0x06;
 const TAG_BLOCK: u8 = 0x07;
 
-const TAG_SIZE: usize = 1;
-
 fn write_slices<W: Write>(writer: &mut W, slices: &[&[u8]]) -> Result<usize> {
     let mut total_size = 0;
     for slice in slices {
@@ -198,13 +196,13 @@ impl Serialize for Value {
 }
 
 impl Deserialize for Value {
-    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)> {
+    fn deserialize(bytes: &[u8]) -> Result<Self> {
         if bytes.is_empty() {
             return Err(ValueError::OutOfBounds(0, 1));
         }
         let tag = bytes[0];
         match tag {
-            TAG_NONE => Ok((Value::None, 1)),
+            TAG_NONE => Ok(Value::None),
             TAG_I32 => {
                 const LEN: usize = std::mem::size_of::<i32>() + 1;
                 if bytes.len() < LEN {
@@ -212,7 +210,7 @@ impl Deserialize for Value {
                 }
                 let mut buf = [0u8; LEN - 1];
                 buf.copy_from_slice(&bytes[1..LEN]);
-                Ok((Value::I32(i32::from_le_bytes(buf)), LEN))
+                Ok(Value::I32(i32::from_le_bytes(buf)))
             }
             TAG_I64 => {
                 const LEN: usize = std::mem::size_of::<i64>() + 1;
@@ -221,7 +219,7 @@ impl Deserialize for Value {
                 }
                 let mut buf = [0u8; LEN - 1];
                 buf.copy_from_slice(&bytes[1..LEN]);
-                Ok((Value::I64(i64::from_le_bytes(buf)), LEN))
+                Ok(Value::I64(i64::from_le_bytes(buf)))
             }
             TAG_F32 => {
                 const LEN: usize = std::mem::size_of::<f32>() + 1;
@@ -230,7 +228,7 @@ impl Deserialize for Value {
                 }
                 let mut buf = [0u8; LEN - 1];
                 buf.copy_from_slice(&bytes[1..LEN]);
-                Ok((Value::F32(f32::from_le_bytes(buf)), LEN))
+                Ok(Value::F32(f32::from_le_bytes(buf)))
             }
             TAG_F64 => {
                 const LEN: usize = std::mem::size_of::<f64>() + 1;
@@ -239,27 +237,27 @@ impl Deserialize for Value {
                 }
                 let mut buf = [0u8; LEN - 1];
                 buf.copy_from_slice(&bytes[1..LEN]);
-                Ok((Value::F64(f64::from_le_bytes(buf)), LEN))
+                Ok(Value::F64(f64::from_le_bytes(buf)))
             }
             TAG_BYTES => {
                 if bytes.len() < 2 {
                     return Err(ValueError::OutOfBounds(2, bytes.len()));
                 }
                 let enc = bytes[1];
-                let (content, len) = Content::deserialize(&bytes[2..])?;
-                Ok((Value::Bytes(enc, content), len + 2))
+                let content = Content::deserialize(&bytes[2..])?;
+                Ok(Value::Bytes(enc, content))
             }
             TAG_WORD => {
-                let (symbol, len) = Symbol::deserialize(&bytes[1..])?;
-                Ok((Value::Word(symbol), len + 1))
+                let symbol = Symbol::deserialize(&bytes[1..])?;
+                Ok(Value::Word(symbol))
             }
             TAG_SET_WORD => {
-                let (symbol, len) = Symbol::deserialize(&bytes[1..])?;
-                Ok((Value::SetWord(symbol), len + 1))
+                let symbol = Symbol::deserialize(&bytes[1..])?;
+                Ok(Value::SetWord(symbol))
             }
             TAG_BLOCK => {
-                let (content, len) = Content::deserialize(&bytes[1..])?;
-                Ok((Value::Block(content), len + 1))
+                let content = Content::deserialize(&bytes[1..])?;
+                Ok(Value::Block(content))
             }
             _ => unimplemented!(),
         }
@@ -332,7 +330,7 @@ impl Serialize for Content {
 }
 
 impl Deserialize for Content {
-    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)> {
+    fn deserialize(bytes: &[u8]) -> Result<Self> {
         let mut content = [0u8; INLINE_CONTENT_BUFFER];
         let len = bytes
             .first()
@@ -343,7 +341,7 @@ impl Deserialize for Content {
             return Err(ValueError::OutOfBounds(len + 1, bytes.len()));
         }
         content[..len + 1].copy_from_slice(&bytes[..len + 1]);
-        Ok((Self { content }, len + 1))
+        Ok(Self { content })
     }
 }
 
@@ -438,7 +436,7 @@ impl Serialize for Symbol {
 }
 
 impl Deserialize for Symbol {
-    fn deserialize(bytes: &[u8]) -> Result<(Self, usize)> {
+    fn deserialize(bytes: &[u8]) -> Result<Self> {
         let mut symbol = [0u8; INLINE_CONTENT_BUFFER];
         let len = bytes
             .first()
@@ -448,7 +446,7 @@ impl Deserialize for Symbol {
             return Err(ValueError::OutOfBounds(len + 1, bytes.len()));
         }
         symbol[..len + 1].copy_from_slice(&bytes[..len + 1]);
-        Ok((Self { symbol }, len + 1))
+        Ok(Self { symbol })
     }
 }
 
@@ -462,7 +460,7 @@ mod tests {
         let content = Content::new(b"hello", &mut heap);
         assert_eq!(content.content[0], 5);
         assert_eq!(&content.content[1..6], b"hello");
-        let (deserialized, _) = Content::deserialize(&content.content).unwrap();
+        let deserialized = Content::deserialize(&content.content).unwrap();
         assert_eq!(content.content, deserialized.content);
     }
 
@@ -471,7 +469,7 @@ mod tests {
         let symbol = Symbol::new("hello").unwrap();
         assert_eq!(symbol.symbol[0], 5);
         assert_eq!(&symbol.symbol[1..6], b"hello");
-        let (deserialized, _) = Symbol::deserialize(&symbol.symbol).unwrap();
+        let deserialized = Symbol::deserialize(&symbol.symbol).unwrap();
         assert_eq!(symbol.symbol, deserialized.symbol);
     }
 
@@ -500,7 +498,7 @@ mod tests {
         let value = Value::string("hello", &mut heap);
         let mut bytes = Vec::new();
         value.serialize(&mut bytes)?;
-        let (deserialized, _) = Value::deserialize(&bytes).unwrap();
+        let deserialized = Value::deserialize(&bytes).unwrap();
         unsafe {
             assert_eq!(deserialized.inlined_as_str(), Some("hello"));
         }
@@ -513,7 +511,7 @@ mod tests {
         let value = Value::string("hello, world!", &mut heap);
         let mut bytes = Vec::new();
         value.serialize(&mut bytes)?;
-        let (deserialized, _) = Value::deserialize(&bytes).unwrap();
+        let deserialized = Value::deserialize(&bytes).unwrap();
         unsafe {
             assert_eq!(deserialized.inlined_as_str(), Some("hello, world!"));
         }
