@@ -409,15 +409,28 @@ mod tests {
     }
 
     #[test]
+    fn test_context() -> Result<()> {
+        let mut heap = crate::heap::TempHeap::new();
+        let kv = vec![
+            (Symbol::new("hello")?, Value::uint(42)),
+            (Symbol::new("there")?, Value::uint(12341234)),
+            (Symbol::new("how")?, Value::uint(12341234)),
+            (Symbol::new("doing")?, Value::uint(12341234)),
+        ];
+        let ctx = Value::context(&kv, &mut heap)?;
+        match ctx {
+            Value::Context(content) => {
+                println!("{:?}", content);
+            }
+            _ => panic!("expected Value::Context"),
+        }
+        Ok(())
+    }
+
+    #[test]
     fn test_value() -> Result<()> {
         let mut heap = crate::heap::TempHeap::new();
         let value = Value::string("hello", &mut heap);
-        match &value {
-            Value::String(content) => {
-                println!("{:?}", content);
-            }
-            _ => panic!("expected Value::String"),
-        }
         let mut bytes = Vec::new();
         value.serialize(&mut bytes)?;
         let (deserialized, _) = Value::deserialize(&bytes).unwrap();
