@@ -27,13 +27,13 @@ pub trait Deserialize: Sized {
     fn deserialize(bytes: &[u8]) -> Result<(Self, usize)>;
 }
 
-// should we stick to 32 + 4 - 1 bytes for better support of 32-bit systems?
-const INLINE_CONTENT_BUFFER: usize = 32 + 8 - 1;
+// should we stick to 32 + 4 - 2 bytes for better support of 32-bit systems?
+const INLINE_CONTENT_BUFFER: usize = 32 + 8 - 2;
 
 pub const CONTENT_TYPE_UNKNOWN: u8 = 0x00;
 const CONTENT_TYPE_UTF8: u8 = 0x01;
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Value {
     None,
 
@@ -109,22 +109,22 @@ impl Value {
         }
     }
 
-    /// Attempts to extract a string from the inline buffer.
+    /// Attempts to extract a string representation of the value
     ///
     /// # Returns
-    /// - `Some(&str)`: Always returns a string for word variants
-    /// - `Some(&str)`: For `String` variant if content fits in the inline buffer
-    /// - `None`: For `String` variant if content exceeds inline buffer capacity
+    /// - `Some(&str)`: Always returns symbol for all word variants
+    /// - `Some(&str)`: For `Bytes` which are `Utf8` encoded if content fits in the inline buffer
     /// - `None`: For all other variants
     ///
     /// # Safety
     /// This method is safe because:
-    /// - All bytes are validated as UTF-8 during value creation
-    /// - The serialization format preserves UTF-8 encoding
-    /// - The byte buffer is immutable after deserialization
+    /// - The serialization format preserves `Utf8` encoding
+    /// - The data is immutable after deserialization
     pub unsafe fn inlined_as_str(&self) -> Option<&str> {
         match self {
-            Value::Bytes(CONTENT_TYPE_UTF8, content) => content.inlined_as_str(),
+            Value::Bytes(CONTENT_TYPE_UTF8, content) => content
+                .inlined()
+                .map(|bytes| std::str::from_utf8_unchecked(bytes)),
             Value::Word(symbol) => Some(symbol.symbol()),
             Value::SetWord(symbol) => Some(symbol.symbol()),
             _ => None,
@@ -243,8 +243,8 @@ impl fmt::Display for Value {
             Value::Uint(x) => write!(f, "{}", x),
             Value::Int(x) => write!(f, "{}", x),
             Value::Float(x) => write!(f, "{}", x),
-            Value::Bytes(CONTENT_TYPE_UTF8, x) => {
-                write!(f, "{}", unsafe { x.inlined_as_str().unwrap() })
+            Value::Bytes(CONTENT_TYPE_UTF8, _) => {
+                write!(f, "{}", unsafe { self.inlined_as_str().unwrap() })
             }
             Value::Word(x) => write!(f, "{}", unsafe { x.symbol() }),
             Value::SetWord(x) => write!(f, "{}:", unsafe { x.symbol() }),
@@ -281,10 +281,10 @@ impl Content {
         }
     }
 
-    unsafe fn inlined_as_str(&self) -> Option<&str> {
+    fn inlined(&self) -> Option<&[u8]> {
         let len = self.content[0] as usize;
         if len < INLINE_CONTENT_BUFFER {
-            Some(std::str::from_utf8_unchecked(&self.content[1..len + 1]))
+            Some(&self.content[1..len + 1])
         } else {
             None
         }
@@ -344,6 +344,30 @@ impl std::fmt::Debug for Content {
         }
         writeln!(f)?;
         Ok(())
+    }
+}
+
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::None => write!(f, "None"),
+            Value::Uint(x) => write!(f, "{}", x),
+            Value::Int(x) => write!(f, "{}", x),
+            Value::Float(x) => write!(f, "{}", x),
+            Value::Bytes(enc, content) => {
+                writeln!(f, "Bytes ({:02x})", enc)?;
+                writeln!(f, "{:?}", content)
+            }
+            Value::Hash(hash) => write!(f, "Hash({})", hex::encode(hash)),
+            Value::PubKey(hash) => write!(f, "PubKey({})", hex::encode(hash)),
+            Value::Word(symbol) => write!(f, "Word({})", unsafe { symbol.symbol() }),
+            Value::SetWord(symbol) => write!(f, "SetWord({})", unsafe { symbol.symbol() }),
+            Value::Block(content) => write!(f, "Block({:?})", content),
+            Value::Context(content) => write!(f, "Context({:?})", content),
+            Value::NativeFn(module, proc) => {
+                write!(f, "NativeFn(module: {}, proc: {})", module, proc)
+            }
+        }
     }
 }
 
@@ -448,6 +472,20 @@ mod tests {
         unsafe {
             assert_eq!(deserialized.inlined_as_str(), Some("hello"));
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_string() -> Result<()> {
+        let mut heap = crate::heap::TempHeap::new();
+        let value = Value::string("hello, world!", &mut heap);
+        let mut bytes = Vec::new();
+        value.serialize(&mut bytes)?;
+        let (deserialized, _) = Value::deserialize(&bytes).unwrap();
+        unsafe {
+            assert_eq!(deserialized.inlined_as_str(), Some("hello, world!"));
+        }
+        println!("{:?}", deserialized);
         Ok(())
     }
 }
