@@ -321,7 +321,7 @@ impl std::fmt::Debug for Content {
             }
             writeln!(f, "|")?;
         }
-        write!(f, "\n")?;
+        writeln!(f)?;
         Ok(())
     }
 }
