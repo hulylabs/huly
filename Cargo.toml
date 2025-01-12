@@ -3,6 +3,6 @@ members = [
   "crates/huly",
   "crates/huly-cli",
   "crates/rebeldb",
-  "crates/rebeldb-cli",
+  "crates/rebeldb-cli", "crates/rebeldb-wasm",
 ]
 resolver = "2"

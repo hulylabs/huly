@@ -62,7 +62,7 @@ fn main() -> Result<()> {
                 continue;
             }
             Err(ReadlineError::Eof) => {
-                println!("CTRL-D");
+                println!("Bye!");
                 break;
             }
             Err(err) => {
