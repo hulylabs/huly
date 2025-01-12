@@ -62,7 +62,7 @@
 //!
 //! // This code will work with any runtime implementation
 //! fn process_wasm<R: WasmRuntime>(runtime: &mut R, wasm_bytes: &[u8]) -> Result<(), Box<dyn std::error::Error>> {
-//!     let instance = runtime.instantiate_module(wasm_bytes)?;
+//!     let mut instance = runtime.instantiate_module(wasm_bytes)?;
 //!     let memory = instance.get_memory("memory")?;
 //!     // ... work with memory
 //!     Ok(())

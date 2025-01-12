@@ -37,9 +37,11 @@ const CONTENT_TYPE_UTF8: u8 = 0x01;
 pub enum Value {
     None,
 
-    Uint(u32),
-    Int(i32),
-    Float(f32),
+    // Following types directly map to Wasm value types
+    I32(i32),
+    I64(i64),
+    F32(f32),
+    F64(f64),
 
     Bytes(u8, Content),
 
@@ -58,18 +60,6 @@ pub enum Value {
 impl Value {
     pub fn none() -> Self {
         Self::None
-    }
-
-    pub fn uint(x: u32) -> Self {
-        Self::Uint(x)
-    }
-
-    pub fn int(x: i32) -> Self {
-        Self::Int(x)
-    }
-
-    pub fn float(x: f32) -> Self {
-        Self::Float(x)
     }
 
     pub fn string(str: &str, heap: &mut impl Heap) -> Self {
@@ -103,8 +93,8 @@ impl Value {
 
     pub fn as_int(&self) -> Option<i64> {
         match self {
-            Value::Uint(x) => Some(*x as i64),
-            Value::Int(x) => Some(*x as i64),
+            Value::I32(x) => Some(*x as i64),
+            Value::I64(x) => Some(*x),
             _ => None,
         }
     }
@@ -133,9 +123,10 @@ impl Value {
 }
 
 const TAG_NONE: u8 = 0x00;
-const TAG_UINT: u8 = 0x01;
-const TAG_INT: u8 = 0x02;
-const TAG_FLOAT: u8 = 0x03;
+const TAG_I32: u8 = 0x01;
+const TAG_I64: u8 = 0x02;
+const TAG_F32: u8 = 0x03;
+const TAG_F64: u8 = 0x08;
 const TAG_BYTES: u8 = 0x04;
 const TAG_WORD: u8 = 0x05;
 const TAG_SET_WORD: u8 = 0x06;
@@ -145,16 +136,20 @@ impl Serialize for Value {
     fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
         match self {
             Value::None => writer.write_all(&[TAG_NONE])?,
-            Value::Uint(x) => {
-                writer.write_all(&[TAG_UINT])?;
+            Value::I32(x) => {
+                writer.write_all(&[TAG_I32])?;
                 writer.write_all(&x.to_le_bytes())?;
             }
-            Value::Int(x) => {
-                writer.write_all(&[TAG_INT])?;
+            Value::I64(x) => {
+                writer.write_all(&[TAG_I64])?;
                 writer.write_all(&x.to_le_bytes())?;
             }
-            Value::Float(x) => {
-                writer.write_all(&[TAG_FLOAT])?;
+            Value::F32(x) => {
+                writer.write_all(&[TAG_F32])?;
+                writer.write_all(&x.to_le_bytes())?;
+            }
+            Value::F64(x) => {
+                writer.write_all(&[TAG_F64])?;
                 writer.write_all(&x.to_le_bytes())?;
             }
             Value::Bytes(enc, content) => {
@@ -187,29 +182,41 @@ impl Deserialize for Value {
         let tag = bytes[0];
         match tag {
             TAG_NONE => Ok((Value::None, 1)),
-            TAG_UINT => {
-                if bytes.len() < 5 {
-                    return Err(ValueError::OutOfBounds(5, bytes.len()));
+            TAG_I32 => {
+                const LEN: usize = std::mem::size_of::<i32>() + 1;
+                if bytes.len() < LEN {
+                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
                 }
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(&bytes[1..5]);
-                Ok((Value::Uint(u32::from_le_bytes(buf)), 5))
+                let mut buf = [0u8; LEN - 1];
+                buf.copy_from_slice(&bytes[1..LEN]);
+                Ok((Value::I32(i32::from_le_bytes(buf)), LEN))
             }
-            TAG_INT => {
-                if bytes.len() < 5 {
-                    return Err(ValueError::OutOfBounds(5, bytes.len()));
+            TAG_I64 => {
+                const LEN: usize = std::mem::size_of::<i64>() + 1;
+                if bytes.len() < LEN {
+                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
                 }
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(&bytes[1..5]);
-                Ok((Value::Int(i32::from_le_bytes(buf)), 5))
+                let mut buf = [0u8; LEN - 1];
+                buf.copy_from_slice(&bytes[1..LEN]);
+                Ok((Value::I64(i64::from_le_bytes(buf)), LEN))
             }
-            TAG_FLOAT => {
-                if bytes.len() < 5 {
-                    return Err(ValueError::OutOfBounds(5, bytes.len()));
+            TAG_F32 => {
+                const LEN: usize = std::mem::size_of::<f32>() + 1;
+                if bytes.len() < LEN {
+                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
                 }
-                let mut buf = [0u8; 4];
-                buf.copy_from_slice(&bytes[1..5]);
-                Ok((Value::Float(f32::from_le_bytes(buf)), 5))
+                let mut buf = [0u8; LEN - 1];
+                buf.copy_from_slice(&bytes[1..LEN]);
+                Ok((Value::F32(f32::from_le_bytes(buf)), LEN))
+            }
+            TAG_F64 => {
+                const LEN: usize = std::mem::size_of::<f64>() + 1;
+                if bytes.len() < LEN {
+                    return Err(ValueError::OutOfBounds(LEN, bytes.len()));
+                }
+                let mut buf = [0u8; LEN - 1];
+                buf.copy_from_slice(&bytes[1..LEN]);
+                Ok((Value::F64(f64::from_le_bytes(buf)), LEN))
             }
             TAG_BYTES => {
                 if bytes.len() < 2 {
@@ -240,9 +247,10 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Value::None => write!(f, "None"),
-            Value::Uint(x) => write!(f, "{}", x),
-            Value::Int(x) => write!(f, "{}", x),
-            Value::Float(x) => write!(f, "{}", x),
+            Value::I32(x) => write!(f, "{}", x),
+            Value::I64(x) => write!(f, "{}", x),
+            Value::F32(x) => write!(f, "{}", x),
+            Value::F64(x) => write!(f, "{}", x),
             Value::Bytes(CONTENT_TYPE_UTF8, _) => {
                 write!(f, "{}", unsafe { self.inlined_as_str().unwrap() })
             }
@@ -351,9 +359,10 @@ impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::None => write!(f, "None"),
-            Value::Uint(x) => write!(f, "{}", x),
-            Value::Int(x) => write!(f, "{}", x),
-            Value::Float(x) => write!(f, "{}", x),
+            Value::I32(x) => write!(f, "{}", x),
+            Value::I64(x) => write!(f, "{}", x),
+            Value::F32(x) => write!(f, "{}", x),
+            Value::F64(x) => write!(f, "{}", x),
             Value::Bytes(enc, content) => {
                 writeln!(f, "Bytes ({:02x})", enc)?;
                 writeln!(f, "{:?}", content)
@@ -447,10 +456,10 @@ mod tests {
     fn test_context() -> Result<()> {
         let mut heap = crate::heap::TempHeap::new();
         let kv = vec![
-            (Symbol::new("hello")?, Value::uint(42)),
-            (Symbol::new("there")?, Value::uint(12341234)),
-            (Symbol::new("how")?, Value::uint(12341234)),
-            (Symbol::new("doing")?, Value::uint(12341234)),
+            (Symbol::new("hello")?, Value::I32(42)),
+            (Symbol::new("there")?, Value::I64(12341234)),
+            (Symbol::new("how")?, Value::I32(12341234)),
+            (Symbol::new("doing")?, Value::I64(12341234)),
         ];
         let ctx = Value::context(&kv, &mut heap)?;
         match ctx {

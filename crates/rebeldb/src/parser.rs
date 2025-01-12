@@ -112,7 +112,7 @@ where
     }
 
     fn parse_number(&mut self, char: char) -> Result<Token, ParseError> {
-        let mut value: u64 = 0;
+        let mut value: i64 = 0;
         let mut is_negative: Option<bool> = None;
         let mut has_digits = false;
         let mut end_of_block = false;
@@ -125,7 +125,7 @@ where
                 is_negative = Some(true);
             }
             c if c.is_ascii_digit() => {
-                value = c.to_digit(10).unwrap() as u64;
+                value = c.to_digit(10).unwrap() as i64;
                 has_digits = true;
             }
             _ => return Err(ParseError::UnexpectedChar(char)),
@@ -137,7 +137,7 @@ where
                     has_digits = true;
                     value = value
                         .checked_mul(10)
-                        .and_then(|v| v.checked_add(c.to_digit(10).unwrap() as u64))
+                        .and_then(|v| v.checked_add(c.to_digit(10).unwrap() as i64))
                         .ok_or(ParseError::NumberTooLarge)?;
                 }
                 ']' => {
@@ -153,9 +153,9 @@ where
         }
 
         match is_negative {
-            Some(true) => Ok(Token::new(Value::int(-(value as i32)), end_of_block)),
-            Some(false) => Ok(Token::new(Value::int(value as i32), end_of_block)),
-            None => Ok(Token::new(Value::uint(value as u32), end_of_block)),
+            Some(true) => Ok(Token::new(Value::I32(-(value as i32)), end_of_block)),
+            Some(false) => Ok(Token::new(Value::I32(value as i32), end_of_block)),
+            None => Ok(Token::new(Value::I32(value as i32), end_of_block)),
         }
     }
 

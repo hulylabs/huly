@@ -10,8 +10,8 @@ fn add(stack: &mut Vec<Value>) -> Result<(), EvalError> {
     let a = stack.pop().ok_or(EvalError::ArityMismatch(2, 1))?;
 
     let result = match (a, b) {
-        (Value::Int(a), Value::Int(b)) => Value::Int(a + b),
-        (Value::Uint(a), Value::Uint(b)) => Value::Uint(a + b),
+        (Value::I32(a), Value::I32(b)) => Value::I32(a + b),
+        (Value::I64(a), Value::I64(b)) => Value::I64(a + b),
         _ => return Err(EvalError::MismatchedType),
     };
 
