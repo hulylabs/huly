@@ -20,7 +20,7 @@ pub enum ValueError {
 pub type Result<T> = std::result::Result<T, ValueError>;
 
 pub trait Serialize {
-    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()>;
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<usize>;
 }
 
 pub trait Deserialize: Sized {
@@ -32,6 +32,21 @@ const INLINE_CONTENT_BUFFER: usize = 32 + 8 - 2;
 
 pub const CONTENT_TYPE_UNKNOWN: u8 = 0x00;
 const CONTENT_TYPE_UTF8: u8 = 0x01;
+
+pub enum ValueType {
+    None,
+    I32,
+    I64,
+    F32,
+    F64,
+    Bytes,
+    Hash,
+    PubKey,
+    Word,
+    SetWord,
+    Block,
+    Context,
+}
 
 #[derive(Clone)]
 pub enum Value {
@@ -132,45 +147,53 @@ const TAG_WORD: u8 = 0x05;
 const TAG_SET_WORD: u8 = 0x06;
 const TAG_BLOCK: u8 = 0x07;
 
+const TAG_SIZE: usize = 1;
+
+fn write_slices<W: Write>(writer: &mut W, slices: &[&[u8]]) -> Result<usize> {
+    let mut total_size = 0;
+    for slice in slices {
+        writer.write_all(slice)?;
+        total_size += slice.len();
+    }
+    Ok(total_size)
+}
+
+fn write_tag<W: Write>(writer: &mut W, tag: u8) -> Result<usize> {
+    write_slices(writer, &[&[tag]])
+}
+
+fn write_tag_slice<W: Write>(writer: &mut W, tag: u8, slice: &[u8]) -> Result<usize> {
+    write_slices(writer, &[&[tag], slice])
+}
+
+fn write_word<W: Write>(writer: &mut W, tag: u8, symbol: &Symbol) -> Result<usize> {
+    let tag_size = write_tag(writer, tag)?;
+    let symbol_size = symbol.serialize(writer)?;
+    Ok(tag_size + symbol_size)
+}
+
 impl Serialize for Value {
-    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<usize> {
         match self {
-            Value::None => writer.write_all(&[TAG_NONE])?,
-            Value::I32(x) => {
-                writer.write_all(&[TAG_I32])?;
-                writer.write_all(&x.to_le_bytes())?;
-            }
-            Value::I64(x) => {
-                writer.write_all(&[TAG_I64])?;
-                writer.write_all(&x.to_le_bytes())?;
-            }
-            Value::F32(x) => {
-                writer.write_all(&[TAG_F32])?;
-                writer.write_all(&x.to_le_bytes())?;
-            }
-            Value::F64(x) => {
-                writer.write_all(&[TAG_F64])?;
-                writer.write_all(&x.to_le_bytes())?;
-            }
+            Value::None => write_tag(writer, TAG_NONE),
+            Value::I32(x) => write_tag_slice(writer, TAG_I32, &x.to_le_bytes()),
+            Value::I64(x) => write_tag_slice(writer, TAG_I64, &x.to_le_bytes()),
+            Value::F32(x) => write_tag_slice(writer, TAG_F32, &x.to_le_bytes()),
+            Value::F64(x) => write_tag_slice(writer, TAG_F64, &x.to_le_bytes()),
             Value::Bytes(enc, content) => {
                 writer.write_all(&[TAG_BYTES, *enc])?;
-                content.serialize(writer)?;
+                let size = content.serialize(writer)?;
+                Ok(size + 2)
             }
-            Value::Word(x) => {
-                writer.write_all(&[TAG_WORD])?;
-                x.serialize(writer)?;
-            }
-            Value::SetWord(x) => {
-                writer.write_all(&[TAG_SET_WORD])?;
-                x.serialize(writer)?;
-            }
-            Value::Block(x) => {
+            Value::Word(x) => write_word(writer, TAG_WORD, x),
+            Value::SetWord(x) => write_word(writer, TAG_SET_WORD, x),
+            Value::Block(content) => {
                 writer.write_all(&[TAG_BLOCK])?;
-                x.serialize(writer)?;
+                let size = content.serialize(writer)?;
+                Ok(size + 1)
             }
             _ => unimplemented!(),
         }
-        Ok(())
     }
 }
 
@@ -300,11 +323,11 @@ impl Content {
 }
 
 impl Serialize for Content {
-    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<usize> {
         let len = self.content[0] as usize;
         let len = if len < INLINE_CONTENT_BUFFER { len } else { 32 };
         writer.write_all(&self.content[0..len + 1])?;
-        Ok(())
+        Ok(len + 1)
     }
 }
 
@@ -407,10 +430,10 @@ impl Symbol {
 }
 
 impl Serialize for Symbol {
-    fn serialize<W: Write>(&self, writer: &mut W) -> Result<()> {
+    fn serialize<W: Write>(&self, writer: &mut W) -> Result<usize> {
         let len = self.symbol[0] as usize;
         writer.write_all(&self.symbol[0..len + 1])?;
-        Ok(())
+        Ok(len + 1)
     }
 }
 
