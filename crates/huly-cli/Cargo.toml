@@ -4,11 +4,16 @@ version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "huly"
+name = "hulyctl"
 path = "src/main.rs"
+
+[[bin]]
+name = "huly"
+path = "src/console.rs"
 
 [dependencies]
 huly = { path = "../huly" }
+rebeldb = { path = "../rebeldb" }
 anyhow = "1.0.95"
 bytes = "1.9.0"
 clap = { version = "4.5.23", features = ["derive"] }
@@ -25,3 +30,5 @@ tokio = "1.42.0"
 tracing-subscriber = "0.3.19"
 uuid = { version = "1.11.0", features = ["v4"] }
 config = "0.15.4"
+colored = "3.0.0"
+rustyline = "15.0.0"

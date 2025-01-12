@@ -15,6 +15,7 @@ iroh = "0.30.0"
 iroh-gossip = "0.30.1"
 kameo = { version = "0.13.0", features = ["remote"] }
 kameo_macros = "0.13.0"
+once_cell = "1.20.2"
 postcard = "1.1.1"
 rand = "0.8.5"
 redb = "2.4.0"
