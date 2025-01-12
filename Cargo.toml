@@ -3,7 +3,8 @@ members = [
   "crates/huly",
   "crates/huly-cli",
   "crates/rebeldb",
-  "crates/rebeldb-cli", "crates/rebeldb-runtime",
+  "crates/rebeldb-cli",
+  "crates/rebeldb-runtime",
   "crates/rebeldb-wasm",
 ]
 resolver = "2"
