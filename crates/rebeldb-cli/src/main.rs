@@ -10,15 +10,9 @@ use rebeldb::parser::ValueIterator;
 use rebeldb::value::Value;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
-fn evaluate(line: &str) -> Result<Value> {
-    let mut blobs = TempHeap::new();
-    let iter = ValueIterator::new(line, &mut blobs);
-
-    let mut ctx = Context::new();
-    ctx.read_all(iter)?;
-    let result = ctx.eval()?;
-
-    Ok(result)
+fn evaluate(input: &str, heap: &mut TempHeap, ctx: &mut Context) -> Result<Value> {
+    ctx.read_all(ValueIterator::new(input, heap))?;
+    Ok(ctx.eval()?)
 }
 
 fn main() -> Result<()> {
@@ -30,7 +24,10 @@ fn main() -> Result<()> {
     println!("Type {} or press Ctrl+D to exit\n", ":quit".red().bold());
 
     // Initialize interpreter
-    // let mut interpreter = Interpreter::new();
+    //
+    let mut blobs = TempHeap::new();
+    let mut ctx = Context::new();
+    ctx.load_module(&rebeldb::core::CORE_MODULE);
 
     // Setup rustyline editor
     let mut rl = DefaultEditor::new()?;
@@ -41,9 +38,7 @@ fn main() -> Result<()> {
     //     println!("No previous history.");
     // }
 
-    // REPL loop
     loop {
-        // Read
         let readline = rl.readline(&"RebelDB™ ❯ ".to_string());
         // let readline = rl.readline(&"RebelDB™ • ".to_string());
 
@@ -51,14 +46,13 @@ fn main() -> Result<()> {
             Ok(line) => {
                 // Add to history
                 rl.add_history_entry(line.as_str())?;
+
                 // Handle special commands
                 if line.trim() == ":quit" {
                     break;
                 }
 
-                // Eval & Print
-                // match evaluate(&mut interpreter, &line) {
-                match evaluate(&line) {
+                match evaluate(&line, &mut blobs, &mut ctx) {
                     Ok(result) => println!("{}:  {}", "OK".green(), result),
                     Err(err) => eprintln!("{}: {}", "ERR".red().bold(), err),
                 }
