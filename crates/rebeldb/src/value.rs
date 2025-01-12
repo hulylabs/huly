@@ -30,6 +30,9 @@ pub trait Deserialize: Sized {
 // should we stick to 32 + 4 - 1 bytes for better support of 32-bit systems?
 const INLINE_CONTENT_BUFFER: usize = 32 + 8 - 1;
 
+pub const CONTENT_TYPE_UNKNOWN: u8 = 0x00;
+const CONTENT_TYPE_UTF8: u8 = 0x01;
+
 #[derive(Debug, Clone)]
 pub enum Value {
     None,
@@ -38,8 +41,10 @@ pub enum Value {
     Int(i32),
     Float(f32),
 
-    Bytes(Content),
-    String(Content),
+    Bytes(u8, Content),
+
+    Hash([u8; 32]),
+    PubKey([u8; 32]),
 
     Word(Symbol),
     SetWord(Symbol),
@@ -68,7 +73,7 @@ impl Value {
     }
 
     pub fn string(str: &str, heap: &mut impl Heap) -> Self {
-        Self::String(Content::new(str.as_bytes(), heap))
+        Self::Bytes(CONTENT_TYPE_UTF8, Content::new(str.as_bytes(), heap))
     }
 
     pub fn word(str: &str) -> Result<Self> {
@@ -119,7 +124,7 @@ impl Value {
     /// - The byte buffer is immutable after deserialization
     pub unsafe fn inlined_as_str(&self) -> Option<&str> {
         match self {
-            Value::String(content) => content.inlined_as_str(),
+            Value::Bytes(CONTENT_TYPE_UTF8, content) => content.inlined_as_str(),
             Value::Word(symbol) => Some(symbol.symbol()),
             Value::SetWord(symbol) => Some(symbol.symbol()),
             _ => None,
@@ -131,7 +136,7 @@ const TAG_NONE: u8 = 0x00;
 const TAG_UINT: u8 = 0x01;
 const TAG_INT: u8 = 0x02;
 const TAG_FLOAT: u8 = 0x03;
-const TAG_STRING: u8 = 0x04;
+const TAG_BYTES: u8 = 0x04;
 const TAG_WORD: u8 = 0x05;
 const TAG_SET_WORD: u8 = 0x06;
 const TAG_BLOCK: u8 = 0x07;
@@ -152,9 +157,9 @@ impl Serialize for Value {
                 writer.write_all(&[TAG_FLOAT])?;
                 writer.write_all(&x.to_le_bytes())?;
             }
-            Value::String(x) => {
-                writer.write_all(&[TAG_STRING])?;
-                x.serialize(writer)?;
+            Value::Bytes(enc, content) => {
+                writer.write_all(&[TAG_BYTES, *enc])?;
+                content.serialize(writer)?;
             }
             Value::Word(x) => {
                 writer.write_all(&[TAG_WORD])?;
@@ -206,9 +211,13 @@ impl Deserialize for Value {
                 buf.copy_from_slice(&bytes[1..5]);
                 Ok((Value::Float(f32::from_le_bytes(buf)), 5))
             }
-            TAG_STRING => {
-                let (content, len) = Content::deserialize(&bytes[1..])?;
-                Ok((Value::String(content), len + 1))
+            TAG_BYTES => {
+                if bytes.len() < 2 {
+                    return Err(ValueError::OutOfBounds(2, bytes.len()));
+                }
+                let enc = bytes[1];
+                let (content, len) = Content::deserialize(&bytes[2..])?;
+                Ok((Value::Bytes(enc, content), len + 2))
             }
             TAG_WORD => {
                 let (symbol, len) = Symbol::deserialize(&bytes[1..])?;
@@ -234,7 +243,9 @@ impl fmt::Display for Value {
             Value::Uint(x) => write!(f, "{}", x),
             Value::Int(x) => write!(f, "{}", x),
             Value::Float(x) => write!(f, "{}", x),
-            Value::String(x) => write!(f, "{}", unsafe { x.inlined_as_str().unwrap() }),
+            Value::Bytes(CONTENT_TYPE_UTF8, x) => {
+                write!(f, "{}", unsafe { x.inlined_as_str().unwrap() })
+            }
             Value::Word(x) => write!(f, "{}", unsafe { x.symbol() }),
             Value::SetWord(x) => write!(f, "{}:", unsafe { x.symbol() }),
             Value::Block(_) => write!(f, "Block(...)"),
