@@ -2,6 +2,7 @@
 //
 // lib.rs:
 
+pub mod boxed;
 pub mod codegen;
 pub mod core;
 pub mod eval;

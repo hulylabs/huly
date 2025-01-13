@@ -153,9 +153,8 @@ where
         }
 
         match is_negative {
-            Some(true) => Ok(Token::new(Value::I32(-(value as i32)), end_of_block)),
-            Some(false) => Ok(Token::new(Value::I32(value as i32), end_of_block)),
-            None => Ok(Token::new(Value::I32(value as i32), end_of_block)),
+            Some(true) => Ok(Token::new(Value::Int(-value), end_of_block)),
+            _ => Ok(Token::new(Value::Int(value), end_of_block)),
         }
     }
 

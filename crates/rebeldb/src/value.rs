@@ -35,10 +35,8 @@ const CONTENT_TYPE_UTF8: u8 = 0x01;
 
 pub enum ValueType {
     None,
-    I32,
-    I64,
-    F32,
-    F64,
+    Int,
+    Float,
     Bytes,
     Hash,
     PubKey,
@@ -53,10 +51,8 @@ pub enum Value {
     None,
 
     // Following types directly map to Wasm value types
-    I32(i32),
-    I64(i64),
-    F32(f32),
-    F64(f64),
+    Int(i64),
+    Float(f64),
 
     Bytes(u8, Content),
 
@@ -108,8 +104,7 @@ impl Value {
 
     pub fn as_int(&self) -> Option<i64> {
         match self {
-            Value::I32(x) => Some(*x as i64),
-            Value::I64(x) => Some(*x),
+            Value::Int(x) => Some(*x),
             _ => None,
         }
     }
@@ -137,11 +132,127 @@ impl Value {
     }
 }
 
+//
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BoxedValue(u64);
+
+/// We force the exponent bits (62..52) to 0x7FF, ensuring it's a NaN if fraction != 0.
+/// sign bit (63) is free for marking negative vs. positive integers.
+/// fraction (52 bits): top 4 bits (51..48) are the tag, lower 48 bits (47..0) are payload.
+const EXP_SHIFT: u64 = 52;
+const EXP_MAX: u64 = 0x7FF; // exponent bits all 1 => 0x7FF
+const EXP_MASK: u64 = EXP_MAX << EXP_SHIFT; // bits 62..52
+
+/// Bit positions for tag and sign
+const TAG_SHIFT: u64 = 48; // so bits 51..48 are the tag
+const TAG_MASK: u64 = 0xF; // 4 bits
+
+/// In this layout:
+///  bit 63 = sign
+///  bits 62..52 = exponent = 0x7FF
+///  bits 51..48 = tag
+///  bits 47..0  = payload
+
+/// Example tags:
+#[repr(u64)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Tag {
+    Int = 0x0, // up to you which nibble you choose
+    Ptr = 0x1,
+    // You can define up to 16 different tags (0x0 .. 0xF).
+}
+
+impl BoxedValue {
+    /// Create a boxed *signed* integer.
+    /// Uses the top (bit 63) as the "sign bit" for negative vs. non-negative.
+    /// The integer's absolute value must fit in 48 bits: -(2^47) .. 2^47 - 1.
+    pub fn new_int(value: i64) -> Self {
+        // sign bit: 1 if negative, 0 otherwise
+        let sign_bit = if value < 0 { 1 } else { 0 };
+        let mag = value.unsigned_abs(); // absolute value as u64
+
+        // Ensure fits in 48 bits
+        assert!(
+            mag < (1u64 << 48),
+            "Integer out of range for 48-bit magnitude"
+        );
+
+        // fraction = [ tag(4 bits) | payload(48 bits) ]
+        // top 4 bits of fraction => Tag::Int
+        // lower 48 bits => magnitude
+        let fraction = ((Tag::Int as u64) & TAG_MASK) << TAG_SHIFT | (mag & 0xFFFF_FFFF_FFFF);
+
+        // Combine sign, exponent=0x7FF, fraction
+        let bits = (sign_bit << 63) | EXP_MASK | fraction;
+        BoxedValue(bits)
+    }
+
+    /// Try to interpret this BoxedValue as an integer.
+    pub fn as_int(&self) -> i64 {
+        let sign_bit = (self.0 >> 63) & 1;
+        // Check exponent == 0x7FF
+        let exponent = (self.0 >> EXP_SHIFT) & 0x7FF;
+        // Check tag
+        let tag = (self.0 >> TAG_SHIFT) & TAG_MASK;
+        // Check fraction != 0 => must be a NaN, not Inf
+        let fraction = self.0 & ((1u64 << TAG_SHIFT) - 1u64 | (TAG_MASK << TAG_SHIFT));
+
+        // Validate that it *looks* like a NaN-boxed integer
+        assert_eq!(exponent, EXP_MAX, "Not a NaN exponent");
+        assert_ne!(fraction, 0, "Looks like Infinity, not NaN");
+        assert_eq!(tag, Tag::Int as u64, "Not an Int tag");
+
+        // Lower 48 bits = magnitude
+        let mag = self.0 & 0x000F_FFFF_FFFF_FFFF; // mask out exponent & sign & top 4 bits
+        let magnitude_48 = mag & 0xFFFF_FFFF_FFFF; // bits 47..0
+
+        if sign_bit == 0 {
+            // positive or zero
+            magnitude_48 as i64
+        } else {
+            // negative
+            -(magnitude_48 as i64)
+        }
+    }
+
+    /// Create a boxed pointer (for 32-bit addresses).
+    /// Tag = Tag::Ptr, exponent=0x7FF, sign=0, fraction bits 47..0 store the pointer.
+    pub fn new_ptr(addr: u32) -> Self {
+        // If you need more than 32 bits, store additional bits as needed.
+        let fraction = ((Tag::Ptr as u64) & TAG_MASK) << TAG_SHIFT | (addr as u64);
+        let bits = (0 << 63) // sign = 0
+            | EXP_MASK
+            | fraction;
+        BoxedValue(bits)
+    }
+
+    /// Try to interpret this BoxedValue as a 32-bit pointer.
+    pub fn as_ptr(&self) -> u32 {
+        let exponent = (self.0 >> EXP_SHIFT) & 0x7FF;
+        let tag = (self.0 >> TAG_SHIFT) & TAG_MASK;
+        let fraction = self.0 & 0x000F_FFFF_FFFF_FFFF;
+
+        // Validate
+        assert_eq!(exponent, EXP_MAX, "Not a NaN exponent");
+        assert_ne!(fraction, 0, "Looks like Infinity, not NaN");
+        assert_eq!(tag, Tag::Ptr as u64, "Not a Ptr tag");
+
+        // Just grab the lower 32 bits
+        (fraction & 0xFFFF_FFFF) as u32
+    }
+
+    /// Returns the raw bits for debugging or advanced use
+    pub fn bits(&self) -> u64 {
+        self.0
+    }
+}
+
+//
+
 const TAG_NONE: u8 = 0x00;
-const TAG_I32: u8 = 0x01;
-const TAG_I64: u8 = 0x02;
-const TAG_F32: u8 = 0x03;
-const TAG_F64: u8 = 0x08;
+const TAG_INT: u8 = 0x01;
+const TAG_FLOAT: u8 = 0x02;
 const TAG_BYTES: u8 = 0x04;
 const TAG_WORD: u8 = 0x05;
 const TAG_SET_WORD: u8 = 0x06;
@@ -174,10 +285,8 @@ impl Serialize for Value {
     fn serialize<W: Write>(&self, writer: &mut W) -> Result<usize> {
         match self {
             Value::None => write_tag(writer, TAG_NONE),
-            Value::I32(x) => write_tag_slice(writer, TAG_I32, &x.to_le_bytes()),
-            Value::I64(x) => write_tag_slice(writer, TAG_I64, &x.to_le_bytes()),
-            Value::F32(x) => write_tag_slice(writer, TAG_F32, &x.to_le_bytes()),
-            Value::F64(x) => write_tag_slice(writer, TAG_F64, &x.to_le_bytes()),
+            Value::Int(x) => write_tag_slice(writer, TAG_INT, &x.to_le_bytes()),
+            Value::Float(x) => write_tag_slice(writer, TAG_FLOAT, &x.to_le_bytes()),
             Value::Bytes(enc, content) => {
                 writer.write_all(&[TAG_BYTES, *enc])?;
                 let size = content.serialize(writer)?;
@@ -222,10 +331,8 @@ impl Deserialize for Value {
         let tag = bytes[0];
         match tag {
             TAG_NONE => Ok(Value::None),
-            TAG_I32 => read_numeric_value!(bytes, i32, Value::I32),
-            TAG_I64 => read_numeric_value!(bytes, i64, Value::I64),
-            TAG_F32 => read_numeric_value!(bytes, f32, Value::F32),
-            TAG_F64 => read_numeric_value!(bytes, f64, Value::F64),
+            TAG_INT => read_numeric_value!(bytes, i64, Value::Int),
+            TAG_FLOAT => read_numeric_value!(bytes, f64, Value::Float),
             TAG_WORD => read_word!(bytes, Value::Word),
             TAG_SET_WORD => read_word!(bytes, Value::SetWord),
             TAG_BYTES => {
@@ -249,10 +356,8 @@ impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             Value::None => write!(f, "None"),
-            Value::I32(x) => write!(f, "{}", x),
-            Value::I64(x) => write!(f, "{}", x),
-            Value::F32(x) => write!(f, "{}", x),
-            Value::F64(x) => write!(f, "{}", x),
+            Value::Int(x) => write!(f, "{}", x),
+            Value::Float(x) => write!(f, "{}", x),
             Value::Bytes(CONTENT_TYPE_UTF8, _) => {
                 write!(f, "{}", unsafe { self.inlined_as_str().unwrap() })
             }
@@ -361,10 +466,8 @@ impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Value::None => write!(f, "None"),
-            Value::I32(x) => write!(f, "{}", x),
-            Value::I64(x) => write!(f, "{}", x),
-            Value::F32(x) => write!(f, "{}", x),
-            Value::F64(x) => write!(f, "{}", x),
+            Value::Int(x) => write!(f, "{}", x),
+            Value::Float(x) => write!(f, "{}", x),
             Value::Bytes(enc, content) => {
                 writeln!(f, "Bytes ({:02x})", enc)?;
                 writeln!(f, "{:?}", content)
@@ -458,10 +561,10 @@ mod tests {
     fn test_context() -> Result<()> {
         let mut heap = crate::heap::TempHeap::new();
         let kv = vec![
-            (Symbol::new("hello")?, Value::I32(42)),
-            (Symbol::new("there")?, Value::I64(12341234)),
-            (Symbol::new("how")?, Value::I32(12341234)),
-            (Symbol::new("doing")?, Value::I64(12341234)),
+            (Symbol::new("hello")?, Value::Int(42)),
+            (Symbol::new("there")?, Value::Float(12341234.55)),
+            (Symbol::new("how")?, Value::Int(12341234)),
+            (Symbol::new("doing")?, Value::Float(1.12341234)),
         ];
         let ctx = Value::context(&kv, &mut heap)?;
         match ctx {
@@ -499,4 +602,58 @@ mod tests {
         println!("{:?}", deserialized);
         Ok(())
     }
+
+    // B O X E D   V A L U E
+
+    // #[test]
+    // fn test_int_round_trip() {
+    //     // Some sample values that fit in 48 bits
+    //     let cases = [
+    //         0,
+    //         42,
+    //         -42,
+    //         123_456_789,
+    //         -123_456_789,
+    //         (1 << 47) - 1,  // 140,737,488,355,327
+    //         -(1 << 47) + 1, // -140,737,488,355,327
+    //     ];
+
+    //     for &val in &cases {
+    //         let boxed = BoxedValue::new_int(val);
+    //         let unboxed = boxed.as_int();
+    //         assert_eq!(
+    //             unboxed, val,
+    //             "Failed round-trip for {} => {:?} => {}",
+    //             val, boxed, unboxed
+    //         );
+    //     }
+    // }
+
+    // #[test]
+    // #[should_panic(expected = "out of range")]
+    // fn test_int_overflow() {
+    //     // 2^47 is out of range
+    //     let _ = BoxedValue::new_int(1 << 47);
+    // }
+
+    // #[test]
+    // fn test_ptr_round_trip() {
+    //     let ptrs = [0u32, 1, 0xDEAD_BEEF, 0xFFFF_FFFF];
+
+    //     for &p in &ptrs {
+    //         let boxed = BoxedValue::new_ptr(p);
+    //         let unboxed = boxed.as_ptr();
+    //         assert_eq!(
+    //             unboxed, p,
+    //             "Failed round-trip for pointer {:08X} => {:?} => {:08X}",
+    //             p, boxed, unboxed
+    //         );
+    //     }
+    // }
+
+    // #[test]
+    // fn test_bits_debug() {
+    //     let x = BoxedValue::new_int(42);
+    //     println!("Boxed bits for 42: 0x{:016X}", x.bits());
+    // }
 }

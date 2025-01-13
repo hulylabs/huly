@@ -77,10 +77,8 @@ impl Compiler {
         for value in body {
             let value = value?;
             match value {
-                Value::I32(i) => func.instruction(&Instruction::I32Const(i)),
-                Value::I64(i) => func.instruction(&Instruction::I64Const(i)),
-                Value::F32(f) => func.instruction(&Instruction::F32Const(f)),
-                Value::F64(f) => func.instruction(&Instruction::F64Const(f)),
+                Value::Int(i) => func.instruction(&Instruction::I64Const(i)),
+                Value::Float(f) => func.instruction(&Instruction::F64Const(f)),
                 Value::Bytes(enc, content) => {
                     let offset = self.constants.add_value(Value::Bytes(enc, content))?;
                     func.instruction(&Instruction::I32Const(Self::CONSTANTS_START + offset))

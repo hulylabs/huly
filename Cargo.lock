@@ -4575,6 +4575,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rebeldb-core"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.11",
+]
+
+[[package]]
 name = "rebeldb-runtime"
 version = "0.1.0"
 
