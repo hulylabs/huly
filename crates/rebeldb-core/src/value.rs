@@ -77,7 +77,7 @@ impl Value {
 
     pub fn none() -> Self {
         let fraction = Self::FRACTION_TOP_BIT | Self::tag_bits(ValueType::None);
-        let bits = (0 << 63) | Self::EXP_MASK | fraction;
+        let bits = Self::EXP_MASK | fraction;
         Value(bits)
     }
 
@@ -97,7 +97,7 @@ impl Value {
         let payload_47 = ((value << (64 - Self::PAYLOAD_BITS)) >> (64 - Self::PAYLOAD_BITS)) as u64
             & Self::PAYLOAD_MASK;
         let fraction = Self::FRACTION_TOP_BIT | Self::tag_bits(ValueType::Int) | payload_47;
-        let bits = (0 << 63) | Self::EXP_MASK | fraction;
+        let bits = Self::EXP_MASK | fraction;
         Value(bits)
     }
 
@@ -133,7 +133,7 @@ impl Value {
         let fraction = Self::FRACTION_TOP_BIT
             | Self::tag_bits(ValueType::NativeFn)
             | (payload & Self::PAYLOAD_MASK);
-        let bits = (0 << 63) | Self::EXP_MASK | fraction;
+        let bits = Self::EXP_MASK | fraction;
         Value(bits)
     }
 
@@ -154,7 +154,7 @@ impl Value {
         let payload_47 = ((payload as u64) << 32) | ((addr as u64) & 0xFFFF_FFFF);
         let fraction =
             Self::FRACTION_TOP_BIT | Self::tag_bits(tag) | (payload_47 & Self::PAYLOAD_MASK);
-        let bits = (0 << 63) | Self::EXP_MASK | fraction;
+        let bits = Self::EXP_MASK | fraction;
         Value(bits)
     }
 
