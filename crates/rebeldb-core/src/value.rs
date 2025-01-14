@@ -47,8 +47,8 @@ const QNAN_MASK: u64 = 0x7FF8_0000_0000_0000;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueType {
     Int = 0x0,
-    Float = 0x1,
-    Bytes = 0x2,
+    // Float = 0x1,
+    // Bytes = 0x2,
     String = 0x3,
     Block = 0x4,
     Word = 0x5,
@@ -202,7 +202,7 @@ impl Memory for OwnMemory {
 //
 
 const HASH_SIZE: usize = 32;
-type Hash = [u8; HASH_SIZE];
+// type Hash = [u8; HASH_SIZE];
 
 pub struct Process<M: Memory> {
     offset: usize,
@@ -293,15 +293,15 @@ where
     }
 }
 
-#[inline(never)]
-pub fn string_test_1(memory: &mut Process<OwnMemory>, s: &str) -> Result<Value, ValueError> {
-    memory.string(s)
-}
+// #[inline(never)]
+// pub fn string_test_1(memory: &mut Process<OwnMemory>, s: &str) -> Result<Value, ValueError> {
+//     memory.string(s)
+// }
 
-#[inline(never)]
-pub fn block_test_1(memory: &mut Process<OwnMemory>, blk: &[Value]) -> Result<Value, ValueError> {
-    memory.block(blk)
-}
+// #[inline(never)]
+// pub fn block_test_1(memory: &mut Process<OwnMemory>, blk: &[Value]) -> Result<Value, ValueError> {
+//     memory.block(blk)
+// }
 
 // #[inline(never)]
 // pub fn string_test_2(memory: &mut OwnedMemory, v: Value) -> Result<&str, ValueError> {
