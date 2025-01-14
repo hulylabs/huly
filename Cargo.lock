@@ -4578,6 +4578,7 @@ dependencies = [
 name = "rebeldb-core"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "thiserror 2.0.11",
 ]
 
