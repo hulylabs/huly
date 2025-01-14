@@ -229,13 +229,13 @@ mod tests {
     }
 
     #[test]
-    fn test_number_1() -> anyhow::Result<()> {
+    fn test_number_1() -> Result<(), ParseError> {
         let input = "42";
         let mut process = OwnMemory::new(65536, 1024);
         let mut iter = ValueIterator::new(input, &mut process);
 
         let value = iter.next().unwrap().unwrap();
-        assert_eq!(value.as_int(), Some(42));
+        assert_eq!(value.as_int()?, 42);
 
         let value = iter.next();
         assert!(value.is_none());

@@ -14,6 +14,8 @@ pub enum ValueError {
     BadRange,
     #[error("Integer out of range for 47-bit payload")]
     IntegerOutOfRange,
+    #[error("Not an integer value")]
+    NotAnInteger,
 }
 
 type Tag = u8; // we use only 4 bits
@@ -27,16 +29,17 @@ enum ValueType {
     Word = 0x5,
     NativeFn = 0x6,
     Context = 0x7,
+    SetWord = 0x8,
     None = 0xf,
 }
 
 type PayloadHighBits = u16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum WordKind {
-    Word = 0,
-    SetWord = 1,
-}
+// #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// enum WordKind {
+//     Word = 0,
+//     SetWord = 1,
+// }
 
 type WasmWord = u32;
 type Address = WasmWord;
@@ -70,9 +73,11 @@ impl Value {
     // except exponent (bits 62..52) and the top fraction bit (bit 51).
     // We compare against the pattern indicating exponent=0x7FF and fraction’s top bit=1.
     const QNAN_MASK: u64 = 0x7FF8_0000_0000_0000;
+    const TYPE_MASK: u64 = Self::QNAN_MASK | (Self::TAG_MASK << Self::TAG_SHIFT);
 
     pub const TAG_INT: Tag = ValueType::Int as Tag;
     pub const TAG_STRING: Tag = ValueType::String as Tag;
+    pub const TAG_WORD: Tag = ValueType::Word as Tag;
     pub const TAG_NATIVE_FN: Tag = ValueType::NativeFn as Tag;
 
     pub fn none() -> Self {
@@ -81,8 +86,8 @@ impl Value {
         Value(bits)
     }
 
-    pub fn is_qnan(&self) -> bool {
-        (self.bits() & Self::QNAN_MASK) == Self::QNAN_MASK
+    fn is_a(&self, value_type: ValueType) -> bool {
+        self.bits() & Self::TYPE_MASK == Self::QNAN_MASK | (value_type as u64) << Self::TAG_SHIFT
     }
 
     fn tag_bits(tag: ValueType) -> u64 {
@@ -115,16 +120,15 @@ impl Value {
         }
     }
 
-    /// Interpret this Value as a 47-bit signed integer.
-    pub fn as_int(&self) -> Option<i64> {
-        if self.tag() == Self::TAG_INT {
-            let bits = self.0;
+    pub fn as_int(&self) -> Result<i64, ValueError> {
+        if self.is_a(ValueType::Int) {
+            let bits = self.bits();
             let payload = bits & Self::PAYLOAD_MASK;
             let shifted = (payload << (64 - Self::PAYLOAD_BITS)) as i64; // cast to i64 => preserve bits
             let value = shifted >> (64 - Self::PAYLOAD_BITS); // arithmetic shift right
-            Some(value)
+            Ok(value)
         } else {
-            None
+            Err(ValueError::NotAnInteger)
         }
     }
 
@@ -149,8 +153,7 @@ impl Value {
         }
     }
 
-    /// Create a boxed pointer (32 bits). Tag = Ptr, fraction bit 51=1, payload in bits 46..0.
-    fn new_ptr(tag: ValueType, payload: PayloadHighBits, addr: WasmWord) -> Self {
+    fn new_ptr(tag: ValueType, payload: PayloadHighBits, addr: Address) -> Self {
         let payload_47 = ((payload as u64) << 32) | ((addr as u64) & 0xFFFF_FFFF);
         let fraction =
             Self::FRACTION_TOP_BIT | Self::tag_bits(tag) | (payload_47 & Self::PAYLOAD_MASK);
@@ -158,9 +161,12 @@ impl Value {
         Value(bits)
     }
 
-    /// Return the pointer as 32 bits.
-    fn address(&self) -> WasmWord {
+    fn address(&self) -> Address {
         (self.0 & 0xFFFF_FFFF) as WasmWord
+    }
+
+    pub fn symbol(&self) -> Symbol {
+        (self.0 & 0xFFFF_FFFF) as Symbol
     }
 
     fn payload_high_bits(&self) -> u16 {
@@ -276,13 +282,13 @@ impl Value {
 
     pub fn word(mem: &mut impl Memory, string: &str) -> Result<Value, ValueError> {
         let addr = Self::inline_string(mem, string)?;
-        let value = Value::new_ptr(ValueType::Word, WordKind::Word as u16, addr);
+        let value = Value::new_ptr(ValueType::Word, 0, addr);
         Ok(value)
     }
 
     pub fn set_word(mem: &mut impl Memory, string: &str) -> Result<Value, ValueError> {
         let addr = Self::inline_string(mem, string)?;
-        let value = Value::new_ptr(ValueType::Word, WordKind::SetWord as u16, addr);
+        let value = Value::new_ptr(ValueType::SetWord, 0, addr);
         Ok(value)
     }
 
@@ -300,23 +306,46 @@ pub trait Memory {
     fn get_slice(&self, addr: WasmWord, len: usize) -> &[u8];
     fn get_slice_mut(&mut self, addr: WasmWord, len: usize) -> &mut [u8];
     fn alloc(&mut self, size: usize) -> Result<(Address, &mut [u8]), ValueError>;
+    fn push(&mut self, value: Value);
+    fn pop(&mut self) -> Option<Value>;
 }
 
 pub struct OwnMemory {
     data: Vec<u8>,
     heap_ptr: usize,
+    stack_ptr: usize,
 }
 
 impl OwnMemory {
     pub fn new(size: usize, heap_ptr: usize) -> Self {
         Self {
             data: vec![0; size],
+            stack_ptr: size,
             heap_ptr,
         }
     }
 }
 
 impl Memory for OwnMemory {
+    fn push(&mut self, value: Value) {
+        self.stack_ptr -= 8;
+        self.data[self.stack_ptr..self.stack_ptr + 8].copy_from_slice(&value.bits().to_le_bytes());
+    }
+
+    fn pop(&mut self) -> Option<Value> {
+        if self.stack_ptr < self.data.len() {
+            let value = Value(u64::from_le_bytes(
+                self.data[self.stack_ptr..self.stack_ptr + 8]
+                    .try_into()
+                    .unwrap(),
+            ));
+            self.stack_ptr += 8;
+            Some(value)
+        } else {
+            None
+        }
+    }
+
     fn get_slice(&self, addr: WasmWord, len: usize) -> &[u8] {
         let addr = addr as usize;
         &self.data[addr..addr + len]
