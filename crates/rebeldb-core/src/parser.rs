@@ -2,7 +2,7 @@
 //
 // parser.rs:
 
-use crate::value::{Memory, Process, Value};
+use crate::value::{Memory, Value};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -38,7 +38,7 @@ where
 {
     input: &'a str,
     cursor: CharIndices<'a>,
-    process: &'a mut Process<M>,
+    memory: &'a mut M,
 }
 
 impl<M> Iterator for ValueIterator<'_, M>
@@ -57,11 +57,11 @@ impl<'a, M> ValueIterator<'a, M>
 where
     M: Memory,
 {
-    pub fn new(input: &'a str, process: &'a mut Process<M>) -> Self {
+    pub fn new(input: &'a str, memory: &'a mut M) -> Self {
         Self {
             cursor: input.char_indices(),
             input,
-            process,
+            memory,
         }
     }
 
@@ -79,7 +79,7 @@ where
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
                 return Ok(Token::new(
-                    self.process.string(&self.input[start_pos..pos])?,
+                    Value::string(self.memory, &self.input[start_pos..pos])?,
                     // Value::string(&self.input[start_pos..pos], self.blobs),
                     false,
                 ));
@@ -95,13 +95,13 @@ where
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
                 ':' => {
                     return Ok(Token::new(
-                        self.process.set_word(&self.input[start_pos..pos])?,
+                        Value::set_word(self.memory, &self.input[start_pos..pos])?,
                         false,
                     ))
                 }
                 c if c.is_ascii_whitespace() || c == ']' => {
                     return Ok(Token::new(
-                        self.process.word(&self.input[start_pos..pos])?,
+                        Value::word(self.memory, &self.input[start_pos..pos])?,
                         c == ']',
                     ))
                 }
@@ -194,8 +194,7 @@ where
         }
 
         Some(
-            self.process
-                .block(&values)
+            Value::block(self.memory, &values)
                 .map_err(ParseError::ValueError)
                 .map(|v| Token::new(v, false)),
         )
@@ -205,12 +204,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::value::{OwnMemory, Process};
+    use crate::value::OwnMemory;
 
     #[test]
     fn test_whitespace_1() {
         let input = "  \t\n  ";
-        let mut process = Process::new(OwnMemory::new(65536));
+        let mut process = OwnMemory::new(65536);
         let mut iter = ValueIterator::new(input, &mut process);
 
         let value = iter.next();
@@ -220,13 +219,13 @@ mod tests {
     #[test]
     fn test_string_1() -> anyhow::Result<()> {
         let input = "\"hello\"  \n ";
-        let mut process = Process::new(OwnMemory::new(65536));
-        let block: Vec<_> = ValueIterator::new(input, &mut process)
+        let mut mem = OwnMemory::new(65536);
+        let block: Vec<_> = ValueIterator::new(input, &mut mem)
             .filter_map(Result::ok)
             .collect();
 
         assert_eq!(block.len(), 1);
-        assert_eq!(&process.as_inline_string(block[0])?, &Some("hello"));
+        assert_eq!(Value::as_inline_string(&mut mem, block[0])?, Some("hello"));
 
         Ok(())
     }
@@ -234,7 +233,7 @@ mod tests {
     #[test]
     fn test_number_1() -> anyhow::Result<()> {
         let input = "42";
-        let mut process = Process::new(OwnMemory::new(65536));
+        let mut process = OwnMemory::new(65536);
         let mut iter = ValueIterator::new(input, &mut process);
 
         let value = iter.next().unwrap().unwrap();
