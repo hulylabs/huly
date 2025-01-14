@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_whitespace_1() {
         let input = "  \t\n  ";
-        let mut process = OwnMemory::new(65536, 1024);
+        let mut process = OwnMemory::new(0x10000, 0x100, 0x1000);
         let mut iter = ValueIterator::new(input, &mut process);
 
         let value = iter.next();
@@ -219,7 +219,7 @@ mod tests {
     #[test]
     fn test_string_1() {
         let input = "\"hello\"  \n ";
-        let mut mem = OwnMemory::new(65536, 1024);
+        let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
         let block: Vec<_> = ValueIterator::new(input, &mut mem)
             .filter_map(Result::ok)
             .collect();
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn test_number_1() -> Result<(), ParseError> {
         let input = "42";
-        let mut process = OwnMemory::new(65536, 1024);
+        let mut process = OwnMemory::new(0x10000, 0x100, 0x1000);
         let mut iter = ValueIterator::new(input, &mut process);
 
         let value = iter.next().unwrap().unwrap();

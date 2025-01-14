@@ -75,6 +75,8 @@ pub struct Process<'a, M: Memory> {
     memory: &'a mut M,
     stack: Vec<Value>,
     op_stack: Vec<Value>,
+    natives: Vec<NativeFn>,
+    root_ctx: Value,
 }
 
 impl<'a, M> Process<'a, M>
@@ -86,20 +88,23 @@ where
             memory,
             stack: Vec::new(),
             op_stack: Vec::new(),
+            natives: Vec::new(),
+            root_ctx: Value::context(),
         }
     }
 
-    // pub fn load_module(&mut self, module: &Module) {
-    //     let module_id = self.modules.len();
-    //     let mut procs: Vec<NativeFn> = Vec::new();
+    pub fn load_module(&mut self, module: &Module) {
+        let module_id = self.modules.len();
+        let mut ctx
 
-    //     for (id, proc) in module.procs.iter().enumerate() {
-    //         procs.push(proc.1);
-    //         let native_fn = Value::native_fn(module_id as u16, id as u32);
-    //         self.ctx_put(Symbol::new(proc.0).unwrap(), native_fn);
-    //     }
-    //     self.modules.push(procs);
-    // }
+        for (symbol, proc) in module.procs.iter().enumerate() {
+            let id = self.natives.len();
+            natives.push(proc.1);
+            let native_fn = Value::native_fn(id as u32);
+            self.ctx_put(Symbol::new(proc.0).unwrap(), native_fn);
+        }
+        self.modules.push(procs);
+    }
 
     // pub fn push(&mut self, value: Value) {
     //     match value.tag() {
