@@ -1,13 +1,11 @@
 //
 
+use core::str;
 use std::ops::Range;
-
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum ValueError {
-    #[error("Integer out of 47-bit range")]
-    IntOutOfRange,
     #[error("Not a RebelDB value")]
     NotAValue,
     #[error("String too long")]
@@ -16,8 +14,10 @@ pub enum ValueError {
     TypeMismatch,
     #[error("Out of memory")]
     OutOfMemory,
-    #[error("Access violation")]
-    AccessViolation,
+    #[error("Bad range")]
+    BadRange,
+    #[error("Integer out of range for 47-bit payload")]
+    IntegerOutOfRange,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,145 +43,6 @@ const PAYLOAD_MASK_47: u64 = (1 << 47) - 1; // 0x7FFF_FFFF_FFFF
 // We compare against the pattern indicating exponent=0x7FF and fraction’s top bit=1.
 const QNAN_MASK: u64 = 0x7FF8_0000_0000_0000;
 
-//
-
-const HASH_SIZE: usize = 32;
-
-// trait Storage {
-//     fn put(&mut self, data: &[u8]) -> Hash;
-// }
-
-// struct NullStorage;
-
-// impl Storage for NullStorage {
-//     fn put(&mut self, _data: &[u8]) -> Hash {
-//         unreachable!()
-//     }
-// }
-
-// trait Memory {
-//     type Storage: Storage;
-// }
-
-pub trait Memory {
-    fn get_slice(&self, range: Range<usize>) -> Result<&[u8], ValueError>;
-    fn get_mut_slice(&mut self, range: Range<usize>) -> Result<&mut [u8], ValueError>;
-    fn size(&self) -> usize;
-}
-
-pub struct OwnedMemory {
-    data: Vec<u8>,
-}
-
-impl OwnedMemory {
-    pub fn new() -> Self {
-        Self { data: Vec::new() }
-    }
-}
-
-impl Memory for OwnedMemory {
-    fn get_slice(&self, range: Range<usize>) -> Result<&[u8], ValueError> {
-        if range.end <= self.data.len() && range.start <= range.end {
-            Ok(&self.data[range])
-        } else {
-            Err(ValueError::AccessViolation)
-        }
-    }
-
-    fn get_mut_slice(&mut self, range: Range<usize>) -> Result<&mut [u8], ValueError> {
-        if range.end <= self.data.len() && range.start <= range.end {
-            Ok(&mut self.data[range])
-        } else {
-            Err(ValueError::AccessViolation)
-        }
-    }
-
-    fn size(&self) -> usize {
-        self.data.len()
-    }
-}
-
-pub struct Process<'a, M: Memory> {
-    offset: usize,
-    memory: &'a mut M,
-}
-
-impl<'a, M> Process<'a, M>
-where
-    M: Memory,
-{
-    pub fn new(memory: &'a mut M) -> Self {
-        Self { memory, offset: 0 }
-    }
-
-    fn write_value(&mut self, value: Value) -> Result<(), ValueError> {
-        let dst = self
-            .memory
-            .get_mut_slice(self.offset..self.offset + std::mem::size_of::<Value>())?;
-        self.offset += std::mem::size_of::<Value>();
-        dst.copy_from_slice(&value.bits().to_le_bytes());
-        Ok(())
-    }
-
-    // pub fn string(&mut self, string: &str) -> Result<Value, ValueError> {
-    //     let len = string.len();
-    //     if len <= Self::INLINE_STRING_MAX {
-    //         let dst = self.memory.get_mut_slice(self.offset..self.offset + len)?;
-    //         dst.copy_from_slice(string.as_bytes());
-    //         let addr = self.offset;
-    //         self.offset += len;
-    //         Ok(Value::new_ptr(ValueType::String, len as u16, addr))
-    //     } else {
-    //         Err(ValueError::StringTooLong)
-    //     }
-    // }
-
-    pub fn string(&mut self, string: &str) -> Result<Value, ValueError> {
-        let len = string.len();
-        if len <= HASH_SIZE {
-            let addr = self.offset;
-            let dst = self.memory.get_mut_slice(addr..addr + HASH_SIZE)?;
-            let src = string.as_bytes();
-            for i in 0..HASH_SIZE {
-                dst[i] = if i < len { src[i] } else { 0 };
-            }
-            self.offset += HASH_SIZE;
-            Ok(Value::new_ptr(ValueType::String, len as u16, addr))
-        } else {
-            Err(ValueError::StringTooLong)
-        }
-    }
-
-    pub fn block(&mut self, blk: &[Value]) -> Result<Value, ValueError> {
-        let len = blk.len();
-        let addr = self.offset;
-        let value = Value::new_ptr(ValueType::Block, len as u16, addr);
-        for &v in blk {
-            self.write_value(v)?;
-        }
-        Ok(value)
-    }
-
-    // fn as_string_from_ptr(&self, value: Value) -> Result<&str, ValueError> {
-    //     let addr = value.as_wasm_ptr();
-    //     let len = value.payload_high_bits() as usize;
-    //     if addr + len > self.memory.len() * PAGE_SIZE {
-    //         Err(ValueError::AccessViolation)
-    //     } else {
-    //         Ok(unsafe {
-    //             std::str::from_utf8_unchecked(&self.as_bytes().get_unchecked(addr..addr + len))
-    //         })
-    //     }
-    // }
-
-    // pub fn as_inline_string(&self, value: Value) -> Result<&str, ValueError> {
-    //     match value.tag() {
-    //         TAG_STRING => self.as_string_from_ptr(value),
-    //         _ => Err(ValueError::TypeMismatch),
-    //     }
-    // }
-}
-
 #[repr(u64)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueType {
@@ -190,10 +51,16 @@ enum ValueType {
     Bytes = 0x2,
     String = 0x3,
     Block = 0x4,
+    Word = 0x5,
     None = 0xf,
 }
 
-const TAG_STRING: u64 = ValueType::String as u64;
+#[repr(u16)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum WordKind {
+    Word = 0,
+    SetWord = 1,
+}
 
 impl Value {
     pub fn none() -> Self {
@@ -237,36 +104,43 @@ impl Value {
         if value >= min && value <= max {
             Ok(Self::new_int_unchecked(value))
         } else {
-            Err(ValueError::IntOutOfRange)
+            Err(ValueError::IntegerOutOfRange)
         }
     }
 
     /// Interpret this Value as a 47-bit signed integer.
-    pub fn as_int(&self) -> i64 {
-        let bits = self.0;
-        let payload_47 = bits & PAYLOAD_MASK_47;
-        let shifted = (payload_47 << (64 - 47)) as i64; // cast to i64 => preserve bits
-        let value = shifted >> (64 - 47); // arithmetic shift right
-        value
+    pub fn as_int(&self) -> Option<i64> {
+        if self.tag() == ValueType::Int as u64 {
+            let bits = self.0;
+            let payload_47 = bits & PAYLOAD_MASK_47;
+            let shifted = (payload_47 << (64 - 47)) as i64; // cast to i64 => preserve bits
+            let value = shifted >> (64 - 47); // arithmetic shift right
+            Some(value)
+        } else {
+            None
+        }
+        // let bits = self.0;
+        // let payload_47 = bits & PAYLOAD_MASK_47;
+        // let shifted = (payload_47 << (64 - 47)) as i64; // cast to i64 => preserve bits
+        // let value = shifted >> (64 - 47); // arithmetic shift right
+        // value
     }
 
     /// Create a boxed pointer (32 bits). Tag = Ptr, fraction bit 51=1, payload in bits 46..0.
     fn new_ptr(tag: ValueType, payload: u16, addr: usize) -> Self {
         let payload_47 = ((payload as u64) << 32) | ((addr as u64) & 0xFFFF_FFFF);
-        let fraction = FRACTION_TOP_BIT
-            | ((tag as u64) & TAG_MASK) << TAG_SHIFT
-            | (payload_47 & PAYLOAD_MASK_47);
+        let fraction = FRACTION_TOP_BIT | Self::tag_bits(tag) | (payload_47 & PAYLOAD_MASK_47);
         let bits = (0 << 63) | EXP_MASK | fraction;
         Value(bits)
     }
 
     /// Return the pointer as 32 bits.
-    pub fn as_wasm_ptr(&self) -> usize {
+    fn as_wasm_ptr(&self) -> usize {
         (self.0 & 0xFFFF_FFFF) as usize
     }
 
-    pub fn payload_high_bits(&self) -> u32 {
-        ((self.0 & PAYLOAD_MASK_47) >> 32) as u32
+    fn payload_high_bits(&self) -> u16 {
+        ((self.0 & PAYLOAD_MASK_47) >> 32) as u16
     }
 
     /// Raw bits for debugging or advanced usage
@@ -275,13 +149,157 @@ impl Value {
     }
 }
 
+//
+
+pub trait Memory {
+    fn get_slice(&self, range: Range<usize>) -> Result<&[u8], ValueError>;
+    fn get_mut_slice(&mut self, range: Range<usize>) -> Result<&mut [u8], ValueError>;
+    fn size(&self) -> usize;
+}
+
+pub struct OwnMemory {
+    data: Vec<u8>,
+}
+
+impl OwnMemory {
+    pub fn new(size: usize) -> Self {
+        Self {
+            data: vec![0; size],
+        }
+    }
+}
+
+impl Memory for OwnMemory {
+    fn get_slice(&self, range: Range<usize>) -> Result<&[u8], ValueError> {
+        if range.end <= self.data.len() {
+            if range.start <= range.end {
+                Ok(&self.data[range])
+            } else {
+                Err(ValueError::BadRange)
+            }
+        } else {
+            Err(ValueError::OutOfMemory)
+        }
+    }
+
+    fn get_mut_slice(&mut self, range: Range<usize>) -> Result<&mut [u8], ValueError> {
+        if range.end <= self.data.len() {
+            if range.start <= range.end {
+                Ok(&mut self.data[range])
+            } else {
+                Err(ValueError::BadRange)
+            }
+        } else {
+            Err(ValueError::OutOfMemory)
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.data.len()
+    }
+}
+
+//
+
+const HASH_SIZE: usize = 32;
+type Hash = [u8; HASH_SIZE];
+
+pub struct Process<M: Memory> {
+    offset: usize,
+    memory: M,
+}
+
+impl<M> Process<M>
+where
+    M: Memory,
+{
+    pub fn new(memory: M) -> Self {
+        Self { memory, offset: 0 }
+    }
+
+    fn write_value(&mut self, value: Value) -> Result<(), ValueError> {
+        let dst = self
+            .memory
+            .get_mut_slice(self.offset..self.offset + std::mem::size_of::<Value>())?;
+        self.offset += std::mem::size_of::<Value>();
+        dst.copy_from_slice(&value.bits().to_le_bytes());
+        Ok(())
+    }
+
+    fn inline_string(&mut self, string: &str) -> Result<usize, ValueError> {
+        let len = string.len();
+        if len > HASH_SIZE {
+            Err(ValueError::StringTooLong)
+        } else {
+            let addr = self.offset;
+            let dst = self.memory.get_mut_slice(addr..addr + HASH_SIZE)?;
+            let src = string.as_bytes();
+            for i in 0..HASH_SIZE {
+                dst[i] = if i < len { src[i] } else { 0 };
+            }
+            self.offset += HASH_SIZE;
+            Ok(addr)
+        }
+    }
+
+    pub fn string(&mut self, string: &str) -> Result<Value, ValueError> {
+        let len = string.len();
+        if len <= HASH_SIZE {
+            Ok(Value::new_ptr(
+                ValueType::String,
+                len as u16,
+                self.inline_string(string)?,
+            ))
+        } else {
+            Err(ValueError::StringTooLong)
+        }
+    }
+
+    pub fn block(&mut self, blk: &[Value]) -> Result<Value, ValueError> {
+        let len = blk.len();
+        let addr = self.offset;
+        let value = Value::new_ptr(ValueType::Block, len as u16, addr);
+        for &v in blk {
+            self.write_value(v)?;
+        }
+        Ok(value)
+    }
+
+    pub fn word(&mut self, string: &str) -> Result<Value, ValueError> {
+        let addr = self.inline_string(string)?;
+        let value = Value::new_ptr(ValueType::Word, WordKind::Word as u16, addr);
+        Ok(value)
+    }
+
+    pub fn set_word(&mut self, string: &str) -> Result<Value, ValueError> {
+        let addr = self.inline_string(string)?;
+        let value = Value::new_ptr(ValueType::Word, WordKind::SetWord as u16, addr);
+        Ok(value)
+    }
+
+    fn as_string_from_ptr(&self, value: Value) -> Result<&str, ValueError> {
+        let addr = value.as_wasm_ptr();
+        let len = value.payload_high_bits() as usize;
+        let slice = self.memory.get_slice(addr..addr + len)?;
+        unsafe { Ok(std::str::from_utf8_unchecked(slice)) }
+    }
+
+    pub fn as_inline_string(&self, value: Value) -> Result<Option<&str>, ValueError> {
+        const STRING_TYPE: u64 = ValueType::String as u64;
+        match value.tag() {
+            STRING_TYPE => Some(self.as_string_from_ptr(value)).transpose(),
+            _ => Err(ValueError::TypeMismatch),
+        }
+    }
+}
+
 #[inline(never)]
-pub fn string_test_1(memory: &mut Process<OwnedMemory>, s: &str) -> Result<Value, ValueError> {
+pub fn string_test_1(memory: &mut Process<OwnMemory>, s: &str) -> Result<Value, ValueError> {
     memory.string(s)
 }
 
 #[inline(never)]
-pub fn block_test_1(memory: &mut Process<OwnedMemory>, blk: &[Value]) -> Result<Value, ValueError> {
+pub fn block_test_1(memory: &mut Process<OwnMemory>, blk: &[Value]) -> Result<Value, ValueError> {
     memory.block(blk)
 }
 
@@ -295,7 +313,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_int_round_trip() {
+    fn test_int_round_trip() -> Result<(), ValueError> {
         let vals = [
             0,
             1,
@@ -309,8 +327,8 @@ mod tests {
         ];
 
         for &v in &vals {
-            let b = Value::new_int_unchecked(v);
-            let back = b.as_int();
+            let b = Value::new_int(v)?;
+            let back = b.as_int().unwrap();
             assert_eq!(
                 v,
                 back,
@@ -320,14 +338,8 @@ mod tests {
                 back
             );
         }
-    }
 
-    #[test]
-    #[should_panic]
-    #[allow(arithmetic_overflow)]
-    fn test_int_out_of_range() {
-        // +2^46 is out of range: 140,737,488,355,328
-        Value::new_int_unchecked((1 << 46) as i64);
+        Ok(())
     }
 
     #[test]
@@ -345,5 +357,14 @@ mod tests {
                 back
             );
         }
+    }
+
+    #[test]
+    fn test_string_1() -> Result<(), ValueError> {
+        let mut process = Process::new(OwnMemory::new(65536));
+
+        let value = process.string("hello, world!")?;
+        assert_eq!(process.as_inline_string(value)?, Some("hello, world!"));
+        Ok(())
     }
 }
