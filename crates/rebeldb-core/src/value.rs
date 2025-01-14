@@ -18,19 +18,22 @@ pub enum ValueError {
     IntegerOutOfRange,
 }
 
-#[repr(u64)]
+type Tag = u8; // we use only 4 bits
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ValueType {
     Int = 0x0,
-    // Float = 0x1,
     // Bytes = 0x2,
     String = 0x3,
     Block = 0x4,
     Word = 0x5,
+    NativeFn = 0x6,
+    Context = 0x7,
     None = 0xf,
 }
 
-#[repr(u16)]
+type PayloadHighBits = u16;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum WordKind {
     Word = 0,
@@ -38,6 +41,9 @@ enum WordKind {
 }
 
 pub type WasmWord = u32;
+
+pub const HASH_SIZE: usize = 32;
+pub type Hash = [u8; HASH_SIZE];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Value(u64);
@@ -63,7 +69,9 @@ impl Value {
     // We compare against the pattern indicating exponent=0x7FF and fraction’s top bit=1.
     const QNAN_MASK: u64 = 0x7FF8_0000_0000_0000;
 
-    const HASH_SIZE: usize = 32;
+    pub const TAG_INT: Tag = ValueType::Int as Tag;
+    pub const TAG_STRING: Tag = ValueType::String as Tag;
+    pub const TAG_NATIVE_FN: Tag = ValueType::NativeFn as Tag;
 
     pub fn none() -> Self {
         let fraction = Self::FRACTION_TOP_BIT | Self::tag_bits(ValueType::None);
@@ -71,22 +79,16 @@ impl Value {
         Value(bits)
     }
 
-    pub fn verify(bits: u64) -> Result<(), ValueError> {
-        if (bits & Self::QNAN_MASK) == Self::QNAN_MASK {
-            Ok(())
-        } else {
-            Err(ValueError::NotAValue)
-        }
+    fn is_qnan(&self) -> bool {
+        (self.bits() & Self::QNAN_MASK) == Self::QNAN_MASK
     }
 
     fn tag_bits(tag: ValueType) -> u64 {
         ((tag as u64) & Self::TAG_MASK) << Self::TAG_SHIFT
     }
 
-    pub fn tag(&self) -> u64 {
-        let bits = self.0;
-        let fraction = bits & ((1 << 52) - 1); // lower 52 bits
-        (fraction >> Self::TAG_SHIFT) & Self::TAG_MASK
+    pub fn tag(&self) -> Tag {
+        ((self.0 >> Self::TAG_SHIFT) & Self::TAG_MASK) as Tag
     }
 
     pub fn new_int_unchecked(value: i64) -> Self {
@@ -112,7 +114,7 @@ impl Value {
 
     /// Interpret this Value as a 47-bit signed integer.
     pub fn as_int(&self) -> Option<i64> {
-        if self.tag() == ValueType::Int as u64 {
+        if self.tag() == Self::TAG_INT {
             let bits = self.0;
             let payload_47 = bits & Self::PAYLOAD_MASK_47;
             let shifted = (payload_47 << (64 - 47)) as i64; // cast to i64 => preserve bits
@@ -121,11 +123,27 @@ impl Value {
         } else {
             None
         }
-        // let bits = self.0;
-        // let payload_47 = bits & PAYLOAD_MASK_47;
-        // let shifted = (payload_47 << (64 - 47)) as i64; // cast to i64 => preserve bits
-        // let value = shifted >> (64 - 47); // arithmetic shift right
-        // value
+    }
+
+    pub fn native_fn(module_id: u16, proc_id: u32) -> Self {
+        let payload = ((module_id as u64) << 32) | (proc_id as u64);
+        let fraction = Self::FRACTION_TOP_BIT
+            | Self::tag_bits(ValueType::NativeFn)
+            | (payload & Self::PAYLOAD_MASK_47);
+        let bits = (0 << 63) | Self::EXP_MASK | fraction;
+        Value(bits)
+    }
+
+    pub fn as_native_fn(&self) -> Option<(u16, u32)> {
+        if self.tag() == Self::TAG_NATIVE_FN {
+            let bits = self.0;
+            let payload = bits & Self::PAYLOAD_MASK_47;
+            let module_id = (payload >> 32) as u16;
+            let proc_id = payload as u32;
+            Some((module_id, proc_id))
+        } else {
+            None
+        }
     }
 
     /// Create a boxed pointer (32 bits). Tag = Ptr, fraction bit 51=1, payload in bits 46..0.
@@ -159,13 +177,13 @@ impl Value {
 
     fn inline_string(mem: &mut impl Memory, string: &str) -> Result<WasmWord, ValueError> {
         let len = string.len();
-        if len > Self::HASH_SIZE {
+        if len > HASH_SIZE {
             Err(ValueError::StringTooLong)
         } else {
             let addr = mem.heap_end();
-            let dst = mem.alloc(Self::HASH_SIZE)?;
+            let dst = mem.alloc(HASH_SIZE)?;
             let src = string.as_bytes();
-            for i in 0..Self::HASH_SIZE {
+            for i in 0..HASH_SIZE {
                 dst[i] = if i < len { src[i] } else { 0 };
             }
             Ok(addr)
@@ -174,7 +192,7 @@ impl Value {
 
     pub fn string(mem: &mut impl Memory, string: &str) -> Result<Value, ValueError> {
         let len = string.len();
-        if len <= Self::HASH_SIZE {
+        if len <= HASH_SIZE {
             Ok(Value::new_ptr(
                 ValueType::String,
                 len as u16,
@@ -195,6 +213,53 @@ impl Value {
         Ok(value)
     }
 
+    fn as_string_from_ptr(mem: &impl Memory, value: Value) -> Result<&str, ValueError> {
+        let len = value.payload_high_bits() as usize;
+        let slice = mem.get_slice(value.address(), len)?;
+        unsafe { Ok(std::str::from_utf8_unchecked(slice)) }
+    }
+
+    pub fn context() -> Value {
+        Value::new_ptr(ValueType::Context, 0, 0)
+    }
+
+    const CONTEXT_ENTRY_SIZE: usize = 16;
+
+    /// Context entry layout:
+    /// [0..4 4..8 8 .. 16]
+    /// [symbol  prev  value]
+    fn context_find(
+        mem: &impl Memory,
+        address: WasmWord,
+        symbol: WasmWord,
+    ) -> Result<WasmWord, ValueError> {
+        let mut address = address;
+        while address != 0 {
+            let hash = mem.get_slice(address, Self::CONTEXT_ENTRY_SIZE)?;
+            let entry_symbol = u32::from_le_bytes(hash[0..4].try_into().unwrap());
+            if entry_symbol == symbol {
+                return Ok(address);
+            }
+            address = u32::from_le_bytes(hash[4..8].try_into().unwrap());
+        }
+        Ok(0)
+    }
+
+    pub fn context_put(
+        mem: &mut impl Memory,
+        addr: WasmWord,
+        symbol: WasmWord,
+        value: Value,
+    ) -> Result<Value, ValueError> {
+        let entry_addr = mem.heap_end();
+        let entry = mem.alloc(Self::CONTEXT_ENTRY_SIZE)?;
+        entry[0..4].copy_from_slice(&symbol.to_le_bytes());
+        entry[4..8].copy_from_slice(&addr.to_le_bytes());
+        entry[8..16].copy_from_slice(&value.bits().to_le_bytes());
+        let value = Value::new_ptr(ValueType::Context, 0, entry_addr);
+        Ok(value)
+    }
+
     pub fn word(mem: &mut impl Memory, string: &str) -> Result<Value, ValueError> {
         let addr = Self::inline_string(mem, string)?;
         let value = Value::new_ptr(ValueType::Word, WordKind::Word as u16, addr);
@@ -207,20 +272,12 @@ impl Value {
         Ok(value)
     }
 
-    fn as_string_from_ptr(mem: &mut impl Memory, value: Value) -> Result<&str, ValueError> {
-        let addr = value.address() as usize;
-        let len = value.payload_high_bits() as usize;
-        let slice = mem.get_slice(addr, len)?;
-        unsafe { Ok(std::str::from_utf8_unchecked(slice)) }
-    }
-
     pub fn as_inline_string(
         mem: &mut impl Memory,
         value: Value,
     ) -> Result<Option<&str>, ValueError> {
-        const STRING_TYPE: u64 = ValueType::String as u64;
         match value.tag() {
-            STRING_TYPE => Some(Self::as_string_from_ptr(mem, value)).transpose(),
+            Self::TAG_STRING => Some(Self::as_string_from_ptr(mem, value)).transpose(),
             _ => Err(ValueError::TypeMismatch),
         }
     }
@@ -229,34 +286,41 @@ impl Value {
 //
 
 pub trait Memory {
-    fn get_slice(&self, addr: usize, len: usize) -> Result<&[u8], ValueError>;
-    // fn get_mut_slice(&mut self, range: Range<usize>) -> Result<&mut [u8], ValueError>;
+    fn get_slice(&self, addr: WasmWord, len: usize) -> Result<&[u8], ValueError>;
     fn alloc(&mut self, size: usize) -> Result<&mut [u8], ValueError>;
 
+    fn get_symbol(&mut self, symbol: &Hash) -> Result<WasmWord, ValueError>;
     fn heap_end(&self) -> WasmWord;
-    fn size(&self) -> WasmWord;
+    // fn size(&self) -> WasmWord;
 }
 
 pub struct OwnMemory {
-    heap_end: usize,
     data: Vec<u8>,
+    symbols_start: WasmWord,
+    symbols_end: WasmWord,
+    heap_start: WasmWord,
+    heap_end: WasmWord,
 }
 
 impl OwnMemory {
     pub fn new(size: usize) -> Self {
         Self {
             data: vec![0; size],
-            heap_end: 0,
+            symbols_start: 0,
+            symbols_end: 0,
+            heap_start: 4096,
+            heap_end: 4096,
         }
     }
 }
 
 impl Memory for OwnMemory {
     fn heap_end(&self) -> WasmWord {
-        self.heap_end as WasmWord
+        self.heap_end
     }
 
-    fn get_slice(&self, addr: usize, len: usize) -> Result<&[u8], ValueError> {
+    fn get_slice(&self, addr: WasmWord, len: usize) -> Result<&[u8], ValueError> {
+        let addr = addr as usize;
         if addr + len <= self.data.len() {
             Ok(&self.data[addr..addr + len])
         } else {
@@ -265,13 +329,28 @@ impl Memory for OwnMemory {
     }
 
     fn alloc(&mut self, size: usize) -> Result<&mut [u8], ValueError> {
-        let addr = self.heap_end;
+        let addr = self.heap_end as usize;
         if addr + size <= self.data.len() {
-            self.heap_end += size;
+            self.heap_end += size as WasmWord;
             Ok(&mut self.data[addr..addr + size])
         } else {
             Err(ValueError::OutOfMemory)
         }
+    }
+
+    fn get_symbol(&mut self, symbol: &Hash) -> Result<WasmWord, ValueError> {
+        let mut addr = self.symbols_start;
+        while addr < self.symbols_end {
+            let hash = self.get_slice(addr, HASH_SIZE)?;
+            if hash == symbol {
+                return Ok(addr);
+            }
+            addr += HASH_SIZE as WasmWord;
+        }
+        let new_symbol = self.alloc(HASH_SIZE)?;
+        new_symbol.copy_from_slice(symbol);
+        self.symbols_end += HASH_SIZE as WasmWord;
+        Ok(addr)
     }
 
     // fn get_mut_slice(&mut self, range: Range<usize>) -> Result<&mut [u8], ValueError> {
@@ -285,10 +364,6 @@ impl Memory for OwnMemory {
     //         Err(ValueError::OutOfMemory)
     //     }
     // }
-
-    fn size(&self) -> WasmWord {
-        self.data.len() as WasmWord
-    }
 }
 
 //

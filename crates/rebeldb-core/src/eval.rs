@@ -3,7 +3,7 @@
 // eval.rs:
 
 use crate::parser::ValueIterator;
-use crate::value::Value;
+use crate::value::{Memory, Value};
 use std::collections::HashMap;
 use std::result::Result;
 use thiserror::Error;
@@ -61,15 +61,19 @@ impl Context {
 
         for (id, proc) in module.procs.iter().enumerate() {
             procs.push(proc.1);
-            let native_fn = Value::NativeFn(module_id, id);
+            let native_fn = Value::native_fn(module_id as u16, id as u32);
             self.ctx_put(Symbol::new(proc.0).unwrap(), native_fn);
         }
         self.modules.push(procs);
     }
 
     pub fn push(&mut self, value: Value) {
-        match value {
-            Value::NativeFn(module, proc) => self.op_stack.push(self.modules[module][proc]),
+        match value.tag() {
+            Value::TAG_NATIVE_FN => {
+                let unboxed = value.as_native_fn().unwrap();
+                self.op_stack
+                    .push(self.modules[unboxed.0 as usize][unboxed.1 as usize])
+            }
             _ => self.stack.push(value),
         }
     }
@@ -99,9 +103,9 @@ impl Context {
         }
     }
 
-    pub fn read_all<T>(&mut self, values: ValueIterator<'_, T>) -> Result<(), EvalError>
+    pub fn read_all<M>(&mut self, values: ValueIterator<'_, M>) -> Result<(), EvalError>
     where
-        T: Heap,
+        M: Memory,
     {
         for value in values {
             self.read(value?)?;
@@ -113,7 +117,7 @@ impl Context {
         while let Some(proc) = self.op_stack.pop() {
             proc(&mut self.stack)?;
         }
-        Ok(self.stack.pop().unwrap_or(Value::None))
+        Ok(self.stack.pop().unwrap_or(Value::none()))
     }
 }
 
