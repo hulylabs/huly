@@ -209,7 +209,7 @@ mod tests {
     #[test]
     fn test_whitespace_1() {
         let input = "  \t\n  ";
-        let mut process = OwnMemory::new(65536);
+        let mut process = OwnMemory::new(65536, 1024);
         let mut iter = ValueIterator::new(input, &mut process);
 
         let value = iter.next();
@@ -217,23 +217,21 @@ mod tests {
     }
 
     #[test]
-    fn test_string_1() -> anyhow::Result<()> {
+    fn test_string_1() {
         let input = "\"hello\"  \n ";
-        let mut mem = OwnMemory::new(65536);
+        let mut mem = OwnMemory::new(65536, 1024);
         let block: Vec<_> = ValueIterator::new(input, &mut mem)
             .filter_map(Result::ok)
             .collect();
 
         assert_eq!(block.len(), 1);
-        assert_eq!(Value::as_inline_string(&mut mem, block[0])?, Some("hello"));
-
-        Ok(())
+        assert_eq!(Value::as_inline_string(&mut mem, block[0]), Some("hello"));
     }
 
     #[test]
     fn test_number_1() -> anyhow::Result<()> {
         let input = "42";
-        let mut process = OwnMemory::new(65536);
+        let mut process = OwnMemory::new(65536, 1024);
         let mut iter = ValueIterator::new(input, &mut process);
 
         let value = iter.next().unwrap().unwrap();
