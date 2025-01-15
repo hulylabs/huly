@@ -93,7 +93,7 @@ where
             let id = self.natives.len();
             self.natives.push(*proc);
             let native_fn = Value::native_fn(id as u32);
-            let symbol = self.memory.get_or_add_symbol(*symbol)?;
+            let symbol = self.memory.get_or_add_symbol(symbol)?;
             self.root_ctx = self.root_ctx.context_put(self.memory, symbol, native_fn)?;
         }
         Ok(())
