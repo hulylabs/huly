@@ -124,7 +124,7 @@ impl Value {
         }
     }
 
-    pub fn as_int(&self) -> Result<i64, ValueError> {
+    pub fn as_int(self) -> Result<i64, ValueError> {
         self.verify(ValueType::Int)?;
         let bits = self.bits();
         let payload = bits & Self::PAYLOAD_MASK;
@@ -155,7 +155,7 @@ impl Value {
         Value(bits)
     }
 
-    fn wasm_word(&self) -> WasmWord {
+    pub fn wasm_word(&self) -> WasmWord {
         (self.0 & 0xFFFF_FFFF) as WasmWord
     }
 
@@ -249,27 +249,24 @@ impl Value {
         address
     }
 
-    pub fn context_get(
-        mem: &impl Memory,
-        addr: Address,
-        symbol: Symbol,
-    ) -> Result<Value, ValueError> {
-        let entry_addr = Self::context_find(mem, addr, symbol);
+    pub fn context_get(self, mem: &impl Memory, symbol: Symbol) -> Value {
+        let entry_addr = Self::context_find(mem, self.address(), symbol);
         if entry_addr == 0 {
-            Ok(Value::none())
+            Value::none()
         } else {
             let entry = mem.get_slice(entry_addr, Self::CONTEXT_ENTRY_SIZE);
             let value = u64::from_le_bytes(entry[8..16].try_into().unwrap());
-            Ok(Value(value))
+            Value(value)
         }
     }
 
     pub fn context_put(
+        self,
         mem: &mut impl Memory,
-        addr: Address,
         symbol: Symbol,
         value: Value,
     ) -> Result<Value, ValueError> {
+        let addr = self.address();
         let (entry_addr, entry) = mem.alloc(Self::CONTEXT_ENTRY_SIZE)?;
         entry[0..4].copy_from_slice(&symbol.to_le_bytes());
         entry[4..8].copy_from_slice(&addr.to_le_bytes());
@@ -279,14 +276,14 @@ impl Value {
     }
 
     pub fn word(mem: &mut impl Memory, string: &str) -> Result<Value, ValueError> {
-        let addr = Self::inline_string(mem, string)?;
-        let value = Value::new_ptr(ValueType::Word, 0, addr);
+        let symbol = mem.get_or_add_symbol(string)?;
+        let value = Value::new_ptr(ValueType::Word, 0, symbol);
         Ok(value)
     }
 
     pub fn set_word(mem: &mut impl Memory, string: &str) -> Result<Value, ValueError> {
-        let addr = Self::inline_string(mem, string)?;
-        let value = Value::new_ptr(ValueType::SetWord, 0, addr);
+        let symbol = mem.get_or_add_symbol(string)?;
+        let value = Value::new_ptr(ValueType::SetWord, 0, symbol);
         Ok(value)
     }
 
@@ -348,8 +345,11 @@ impl Memory for OwnMemory {
     }
 
     fn get_or_add_symbol(&mut self, symbol: &str) -> Result<Symbol, ValueError> {
+        if symbol.len() > HASH_SIZE {
+            return Err(ValueError::StringTooLong);
+        }
         let mut bytes = [0u8; HASH_SIZE];
-        bytes.copy_from_slice(symbol.as_bytes());
+        bytes[0..symbol.len()].copy_from_slice(symbol.as_bytes());
         if let Some(symbol) = self.symbols.get(&bytes) {
             Ok(*symbol)
         } else {
@@ -439,6 +439,16 @@ mod tests {
             Value::as_inline_string(&mut mem, value),
             Some("hello, world!")
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_get_or_add_symbol() -> Result<(), ValueError> {
+        let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
+        let symbol = mem.get_or_add_symbol("hello, world!")?;
+        assert_eq!(symbol, 0x100);
+        let symbol = mem.get_or_add_symbol("hey!")?;
+        assert_eq!(symbol, 0x120);
         Ok(())
     }
 }

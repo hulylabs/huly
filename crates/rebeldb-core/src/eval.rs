@@ -2,15 +2,12 @@
 //
 // eval.rs:
 
-use crate::parser::ValueIterator;
 use crate::value::{Memory, Value};
 use std::result::Result;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EvalError {
-    // #[error("word not found: {0:?}")]
-    // WordNotFound(Symbol),
     #[error("mismatched type")]
     MismatchedType,
     #[error("not enough arguments")]
@@ -23,8 +20,6 @@ pub enum EvalError {
     ArityMismatch(usize, usize),
     #[error("Stack overflow")]
     StackOverflow,
-    #[error("Stack underflow")]
-    StackUnderflow,
 }
 
 pub struct Stack {
@@ -42,9 +37,9 @@ impl Stack {
         }
     }
 
-    pub fn push(&mut self, value: Value) -> Result<(), ValueError> {
+    pub fn push(&mut self, value: Value) -> Result<(), EvalError> {
         if self.sp == 0 {
-            Err(ValueError::StackOverflow)
+            Err(EvalError::StackOverflow)
         } else {
             self.sp -= 1;
             self.data[self.sp] = value;
@@ -52,13 +47,13 @@ impl Stack {
         }
     }
 
-    pub fn pop(&mut self) -> Result<Value, ValueError> {
+    pub fn pop(&mut self) -> Option<Value> {
         if self.sp < self.size {
             let value = self.data[self.sp];
             self.sp += 1;
-            Ok(value)
+            Some(value)
         } else {
-            Err(ValueError::StackUnderflow)
+            None
         }
     }
 }
@@ -73,8 +68,8 @@ pub struct Module {
 
 pub struct Process<'a, M: Memory> {
     memory: &'a mut M,
-    stack: Vec<Value>,
-    op_stack: Vec<Value>,
+    stack: Stack,
+    op_stack: Stack,
     natives: Vec<NativeFn>,
     root_ctx: Value,
 }
@@ -86,147 +81,104 @@ where
     pub fn new(memory: &'a mut M) -> Self {
         Self {
             memory,
-            stack: Vec::new(),
-            op_stack: Vec::new(),
+            stack: Stack::new(4096),
+            op_stack: Stack::new(256),
             natives: Vec::new(),
             root_ctx: Value::context(),
         }
     }
 
-    pub fn load_module(&mut self, module: &Module) {
-        let module_id = self.modules.len();
-        let mut ctx
-
-        for (symbol, proc) in module.procs.iter().enumerate() {
+    pub fn load_module(&mut self, module: &Module) -> Result<(), EvalError> {
+        for (symbol, proc) in module.procs.iter() {
             let id = self.natives.len();
-            natives.push(proc.1);
+            self.natives.push(*proc);
             let native_fn = Value::native_fn(id as u32);
-            self.ctx_put(Symbol::new(proc.0).unwrap(), native_fn);
-        }
-        self.modules.push(procs);
-    }
-
-    // pub fn push(&mut self, value: Value) {
-    //     match value.tag() {
-    //         Value::TAG_NATIVE_FN => {
-    //             let unboxed = value.as_native_fn().unwrap();
-    //             self.op_stack
-    //                 .push(self.modules[unboxed.0 as usize][unboxed.1 as usize])
-    //         }
-    //         _ => self.stack.push(value),
-    //     }
-    // }
-
-    // pub fn pop(&mut self) -> Option<Value> {
-    //     self.stack.pop()
-    // }
-
-    // pub fn ctx_put(&mut self, symbol: Symbol, value: Value) {
-    //     self.env.insert(symbol, value);
-    // }
-
-    pub fn read(&mut self, value: Value) -> Result<(), EvalError> {
-        match value.tag() {
-            Value::TAG_WORD
-                let symbol = value.symbol();
-                if let Some(value) = self.memory.get(&word) {
-                    self.push(value.clone());
-                    Ok(())
-                } else {
-                    Err(EvalError::WordNotFound(word))
-                }
-            }
-
-            Value::Word(word) => {
-                if let Some(value) = self.env.get(&word) {
-                    self.push(value.clone());
-                    Ok(())
-                } else {
-                    Err(EvalError::WordNotFound(word))
-                }
-            }
-            _ => {
-                self.push(value);
-                Ok(())
-            }
-        }
-    }
-
-    pub fn read_all(&mut self, values: ValueIterator<'_, M>) -> Result<(), EvalError>
-    where
-        M: Memory,
-    {
-        for value in values {
-            self.read(value?)?;
+            let symbol = self.memory.get_or_add_symbol(*symbol)?;
+            self.root_ctx = self.root_ctx.context_put(self.memory, symbol, native_fn)?;
         }
         Ok(())
     }
 
-    pub fn eval(&mut self) -> Result<Value, EvalError> {
+    pub fn push(&mut self, value: Value) -> Result<(), EvalError> {
+        match value.tag() {
+            Value::TAG_NATIVE_FN => self.op_stack.push(value),
+            _ => self.stack.push(value),
+        }
+    }
+
+    pub fn pop(&mut self) -> Option<Value> {
+        self.stack.pop()
+    }
+
+    pub fn read(&mut self, value: Value) -> Result<(), EvalError> {
+        match value.tag() {
+            Value::TAG_WORD => self.push(self.root_ctx.context_get(self.memory, value.symbol())),
+            _ => self.push(value),
+        }
+    }
+
+    pub fn read_all(&mut self, values: impl Iterator<Item = Value>) -> Result<(), EvalError>
+    where
+        M: Memory,
+    {
+        for value in values {
+            self.read(value)?;
+        }
+        Ok(())
+    }
+
+    pub fn eval(&mut self) -> anyhow::Result<Value> {
         while let Some(proc) = self.op_stack.pop() {
-            proc(&mut self.stack)?;
+            match proc.tag() {
+                Value::TAG_NATIVE_FN => {
+                    let id = proc.wasm_word() as usize;
+                    let native_fn = self.natives[id];
+                    native_fn(&mut self.stack)?
+                }
+                _ => unimplemented!(),
+            }
         }
         Ok(self.stack.pop().unwrap_or(Value::none()))
     }
 }
 
-// pub type NativeFn = fn(&mut Vec<Value>) -> Result<(), EvalError>;
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::heap::Hash;
-
-    struct NoHeap;
-
-    impl Heap for NoHeap {
-        fn put(&mut self, _data: &[u8]) -> Hash {
-            unreachable!()
-        }
-    }
+    use crate::parser::ValueIterator;
+    use crate::value::OwnMemory;
 
     #[test]
     fn test_read_all_1() -> Result<(), EvalError> {
         let input = "5";
-        let mut blobs = NoHeap;
-        let iter = ValueIterator::new(input, &mut blobs);
 
-        let mut ctx = Context::new();
-        ctx.read_all(iter)?;
+        let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
+        let iter = ValueIterator::new(input, &mut mem);
+        let values: Result<Vec<Value>, _> = iter.collect();
 
-        assert!(ctx.stack.len() == 1);
-        assert_eq!(ctx.pop().unwrap().as_int(), Some(5));
+        let mut process = Process::new(&mut mem);
+        process.read_all(values?.into_iter())?;
+
+        let value = process.pop().unwrap().as_int()?;
+        assert_eq!(value, 5);
         Ok(())
     }
 
     #[test]
-    fn test_eval_1() -> Result<(), EvalError> {
-        let input = "5";
-        let mut blobs = NoHeap;
-        let iter = ValueIterator::new(input, &mut blobs);
-
-        let mut ctx = Context::new();
-        ctx.read_all(iter)?;
-        let result = ctx.eval()?;
-
-        assert_eq!(result.as_int(), Some(5));
-        Ok(())
-    }
-
-    #[test]
-    fn test_proc_1() -> Result<(), EvalError> {
-        let mut ctx = Context::new();
-        ctx.load_module(&crate::boot::CORE_MODULE);
-
+    fn test_proc_1() -> anyhow::Result<()> {
         let input = "add 7 8";
-        let mut blobs = NoHeap;
-        let iter = ValueIterator::new(input, &mut blobs);
 
-        ctx.read_all(iter)?;
+        let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
+        let iter = ValueIterator::new(input, &mut mem);
+        let values: Result<Vec<Value>, _> = iter.collect();
 
-        let result = ctx.eval()?;
-        assert_eq!(result.as_int(), Some(15));
+        let mut process = Process::new(&mut mem);
+        process.load_module(&crate::boot::CORE_MODULE)?;
+        process.read_all(values?.into_iter())?;
+        let value = process.eval()?;
+        let result = value.as_int()?;
 
+        assert_eq!(result, 15);
         Ok(())
     }
 }
