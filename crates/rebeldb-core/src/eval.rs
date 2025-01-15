@@ -3,6 +3,7 @@
 // eval.rs:
 
 use crate::value::{Memory, Value};
+use std::array::TryFromSliceError;
 use std::result::Result;
 use thiserror::Error;
 
@@ -55,6 +56,17 @@ impl Stack {
         } else {
             None
         }
+    }
+
+    pub fn pop_frame(&mut self, size: usize) -> Result<&[Value], EvalError> {
+        if self.sp + size > self.size {
+            Err(EvalError::NotEnoughArgs)
+        } else {
+            let frame = &self.data[self.sp..self.sp + size];
+            self.sp += size;
+            Ok(frame)
+        }
+        // <[Value; N]>::try_from(&self.data[self.sp..self.sp + N])
     }
 }
 
@@ -140,6 +152,20 @@ where
         }
         Ok(self.stack.pop().unwrap_or(Value::none()))
     }
+}
+
+use crate::parser::ValueIterator;
+use crate::value::OwnMemory;
+
+pub fn run(input: &str) -> anyhow::Result<Value> {
+    let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
+    let iter = ValueIterator::new(input, &mut mem);
+    let values: Result<Vec<Value>, _> = iter.collect();
+
+    let mut process = Process::new(&mut mem);
+    // process.load_module(&crate::boot::CORE_MODULE)?;
+    process.read_all(values?.into_iter())?;
+    process.eval()
 }
 
 #[cfg(test)]
