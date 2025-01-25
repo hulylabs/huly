@@ -244,7 +244,7 @@ mod tests {
         let input = "  \t\n  ";
 
         let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000, 0x1000)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
         let mut iter = ValueIterator::new(input, &mut layout);
 
         let value = iter.next();
@@ -257,13 +257,13 @@ mod tests {
         let input = "\"hello\"  \n ";
 
         let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000, 0x1000)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
         let block: Vec<_> = ValueIterator::new(input, &mut layout)
             .filter_map(Result::ok)
             .collect();
 
         assert_eq!(block.len(), 1);
-        assert_eq!(layout.get_string(&block[0])?, "hello");
+        assert_eq!(layout.as_str(&block[0])?, "hello");
         Ok(())
     }
 
@@ -272,7 +272,7 @@ mod tests {
         let input = "42";
 
         let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000, 0x1000)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
 
         let mut iter = ValueIterator::new(input, &mut layout);
 

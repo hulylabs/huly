@@ -114,7 +114,7 @@ impl<'a> Memory<'a> {
         if len < 32 {
             let mut buf = [0; 8];
             for i in 0..len {
-                buf[i / 4] |= (bytes[i] as u32) << (i % 4);
+                buf[i / 4] |= (bytes[i] as u32) << ((i % 4) * 8);
             }
             buf
         } else {
