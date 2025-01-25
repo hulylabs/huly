@@ -156,7 +156,7 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
             value as i32
         };
 
-        Ok(Token::new(Value::from_i32(value), end_of_block))
+        Ok(Token::new(Value::from(value), end_of_block))
     }
 
     fn parse_value(&mut self) -> Option<Result<Token, ParseError>> {

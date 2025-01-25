@@ -33,11 +33,32 @@ impl Value {
         value: 0,
     };
 
-    pub fn from_i32(value: i32) -> Self {
+    // pub fn from_i32(value: i32) -> Self {
+    //     let value = value as u32;
+    //     Value {
+    //         tag: Self::INT,
+    //         value,
+    //     }
+    // }
+}
+
+impl From<i32> for Value {
+    fn from(value: i32) -> Self {
         let value = value as u32;
         Value {
             tag: Self::INT,
             value,
+        }
+    }
+}
+
+impl TryFrom<Value> for i32 {
+    type Error = MemoryError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value.tag {
+            Value::INT => Ok(value.value as i32),
+            _ => Err(MemoryError::TypeMismatch),
         }
     }
 }
@@ -62,17 +83,6 @@ impl TryFrom<Value> for Block {
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value.tag {
             Value::BLOCK => Ok(Block(value.value)),
-            _ => Err(MemoryError::TypeMismatch),
-        }
-    }
-}
-
-impl TryFrom<Value> for i32 {
-    type Error = MemoryError;
-
-    fn try_from(value: Value) -> Result<Self, Self::Error> {
-        match value.tag {
-            Value::INT => Ok(value.value as i32),
             _ => Err(MemoryError::TypeMismatch),
         }
     }
