@@ -140,7 +140,7 @@ impl<'a> Memory<'a> {
             stack,
             symbol_count: 0,
             heap_ptr: 1, //TODO: something, we should not use 0 addresse
-            stack_ptr: stack_size,
+            stack_ptr: 0,
         })
     }
 
@@ -212,11 +212,12 @@ impl<'a> Memory<'a> {
     }
 
     pub fn block(&mut self, stack_start: usize) -> Result<Value, MemoryError> {
-        let len = stack_start
-            .checked_sub(self.stack_ptr)
+        let len = self
+            .stack_ptr
+            .checked_sub(stack_start)
             .ok_or(MemoryError::StackOverflow)?;
 
-        if stack_start > self.stack.len() {
+        if self.stack_ptr > self.stack.len() {
             return Err(MemoryError::StackOverflow);
         }
 
@@ -227,8 +228,8 @@ impl<'a> Memory<'a> {
             .ok_or(MemoryError::OutOfMemory)?;
 
         self.heap[self.heap_ptr] = (len / 2) as u32;
-        for i in 1..len + 1 {
-            self.heap[self.heap_ptr + i] = self.stack[stack_start - i];
+        for i in 0..len {
+            self.heap[self.heap_ptr + i + 1] = self.stack[stack_start + i];
         }
 
         let address = self.heap_ptr as Address;
@@ -307,23 +308,26 @@ impl<'a> Memory<'a> {
     }
 
     pub fn push(&mut self, value: Value) -> Result<(), MemoryError> {
-        if self.stack_ptr < 2 {
+        if self.stack_ptr + 2 > self.stack.len() {
             return Err(MemoryError::StackOverflow);
         }
-        self.stack_ptr -= 2;
         self.stack[self.stack_ptr] = value.tag;
         self.stack[self.stack_ptr + 1] = value.value;
+        self.stack_ptr += 2;
         Ok(())
     }
 
     pub fn pop(&mut self) -> Result<Value, MemoryError> {
-        if self.stack_ptr + 2 > self.stack.len() {
+        if self.stack_ptr > self.stack.len() {
             return Err(MemoryError::StackOverflow);
         }
-        self.stack_ptr += 2;
+        self.stack_ptr = self
+            .stack_ptr
+            .checked_sub(2)
+            .ok_or(MemoryError::StackOverflow)?;
         Ok(Value {
-            tag: self.stack[self.stack_ptr - 2],
-            value: self.stack[self.stack_ptr - 1],
+            tag: self.stack[self.stack_ptr],
+            value: self.stack[self.stack_ptr + 1],
         })
     }
 }
