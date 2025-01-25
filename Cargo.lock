@@ -4552,6 +4552,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "rebel"
+version = "0.1.0"
+dependencies = [
+ "thiserror 2.0.11",
+]
+
+[[package]]
 name = "rebeldb"
 version = "0.1.0"
 dependencies = [

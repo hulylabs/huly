@@ -5,6 +5,6 @@ members = [
   "crates/rebeldb",
   "crates/rebeldb-cli", "crates/rebeldb-core",
   "crates/rebeldb-runtime",
-  "crates/rebeldb-wasm",
+  "crates/rebeldb-wasm", "rebel",
 ]
 resolver = "2"
