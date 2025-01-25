@@ -244,6 +244,7 @@ impl<'a> Memory<'a> {
         Err(MemoryError::StringTooLong)
     }
 
+    #[allow(clippy::manual_memcpy)]
     fn alloc_encoded(&mut self, encoded: [u32; 8], len: usize) -> Result<Address, MemoryError> {
         assert!(len <= 8);
         if let Some(in_heap) = self.heap.get_mut(self.heap_ptr..self.heap_ptr + 8) {
@@ -278,6 +279,7 @@ impl<'a> Memory<'a> {
         }
     }
 
+    #[allow(clippy::manual_memcpy)]
     pub fn block(&mut self, stack_start: usize) -> Result<Value, MemoryError> {
         if let Some(in_stack) = self.stack.get(stack_start..self.stack_ptr) {
             let len = in_stack.len();
