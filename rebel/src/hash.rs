@@ -115,6 +115,10 @@ unsafe fn fast_hash_neon(input: &[u32; 8]) -> u32 {
 }
 
 /// Scalar fallback implementation
+#[cfg(not(any(
+    all(target_arch = "x86_64", target_feature = "avx2"),
+    all(target_arch = "aarch64", target_feature = "neon")
+)))]
 #[inline]
 fn fast_hash_scalar(input: &[u32; 8]) -> u32 {
     // Better mixing constants from xxHash
