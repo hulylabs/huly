@@ -82,7 +82,7 @@ impl<'a, 'b> Process<'a, 'b> {
             None
         } else {
             self.ops -= 1;
-            self.op_stack.get(self.ops).map(|value| *value)
+            self.op_stack.get(self.ops).copied()
         }
     }
 
