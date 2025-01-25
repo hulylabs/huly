@@ -123,7 +123,7 @@ impl<'a, 'b> Process<'a, 'b> {
                 _ => unimplemented!(),
             }
         }
-        Ok(self.memory.pop().unwrap_or(Value::NONE))
+        Ok(self.pop().unwrap_or(Value::NONE))
     }
 
     pub fn parse(&mut self, input: &str) -> Result<Block, ParseError> {

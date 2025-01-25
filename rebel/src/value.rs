@@ -153,6 +153,17 @@ impl Context {
     }
 }
 
+impl TryFrom<Value> for Context {
+    type Error = MemoryError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value.tag {
+            Value::CONTEXT => Ok(Context(value.value)),
+            _ => Err(MemoryError::TypeMismatch),
+        }
+    }
+}
+
 //
 
 #[derive(Debug, Error)]
