@@ -117,7 +117,6 @@ impl<'a, 'b> Process<'a, 'b> {
         if let Some(len) = block.len(self.memory) {
             for i in 0..len {
                 if let Some(value) = block.get(self.memory, i) {
-                    println!("read {:?}", value);
                     self.read(value)?;
                 }
             }
@@ -129,7 +128,6 @@ impl<'a, 'b> Process<'a, 'b> {
 
     fn eval_stack(&mut self) -> anyhow::Result<Value> {
         while let Some(proc) = self.pop_op() {
-            println!("eval {:?}", proc);
             match proc.tag() {
                 Value::NATIVE_FN => {
                     let id = proc.payload();
@@ -139,10 +137,7 @@ impl<'a, 'b> Process<'a, 'b> {
                         Err(EvalError::FunctionNotFound(id))?
                     }
                 }
-                _ => {
-                    println!("{:?}", proc);
-                    Err(EvalError::InternalError)?
-                }
+                _ => Err(EvalError::InternalError)?,
             }
         }
         Ok(self.pop().unwrap_or(Value::NONE))
@@ -154,7 +149,6 @@ impl<'a, 'b> Process<'a, 'b> {
 
     pub fn eval(&mut self, input: &str) -> anyhow::Result<Value> {
         let block = self.parse(input)?;
-        println!("parsed, {:?}", block.len(self.memory));
         self.read_block(block)?;
         self.eval_stack()
     }
