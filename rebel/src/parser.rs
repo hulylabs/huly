@@ -117,13 +117,11 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
                     pos += 1;
                 }
                 b':' => {
-                    // Only create one allocation after validation
                     let slice = unsafe { self.input.get_unchecked(start_pos..pos) };
                     let value = self.memory.set_word(slice)?;
                     return Ok(Token::new(value, false));
                 }
                 b' ' | b'\t' | b'\n' | b'\r' | b']' => {
-                    // Only create one allocation after validation
                     let slice = unsafe { self.input.get_unchecked(start_pos..pos) };
                     let value = self.memory.word(slice)?;
                     return Ok(Token::new(value, b == b']'));
