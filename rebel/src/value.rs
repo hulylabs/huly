@@ -49,19 +49,6 @@ impl Value {
     }
 }
 
-// impl Into<u64> for Value {
-//     fn into(self) -> u64 {
-//         match self {
-//             Value::Int(i) => tag(TAG_INT, i),
-//             Value::String(a) => tag(TAG_STRING, a),
-//             Value::Block(a) => tag(TAG_BLOCK, a),
-//             Value::Word(s) => tag(TAG_WORD, s),
-//             Value::SetWord(s) => tag(TAG_SETWORD, s),
-//             Value::None => tag(TAG_NONE, 0),
-//         }
-//     }
-// }
-
 impl From<u64> for Value {
     fn from(value: u64) -> Self {
         let tag = (value >> 32) as u8;
@@ -91,6 +78,8 @@ pub enum MemoryError {
     MemoryMisaligned,
     #[error("Type Mismatch")]
     TypeMismatch,
+    #[error("Stack overflow")]
+    StackOverflow,
 }
 
 type Hash = [u8; 32];
@@ -100,6 +89,8 @@ pub struct Memory<'a> {
     symbol_count: usize,
     heap: &'a mut [u8],
     heap_ptr: usize,
+    stack: &'a mut [u64],
+    stack_ptr: usize,
 }
 
 impl<'a> Memory<'a> {
@@ -109,6 +100,7 @@ impl<'a> Memory<'a> {
         mem: &'a mut [u8],
         symbol_start: usize,
         heap_start: usize,
+        stack_size: usize,
     ) -> Result<Self, MemoryError> {
         let table_bytes = heap_start
             .checked_sub(symbol_start)
@@ -120,6 +112,7 @@ impl<'a> Memory<'a> {
 
         let (pre_table, rest) = mem.split_at_mut(heap_start);
         let (_, table_bytes) = pre_table.split_at_mut(symbol_start);
+        let (heap, stack) = rest.split_at_mut(rest.len() - stack_size * 8);
 
         let symbol_table = unsafe {
             std::slice::from_raw_parts_mut(
@@ -127,12 +120,17 @@ impl<'a> Memory<'a> {
                 table_bytes.len() / 4,
             )
         };
+        let stack = unsafe {
+            std::slice::from_raw_parts_mut(stack.as_mut_ptr() as *mut u64, stack.len() / 8)
+        };
 
         Ok(Self {
             symbol_table,
-            heap: rest,
+            heap,
+            stack,
             symbol_count: 0,
             heap_ptr: 4, //TODO: something, we should not use 0 addresse
+            stack_ptr: stack_size,
         })
     }
 
@@ -182,24 +180,27 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn block(&mut self, values: &[Value]) -> Result<Value, MemoryError> {
-        let len = values.len();
-        let new_ptr = self
-            .heap_ptr
-            .checked_add(len * 8)
-            .filter(|&ptr| ptr <= self.heap.len())
-            .ok_or(MemoryError::OutOfMemory)?;
+    pub fn block(&mut self, stack_start: usize) -> Result<Value, MemoryError> {
+        let len = stack_start - self.stack_ptr;
+        let address = self.heap_ptr as Address;
 
-        for (i, value) in values.iter().enumerate() {
-            let bytes = value.as_u64().to_le_bytes();
-            self.heap
-                .get_mut(self.heap_ptr + i * 8..self.heap_ptr + (i + 1) * 8)
-                .expect("bounds already checked")
-                .copy_from_slice(&bytes);
+        if self.heap_ptr + len * 8 > self.heap.len() {
+            return Err(MemoryError::OutOfMemory);
         }
 
-        let address = self.heap_ptr as Address;
-        self.heap_ptr = new_ptr;
+        let mut sp = self.stack_ptr - 1;
+
+        while sp > self.stack_ptr {
+            let value = self.stack[sp];
+            self.heap
+                .get_mut(self.heap_ptr..self.heap_ptr + 8)
+                .expect("bounds already checked")
+                .copy_from_slice(&value.to_le_bytes());
+            self.heap_ptr += 8;
+            sp -= 1;
+        }
+
+        self.stack_ptr = stack_start;
         Ok(Value::Block(address))
     }
 
@@ -289,6 +290,30 @@ impl<'a> Memory<'a> {
 
         Err(MemoryError::OutOfSymbolSpace)
     }
+
+    pub fn stack_pointer(&self) -> usize {
+        self.stack_ptr
+    }
+
+    pub fn push(&mut self, value: Value) -> Result<(), MemoryError> {
+        if self.stack_ptr == 0 {
+            Err(MemoryError::StackOverflow)
+        } else {
+            self.stack_ptr -= 1;
+            self.stack[self.stack_ptr] = value.as_u64();
+            Ok(())
+        }
+    }
+
+    pub fn pop(&mut self) -> Result<Value, MemoryError> {
+        if self.stack_ptr == self.stack.len() {
+            Err(MemoryError::StackOverflow)
+        } else {
+            let value = self.stack[self.stack_ptr];
+            self.stack_ptr += 1;
+            Ok(Value::from(value))
+        }
+    }
 }
 
 //
@@ -310,7 +335,7 @@ mod tests {
     #[test]
     fn test_get_or_insert() -> Result<(), MemoryError> {
         let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000, 0x1000)?;
         let symbol = layout.get_or_insert("hello")?;
         assert_eq!(symbol, 4);
         let symbol = layout.get_or_insert("hello")?;

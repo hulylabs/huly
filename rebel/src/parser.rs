@@ -160,21 +160,24 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
     }
 
     fn parse_block(&mut self) -> Option<Result<Token, ParseError>> {
-        let mut values = Vec::<Value>::new();
+        let stack_start = self.memory.stack_pointer();
         loop {
             match self.parse_value() {
                 Some(Ok(Token {
                     value,
                     last_in_block,
                 })) => {
-                    values.push(value);
+                    match self.memory.push(value) {
+                        Ok(_) => {}
+                        Err(err) => return Some(Err(err.into())),
+                    }
                     if last_in_block {
                         break;
                     }
                 }
                 Some(Err(err)) => return Some(Err(err)),
                 None => {
-                    if values.is_empty() {
+                    if self.memory.stack_pointer() == stack_start {
                         return None;
                     } else {
                         break;
@@ -185,7 +188,7 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
 
         Some(
             self.memory
-                .block(&values)
+                .block(stack_start)
                 .map_err(ParseError::MemoryError)
                 .map(|v| Token::new(v, false)),
         )
@@ -207,7 +210,7 @@ mod tests {
         let input = "  \t\n  ";
 
         let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000, 0x1000)?;
         let mut iter = ValueIterator::new(input, &mut layout);
 
         let value = iter.next();
@@ -220,7 +223,7 @@ mod tests {
         let input = "\"hello\"  \n ";
 
         let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000, 0x1000)?;
         let block: Vec<_> = ValueIterator::new(input, &mut layout)
             .filter_map(Result::ok)
             .collect();
@@ -235,7 +238,7 @@ mod tests {
         let input = "42";
 
         let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000, 0x1000)?;
 
         let mut iter = ValueIterator::new(input, &mut layout);
 
