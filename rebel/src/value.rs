@@ -313,13 +313,23 @@ impl<'a> Memory<'a> {
     }
 
     pub fn push(&mut self, value: Value) -> Result<(), MemoryError> {
-        if self.stack_ptr + 2 > self.stack.len() {
-            return Err(MemoryError::StackOverflow);
+        if let Some(slot) = self.stack.get_mut(self.stack_ptr..self.stack_ptr + 2) {
+            slot[0] = value.tag;
+            slot[1] = value.value;
+            self.stack_ptr += 2;
+            Ok(())
+        } else {
+            Err(MemoryError::StackOverflow)
         }
-        self.stack[self.stack_ptr] = value.tag;
-        self.stack[self.stack_ptr + 1] = value.value;
-        self.stack_ptr += 2;
-        Ok(())
+
+        // if self.stack_ptr > self.stack.len() - 2 {
+        //     Err(MemoryError::StackOverflow)
+        // } else {
+        //     self.stack [self.stack_ptr] = value.tag;
+        //     self.stack[self.stack_ptr + 1] = value.value;
+        //     self.stack_ptr += 2;
+        //     Ok(())
+        // }
     }
 
     pub fn pop(&mut self) -> Result<Value, MemoryError> {
