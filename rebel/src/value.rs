@@ -19,11 +19,11 @@ pub struct Value {
 }
 
 impl Value {
-    const INT: u32 = 0x0;
+    pub const INT: u32 = 0x0;
     const STRING: u32 = 0x1;
     const BLOCK: u32 = 0x2;
     const CONTEXT: u32 = 0x3;
-    const WORD: u32 = 0x4;
+    pub const WORD: u32 = 0x4;
     const SET_WORD: u32 = 0x5;
     pub const NATIVE_FN: u32 = 0x6;
     const TAG_NONE: u32 = 0x7;
@@ -35,6 +35,10 @@ impl Value {
 
     pub fn tag(&self) -> u32 {
         self.tag
+    }
+
+    pub fn payload(&self) -> u32 {
+        self.value
     }
 
     pub fn native_fn(id: u32) -> Self {
@@ -122,11 +126,30 @@ impl Context {
             new_entry[1] = self.0;
             new_entry[2] = value.tag;
             new_entry[3] = value.value;
+            let address = memory.heap_ptr as Address;
             memory.heap_ptr += 4;
-            Ok(Context(memory.heap_ptr as Address))
+            Ok(Context(address))
         } else {
             Err(MemoryError::OutOfMemory)
         }
+    }
+
+    pub fn get(&self, memory: &Memory, symbol: Symbol) -> Option<Value> {
+        let mut addr = self.0;
+        while addr != 0 {
+            if let Some(entry) = memory.heap.get(addr as usize..addr as usize + 4) {
+                if entry[0] == symbol {
+                    return Some(Value {
+                        tag: entry[2],
+                        value: entry[3],
+                    });
+                }
+                addr = entry[1];
+            } else {
+                return None;
+            }
+        }
+        None
     }
 }
 
@@ -348,15 +371,19 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<Value> {
-        self.stack_ptr.checked_sub(2).and_then(|new_ptr| {
+    pub fn pop_frame(&mut self, size: usize) -> Option<&[u32]> {
+        self.stack_ptr.checked_sub(size * 2).and_then(|new_ptr| {
             self.stack.get(new_ptr..self.stack_ptr).map(|stack| {
                 self.stack_ptr = new_ptr;
-                Value {
-                    tag: stack[0],
-                    value: stack[1],
-                }
+                stack
             })
+        })
+    }
+
+    pub fn pop(&mut self) -> Option<Value> {
+        self.pop_frame(1).map(|frame| Value {
+            tag: frame[0],
+            value: frame[1],
         })
     }
 }

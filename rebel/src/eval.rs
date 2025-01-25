@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::value::{Context, Memory, Value};
+use crate::value::{Context, Memory, Symbol, Value};
 use std::result::Result;
 use thiserror::Error;
 
@@ -18,6 +18,8 @@ pub enum EvalError {
     ArityMismatch(usize, usize),
     #[error("Stack overflow")]
     StackOverflow,
+    #[error("Word not found")]
+    WordNotFound(Symbol),
 }
 
 //
@@ -70,6 +72,15 @@ impl<'a, 'b> Process<'a, 'b> {
         }
     }
 
+    fn pop_op(&mut self) -> Option<Value> {
+        if self.ops > 0 {
+            self.ops -= 1;
+            Some(self.op_stack[self.ops])
+        } else {
+            None
+        }
+    }
+
     fn push(&mut self, value: Value) -> Result<(), EvalError> {
         match value.tag() {
             Value::NATIVE_FN => self.push_op(value),
@@ -77,13 +88,17 @@ impl<'a, 'b> Process<'a, 'b> {
         }
     }
 
-    pub fn pop(&mut self) -> Option<Value> {
-        self.stack.pop()
+    fn pop(&mut self) -> Option<Value> {
+        self.memory.pop()
     }
 
     pub fn read(&mut self, value: Value) -> Result<(), EvalError> {
         match value.tag() {
-            Value::TAG_WORD => self.push(self.root_ctx.context_get(self.memory, value.symbol())),
+            Value::WORD => self.push(
+                self.root_ctx
+                    .get(self.memory, value.payload())
+                    .ok_or(EvalError::WordNotFound(value.payload()))?,
+            ),
             _ => self.push(value),
         }
     }
@@ -96,31 +111,18 @@ impl<'a, 'b> Process<'a, 'b> {
     }
 
     pub fn eval(&mut self) -> anyhow::Result<Value> {
-        while let Some(proc) = self.op_stack.pop() {
+        while let Some(proc) = self.pop_op() {
             match proc.tag() {
-                Value::TAG_NATIVE_FN => {
-                    let id = proc.wasm_word() as usize;
+                Value::NATIVE_FN => {
+                    let id = proc.payload() as usize;
                     let native_fn = self.natives[id];
-                    native_fn(&mut self.stack)?
+                    native_fn(&mut self.memory)?
                 }
                 _ => unimplemented!(),
             }
         }
-        Ok(self.stack.pop().unwrap_or(Value::none()))
+        Ok(self.memory.pop().unwrap_or(Value::NONE))
     }
-}
-
-use crate::parser::ValueIterator;
-
-pub fn run(input: &str) -> anyhow::Result<Value> {
-    let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
-    let iter = ValueIterator::new(input, &mut mem);
-    let values: Result<Vec<Value>, _> = iter.collect();
-
-    let mut process = Process::new(&mut mem);
-    // process.load_module(&crate::boot::CORE_MODULE)?;
-    process.read_all(values?.into_iter())?;
-    process.eval()
 }
 
 #[cfg(test)]
@@ -128,37 +130,30 @@ mod tests {
     use super::*;
     use crate::parser::ValueIterator;
 
+    fn run(input: &str) -> anyhow::Result<Value> {
+        let mut bytes = vec![0; 0x10000];
+        let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
+
+        let iterator = ValueIterator::new(input, &mut memory);
+        let values: Vec<Value> = iterator.collect::<Result<Vec<_>, _>>()?;
+
+        let mut process = Process::new(&mut memory);
+        process.load_module(&crate::boot::CORE_MODULE)?;
+        process.read_all(values.into_iter())?;
+        process.eval()
+    }
+
     #[test]
-    fn test_read_all_1() -> Result<(), EvalError> {
-        let input = "5";
-
-        let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
-        let iter = ValueIterator::new(input, &mut mem);
-        let values: Result<Vec<Value>, _> = iter.collect();
-
-        let mut process = Process::new(&mut mem);
-        process.read_all(values?.into_iter())?;
-
-        let value = process.pop().unwrap().as_int()?;
-        assert_eq!(value, 5);
+    fn test_read_all_1() -> anyhow::Result<()> {
+        let value = run("5")?;
+        assert_eq!(5 as i32, value.try_into()?);
         Ok(())
     }
 
     #[test]
     fn test_proc_1() -> anyhow::Result<()> {
-        let input = "add 7 8";
-
-        let mut mem = OwnMemory::new(0x10000, 0x100, 0x1000);
-        let iter = ValueIterator::new(input, &mut mem);
-        let values: Result<Vec<Value>, _> = iter.collect();
-
-        let mut process = Process::new(&mut mem);
-        process.load_module(&crate::boot::CORE_MODULE)?;
-        process.read_all(values?.into_iter())?;
-        let value = process.eval()?;
-        let result = value.as_int()?;
-
-        assert_eq!(result, 15);
+        let value = run("add 7 8")?;
+        assert_eq!(15 as i32, value.try_into()?);
         Ok(())
     }
 }
