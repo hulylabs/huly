@@ -406,13 +406,6 @@ impl<'a> Memory<'a> {
 
 //
 
-#[inline(never)]
-pub fn make_word(layout: &mut Memory, symbol: &str) -> Result<Value, MemoryError> {
-    layout.word(symbol)
-}
-
-//
-
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -77,7 +77,6 @@ impl<'a, 'b> Process<'a, 'b> {
         }
     }
 
-    #[inline(never)]
     fn pop_op(&mut self) -> Option<Value> {
         if self.ops == 0 {
             None
