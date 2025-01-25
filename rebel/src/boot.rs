@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::eval::Module;
+use crate::eval::{EvalError, Module};
 use crate::value::{Memory, Value};
 
 fn add(memory: &mut Memory) -> anyhow::Result<()> {
@@ -11,10 +11,10 @@ fn add(memory: &mut Memory) -> anyhow::Result<()> {
                 memory.push(result.into())?;
                 Ok(())
             }
-            _ => Err(anyhow::anyhow!("types mismatch")),
+            _ => Err(EvalError::MismatchedType.into()),
         }
     } else {
-        Err(anyhow::anyhow!("not enough arguments"))
+        Err(EvalError::StackUnderflow.into())
     }
 }
 

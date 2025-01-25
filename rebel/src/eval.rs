@@ -19,6 +19,8 @@ pub enum EvalError {
     ArityMismatch(usize, usize),
     #[error("Stack overflow")]
     StackOverflow,
+    #[error("Stack underflow")]
+    StackUnderflow,
     #[error("Word not found {0}")]
     WordNotFound(Symbol),
     #[error("Function not found: {0}")]
