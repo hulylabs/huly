@@ -8,6 +8,7 @@ pub type Symbol = Address;
 pub enum Value {
     Int(u32),
     String(Address),
+    Block(Address),
     Word(Symbol),
     SetWord(Symbol),
     None,
@@ -15,25 +16,51 @@ pub enum Value {
 
 const TAG_INT: u8 = 0x0;
 const TAG_STRING: u8 = 0x1;
-const TAG_WORD: u8 = 0x2;
-const TAG_SETWORD: u8 = 0x3;
-const TAG_NONE: u8 = 0x4;
+const TAG_BLOCK: u8 = 0x2;
+const TAG_WORD: u8 = 0x3;
+const TAG_SETWORD: u8 = 0x4;
+const TAG_NONE: u8 = 0x5;
 
 fn tag(tag: u8, value: u32) -> u64 {
     value as u64 | (tag as u64) << 32
 }
 
-impl Into<u64> for Value {
-    fn into(self) -> u64 {
-        match self {
+impl Value {
+    pub fn new_int(value: i32) -> Self {
+        Value::Int(value as u32)
+    }
+
+    pub fn get_int(&self) -> Option<i32> {
+        match *self {
+            Value::Int(i) => Some(i as i32),
+            _ => None,
+        }
+    }
+
+    fn as_u64(&self) -> u64 {
+        match *self {
             Value::Int(i) => tag(TAG_INT, i),
             Value::String(a) => tag(TAG_STRING, a),
+            Value::Block(a) => tag(TAG_BLOCK, a),
             Value::Word(s) => tag(TAG_WORD, s),
             Value::SetWord(s) => tag(TAG_SETWORD, s),
             Value::None => tag(TAG_NONE, 0),
         }
     }
 }
+
+// impl Into<u64> for Value {
+//     fn into(self) -> u64 {
+//         match self {
+//             Value::Int(i) => tag(TAG_INT, i),
+//             Value::String(a) => tag(TAG_STRING, a),
+//             Value::Block(a) => tag(TAG_BLOCK, a),
+//             Value::Word(s) => tag(TAG_WORD, s),
+//             Value::SetWord(s) => tag(TAG_SETWORD, s),
+//             Value::None => tag(TAG_NONE, 0),
+//         }
+//     }
+// }
 
 impl From<u64> for Value {
     fn from(value: u64) -> Self {
@@ -42,10 +69,10 @@ impl From<u64> for Value {
         match tag {
             TAG_INT => Value::Int(value),
             TAG_STRING => Value::String(value),
+            TAG_BLOCK => Value::Block(value),
             TAG_WORD => Value::Word(value),
             TAG_SETWORD => Value::SetWord(value),
-            TAG_NONE => Value::None,
-            _ => unreachable!(),
+            _ => Value::None,
         }
     }
 }
@@ -62,18 +89,20 @@ pub enum MemoryError {
     OutOfSymbolSpace,
     #[error("Memory misaligned")]
     MemoryMisaligned,
+    #[error("Type Mismatch")]
+    TypeMismatch,
 }
 
 type Hash = [u8; 32];
 
-pub struct MemoryLayout<'a> {
+pub struct Memory<'a> {
     symbol_table: &'a mut [u32],
     symbol_count: usize,
     heap: &'a mut [u8],
     heap_ptr: usize,
 }
 
-impl<'a> MemoryLayout<'a> {
+impl<'a> Memory<'a> {
     const MIN_TABLE_SIZE: usize = 16;
 
     pub fn new(
@@ -89,17 +118,9 @@ impl<'a> MemoryLayout<'a> {
             return Err(MemoryError::OutOfSymbolSpace);
         }
 
-        if (table_bytes % 4) != 0 {
-            return Err(MemoryError::SymbolTooLong);
-        }
-
-        // Split memory
         let (pre_table, rest) = mem.split_at_mut(heap_start);
         let (_, table_bytes) = pre_table.split_at_mut(symbol_start);
 
-        // SAFETY:
-        // 1. We verified table_bytes.len() >= MIN_TABLE_SIZE * 4
-        // 2. We verified table_bytes.len() is multiple of 4
         let symbol_table = unsafe {
             std::slice::from_raw_parts_mut(
                 table_bytes.as_mut_ptr() as *mut u32,
@@ -111,8 +132,83 @@ impl<'a> MemoryLayout<'a> {
             symbol_table,
             heap: rest,
             symbol_count: 0,
-            heap_ptr: 4,
+            heap_ptr: 4, //TODO: something, we should not use 0 addresse
         })
+    }
+
+    pub fn new_string(&mut self, string: &str) -> Result<Value, MemoryError> {
+        let len = string.len();
+
+        if len > 0xffff {
+            return Err(MemoryError::OutOfMemory);
+        }
+
+        let new_ptr = self
+            .heap_ptr
+            .checked_add(len + 2)
+            .filter(|&ptr| ptr <= self.heap.len())
+            .ok_or(MemoryError::OutOfMemory)?;
+
+        self.heap[self.heap_ptr] = len as u8;
+        self.heap[self.heap_ptr + 1] = (len >> 8) as u8;
+
+        self.heap
+            .get_mut(self.heap_ptr + 2..new_ptr)
+            .expect("bounds already checked")
+            .copy_from_slice(string.as_bytes());
+
+        let address = self.heap_ptr as Address;
+        self.heap_ptr = new_ptr;
+        Ok(Value::String(address))
+    }
+
+    pub fn get_string(&self, string: &Value) -> Result<&str, MemoryError> {
+        match string {
+            Value::String(address) => {
+                let address = *address as usize;
+                if address + 2 > self.heap.len() {
+                    return Err(MemoryError::OutOfMemory);
+                }
+                let len = self.heap[address] as usize | ((self.heap[address + 1] as usize) << 8);
+                unsafe {
+                    Ok(std::str::from_utf8_unchecked(
+                        self.heap
+                            .get(address + 2..address + 2 + len)
+                            .ok_or(MemoryError::OutOfMemory)?,
+                    ))
+                }
+            }
+            _ => Err(MemoryError::TypeMismatch),
+        }
+    }
+
+    pub fn block(&mut self, values: &[Value]) -> Result<Value, MemoryError> {
+        let len = values.len();
+        let new_ptr = self
+            .heap_ptr
+            .checked_add(len * 8)
+            .filter(|&ptr| ptr <= self.heap.len())
+            .ok_or(MemoryError::OutOfMemory)?;
+
+        for (i, value) in values.iter().enumerate() {
+            let bytes = value.as_u64().to_le_bytes();
+            self.heap
+                .get_mut(self.heap_ptr + i * 8..self.heap_ptr + (i + 1) * 8)
+                .expect("bounds already checked")
+                .copy_from_slice(&bytes);
+        }
+
+        let address = self.heap_ptr as Address;
+        self.heap_ptr = new_ptr;
+        Ok(Value::Block(address))
+    }
+
+    pub fn word(&mut self, symbol: &str) -> Result<Value, MemoryError> {
+        Ok(Value::Word(self.get_or_insert(symbol)?))
+    }
+
+    pub fn set_word(&mut self, symbol: &str) -> Result<Value, MemoryError> {
+        Ok(Value::SetWord(self.get_or_insert(symbol)?))
     }
 
     fn fast_hash_64(data: &[u8; 32]) -> u64 {
@@ -153,8 +249,16 @@ impl<'a> MemoryLayout<'a> {
         Ok(symbol)
     }
 
-    fn get_or_insert(&mut self, symbol: &Hash) -> Result<Symbol, MemoryError> {
-        let h = Self::fast_hash_32(symbol) as usize;
+    fn get_or_insert(&mut self, symbol: &str) -> Result<Symbol, MemoryError> {
+        let len = symbol.len();
+        if len >= 32 {
+            return Err(MemoryError::SymbolTooLong);
+        }
+
+        let mut hash = [0; 32];
+        hash[..len].copy_from_slice(symbol.as_bytes());
+
+        let h = Self::fast_hash_32(&hash) as usize;
         let table_len = self.symbol_table.len();
         if table_len == 0 {
             return Err(MemoryError::OutOfSymbolSpace);
@@ -165,7 +269,7 @@ impl<'a> MemoryLayout<'a> {
             let stored_offset = self.symbol_table[index];
 
             if stored_offset == 0 {
-                let symbol_offset = self.alloc_symbol(symbol)?;
+                let symbol_offset = self.alloc_symbol(&hash)?;
                 self.symbol_count += 1;
                 self.symbol_table[index] = symbol_offset;
                 return Ok(symbol_offset);
@@ -173,7 +277,7 @@ impl<'a> MemoryLayout<'a> {
 
             let sym = stored_offset as usize;
             if let Some(existing_sym) = self.heap.get(sym..sym + 32) {
-                if existing_sym == symbol {
+                if existing_sym == hash {
                     return Ok(stored_offset);
                 }
             } else {
@@ -190,7 +294,7 @@ impl<'a> MemoryLayout<'a> {
 //
 
 #[inline(never)]
-pub fn get_or_insert(layout: &mut MemoryLayout, symbol: &Hash) -> Value {
+pub fn get_or_insert(layout: &mut Memory, symbol: &str) -> Value {
     match layout.get_or_insert(symbol) {
         Ok(symbol) => Value::Word(symbol),
         Err(_) => Value::None,
@@ -206,12 +310,10 @@ mod tests {
     #[test]
     fn test_get_or_insert() -> Result<(), MemoryError> {
         let mut mem = vec![0; 0x10000];
-        let mut layout = MemoryLayout::new(&mut mem, 0x1000, 0x2000)?;
-        let mut hash: Hash = [0; 32];
-        hash[..5].copy_from_slice(b"hello");
-        let symbol = layout.get_or_insert(&hash)?;
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x2000)?;
+        let symbol = layout.get_or_insert("hello")?;
         assert_eq!(symbol, 4);
-        let symbol = layout.get_or_insert(&hash)?;
+        let symbol = layout.get_or_insert("hello")?;
         assert_eq!(symbol, 4);
         Ok(())
     }
