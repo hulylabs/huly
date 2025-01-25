@@ -11,10 +11,10 @@ fn add(memory: &mut Memory) -> anyhow::Result<()> {
                 memory.push(result.into())?;
                 Ok(())
             }
-            _ => return Err(anyhow::anyhow!("types mismatch")),
+            _ => Err(anyhow::anyhow!("types mismatch")),
         }
     } else {
-        return Err(anyhow::anyhow!("not enough arguments"));
+        Err(anyhow::anyhow!("not enough arguments"))
     }
 }
 

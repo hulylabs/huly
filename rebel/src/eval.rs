@@ -118,7 +118,7 @@ impl<'a, 'b> Process<'a, 'b> {
                 Value::NATIVE_FN => {
                     let id = proc.payload() as usize;
                     let native_fn = self.natives[id];
-                    native_fn(&mut self.memory)?
+                    native_fn(self.memory)?
                 }
                 _ => unimplemented!(),
             }

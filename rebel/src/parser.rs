@@ -36,7 +36,7 @@ struct ParseIterator<'a, 'b> {
     memory: &'a mut Memory<'b>,
 }
 
-impl<'a, 'b> Iterator for ParseIterator<'a, 'b> {
+impl Iterator for ParseIterator<'_, '_> {
     type Item = Result<Value, ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {

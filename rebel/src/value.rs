@@ -386,9 +386,8 @@ impl<'a> Memory<'a> {
 
     pub fn pop_frame(&mut self, size: usize) -> Option<&[u32]> {
         self.stack_ptr.checked_sub(size * 2).and_then(|new_ptr| {
-            self.stack.get(new_ptr..self.stack_ptr).map(|stack| {
+            self.stack.get(new_ptr..self.stack_ptr).inspect(|_| {
                 self.stack_ptr = new_ptr;
-                stack
             })
         })
     }
