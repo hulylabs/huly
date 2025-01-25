@@ -27,34 +27,38 @@ pub fn fast_hash(input: &[u32; 8]) -> u32 {
 #[target_feature(enable = "avx2")]
 #[inline]
 unsafe fn fast_hash_avx2(input: &[u32; 8]) -> u32 {
-    // Constants for mixing
-    const C1: u32 = 0xcc9e2d51;
-    const C2: u32 = 0x1b873593;
+    // Better mixing constants from xxHash
+    const P1: u32 = 0x9e3779b1;
+    const P2: u32 = 0x85ebca77;
+    const P3: u32 = 0xc2b2ae3d;
 
     // Load input into AVX2 registers
     let data = _mm256_loadu_si256(input.as_ptr() as *const __m256i);
 
-    // Multiply by constant C1
-    let mut h1 = _mm256_mullo_epi32(data, _mm256_set1_epi32(C1 as i32));
+    // First round of mixing
+    let mut h1 = _mm256_mullo_epi32(data, _mm256_set1_epi32(P1 as i32));
 
-    // Rotate left by 15
-    h1 = _mm256_or_si256(_mm256_slli_epi32(h1, 15), _mm256_srli_epi32(h1, 17));
+    // Rotate and mix
+    h1 = _mm256_or_si256(_mm256_slli_epi32(h1, 13), _mm256_srli_epi32(h1, 19));
 
-    // Multiply by constant C2
-    h1 = _mm256_mullo_epi32(h1, _mm256_set1_epi32(C2 as i32));
+    h1 = _mm256_mullo_epi32(h1, _mm256_set1_epi32(P2 as i32));
 
-    // Horizontal add to combine all lanes
-    let sum = _mm256_hadd_epi32(h1, h1);
-    let sum = _mm256_hadd_epi32(sum, sum);
+    // Second round of mixing
+    h1 = _mm256_xor_si256(h1, _mm256_srli_epi32(h1, 16));
 
-    // Extract final hash
-    let mut result = _mm256_extract_epi32(sum, 0) as u32;
+    // Horizontal add with extra mixing
+    let sum1 = _mm256_hadd_epi32(h1, h1);
+    let sum2 = _mm256_hadd_epi32(sum1, sum1);
 
-    // Final mix
-    result ^= result >> 16;
-    result = result.wrapping_mul(0x85ebca6b);
+    let mut result = _mm256_extract_epi32(sum2, 0) as u32;
+
+    // Final avalanche
+    result = result.wrapping_add(result.rotate_left(13));
+    result = result.wrapping_mul(P1);
+    result ^= result >> 17;
+    result = result.wrapping_mul(P2);
     result ^= result >> 13;
-    result = result.wrapping_mul(0xc2b2ae35);
+    result = result.wrapping_mul(P3);
     result ^= result >> 16;
 
     result
@@ -65,42 +69,46 @@ unsafe fn fast_hash_avx2(input: &[u32; 8]) -> u32 {
 #[target_feature(enable = "neon")]
 #[inline]
 unsafe fn fast_hash_neon(input: &[u32; 8]) -> u32 {
-    // Constants for mixing
-    const C1: u32 = 0xcc9e2d51;
-    const C2: u32 = 0x1b873593;
+    // Better mixing constants from xxHash
+    const P1: u32 = 0x9e3779b1;
+    const P2: u32 = 0x85ebca77;
+    const P3: u32 = 0xc2b2ae3d;
 
     // Load input into NEON registers
-    // Process in two chunks of 4 u32s since NEON works with 128-bit vectors
     let data1 = vld1q_u32(input[0..4].as_ptr());
     let data2 = vld1q_u32(input[4..8].as_ptr());
 
-    // Multiply by C1
-    let mut h1 = vmulq_n_u32(data1, C1);
-    let mut h2 = vmulq_n_u32(data2, C1);
+    // First round of mixing
+    let mut h1 = vmulq_n_u32(data1, P1);
+    let mut h2 = vmulq_n_u32(data2, P1);
 
-    // Rotate left by 15
-    h1 = vorrq_u32(vshlq_n_u32(h1, 15), vshrq_n_u32(h1, 17));
-    h2 = vorrq_u32(vshlq_n_u32(h2, 15), vshrq_n_u32(h2, 17));
+    // Rotate and mix
+    h1 = vorrq_u32(vshlq_n_u32(h1, 13), vshrq_n_u32(h1, 19));
+    h2 = vorrq_u32(vshlq_n_u32(h2, 13), vshrq_n_u32(h2, 19));
 
-    // Multiply by C2
-    h1 = vmulq_n_u32(h1, C2);
-    h2 = vmulq_n_u32(h2, C2);
+    h1 = vmulq_n_u32(h1, P2);
+    h2 = vmulq_n_u32(h2, P2);
 
-    // Add the two halves
-    let sum = vaddq_u32(h1, h2);
+    // Second round of mixing
+    h1 = veorq_u32(h1, vshrq_n_u32(h1, 16));
+    h2 = veorq_u32(h2, vshrq_n_u32(h2, 16));
 
-    // Horizontal add to combine all lanes
-    let pair_sum = vpadd_u32(vget_low_u32(sum), vget_high_u32(sum));
+    // Combine vectors with additional mixing
+    let combined = vaddq_u32(h1, vorrq_u32(vshlq_n_u32(h2, 13), vshrq_n_u32(h2, 19)));
+
+    // Horizontal add with mixing
+    let pair_sum = vpadd_u32(vget_low_u32(combined), vget_high_u32(combined));
     let final_sum = vpadd_u32(pair_sum, pair_sum);
 
-    // Extract final hash
     let mut result = vget_lane_u32(final_sum, 0);
 
-    // Final mix
-    result ^= result >> 16;
-    result = result.wrapping_mul(0x85ebca6b);
+    // Final avalanche
+    result = result.wrapping_add(result.rotate_left(13));
+    result = result.wrapping_mul(P1);
+    result ^= result >> 17;
+    result = result.wrapping_mul(P2);
     result ^= result >> 13;
-    result = result.wrapping_mul(0xc2b2ae35);
+    result = result.wrapping_mul(P3);
     result ^= result >> 16;
 
     result
@@ -109,26 +117,27 @@ unsafe fn fast_hash_neon(input: &[u32; 8]) -> u32 {
 /// Scalar fallback implementation
 #[inline]
 fn fast_hash_scalar(input: &[u32; 8]) -> u32 {
-    const C1: u32 = 0xcc9e2d51;
-    const C2: u32 = 0x1b873593;
+    // Better mixing constants from xxHash
+    const P1: u32 = 0x9e3779b1;
+    const P2: u32 = 0x85ebca77;
+    const P3: u32 = 0xc2b2ae3d;
 
-    let mut h1: u32 = 0;
+    let mut h1: u32 = P1;
 
-    for &k in input {
-        let mut k1 = k.wrapping_mul(C1);
-        k1 = k1.rotate_left(15);
-        k1 = k1.wrapping_mul(C2);
-
-        h1 ^= k1;
-        h1 = h1.rotate_left(13);
-        h1 = h1.wrapping_mul(5).wrapping_add(0xe6546b64);
+    for (i, &k) in input.iter().enumerate() {
+        let k1 = k.wrapping_mul(P1);
+        h1 ^= k1.rotate_left(13);
+        h1 = h1.rotate_left(13).wrapping_add(h1.wrapping_mul(5));
+        h1 = h1.wrapping_add(i as u32 + 1); // Position-sensitive mixing
     }
 
-    // Final mix
-    h1 ^= h1 >> 16;
-    h1 = h1.wrapping_mul(0x85ebca6b);
+    // Final avalanche
+    h1 = h1.wrapping_add(h1.rotate_left(13));
+    h1 = h1.wrapping_mul(P1);
+    h1 ^= h1 >> 17;
+    h1 = h1.wrapping_mul(P2);
     h1 ^= h1 >> 13;
-    h1 = h1.wrapping_mul(0xc2b2ae35);
+    h1 = h1.wrapping_mul(P3);
     h1 ^= h1 >> 16;
 
     h1
@@ -162,6 +171,26 @@ mod tests {
             for j in i + 1..hashes.len() {
                 assert_ne!(hashes[i], hashes[j], "Hash collision detected");
             }
+        }
+    }
+
+    #[test]
+    fn test_avalanche() {
+        let base = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        let base_hash = fast_hash(&base);
+
+        // Test that changing any single bit causes significant changes
+        for pos in 0..8 {
+            let mut modified = base;
+            modified[pos] ^= 1;
+            let modified_hash = fast_hash(&modified);
+
+            // Ensure the hashes are different
+            assert_ne!(base_hash, modified_hash);
+
+            // Count differing bits (should be close to 16 for good avalanche)
+            let diff_bits = (base_hash ^ modified_hash).count_ones();
+            assert!(diff_bits >= 10, "Poor avalanche effect detected");
         }
     }
 }

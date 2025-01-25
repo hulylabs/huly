@@ -214,19 +214,20 @@ impl<'a> Memory<'a> {
     }
 
     fn get_or_insert(&mut self, symbol: &str) -> Result<Symbol, MemoryError> {
-        let len = symbol.len();
+        let bytes = symbol.as_bytes();
+        let len = bytes.len();
         if len >= 32 {
             return Err(MemoryError::StringTooLong);
+        }
+        let table_len = self.symbol_table.len();
+        if table_len == 0 {
+            return Err(MemoryError::OutOfSymbolSpace);
         }
 
         let encoded = Self::encode_string(symbol);
         let words = (len + 1) / 4;
         let h = fast_hash(&encoded) as usize;
 
-        let table_len = self.symbol_table.len();
-        if table_len == 0 {
-            return Err(MemoryError::OutOfSymbolSpace);
-        }
         let mut index = h % table_len;
 
         for _probe in 0..table_len {
@@ -241,7 +242,14 @@ impl<'a> Memory<'a> {
 
             let sym = stored_offset as usize;
             if let Some(existing) = self.heap.get(sym..sym + words) {
-                if existing == encoded {
+                let mut matches = true;
+                for i in 0..words {
+                    if existing[i] != encoded[i] {
+                        matches = false;
+                        break;
+                    }
+                }
+                if matches {
                     return Ok(stored_offset);
                 }
             } else {
