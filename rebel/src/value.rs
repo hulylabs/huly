@@ -25,7 +25,7 @@ impl Value {
     const CONTEXT: u32 = 0x3;
     const WORD: u32 = 0x4;
     const SET_WORD: u32 = 0x5;
-    const NATIVE_FN: u32 = 0x6;
+    pub const NATIVE_FN: u32 = 0x6;
     const TAG_NONE: u32 = 0x7;
 
     pub const NONE: Value = Value {
@@ -33,13 +33,16 @@ impl Value {
         value: 0,
     };
 
-    // pub fn from_i32(value: i32) -> Self {
-    //     let value = value as u32;
-    //     Value {
-    //         tag: Self::INT,
-    //         value,
-    //     }
-    // }
+    pub fn tag(&self) -> u32 {
+        self.tag
+    }
+
+    pub fn native_fn(id: u32) -> Self {
+        Value {
+            tag: Self::NATIVE_FN,
+            value: id,
+        }
+    }
 }
 
 impl From<i32> for Value {
@@ -93,21 +96,38 @@ impl Context {
         Context(0)
     }
 
-    // pub fn add(
-    //     &self,
-    //     memory: &mut Memory,
-    //     symbol: Symbol,
-    //     value: Value,
-    // ) -> Result<Self, MemoryError> {
-    //     let mut addr = self.0;
-    //     while addr != 0 {
-    //         let sym = memory.get_symbol(addr)?;
-    //         if sym == symbol {
-    //             return Err(MemoryError::OutOfMemory);
-    //         }
-    //         addr = memory.get_next(addr)?;
-    //     }
-    // }
+    /// Each context entry stored as below (u32 values):
+    /// [symbol, next, tag, value]
+    pub fn add(
+        self,
+        memory: &mut Memory,
+        symbol: Symbol,
+        value: Value,
+    ) -> Result<Self, MemoryError> {
+        let mut addr = self.0;
+        while addr != 0 {
+            if let Some(entry) = memory.heap.get_mut(addr as usize..addr as usize + 4) {
+                if entry[0] == symbol {
+                    entry[2] = value.tag;
+                    entry[3] = value.value;
+                    return Ok(self);
+                }
+                addr = entry[1];
+            } else {
+                return Err(MemoryError::OutOfMemory);
+            }
+        }
+        if let Some(new_entry) = memory.heap.get_mut(memory.heap_ptr..memory.heap_ptr + 4) {
+            new_entry[0] = symbol;
+            new_entry[1] = self.0;
+            new_entry[2] = value.tag;
+            new_entry[3] = value.value;
+            memory.heap_ptr += 4;
+            Ok(Context(memory.heap_ptr as Address))
+        } else {
+            Err(MemoryError::OutOfMemory)
+        }
+    }
 }
 
 //
@@ -254,18 +274,18 @@ impl<'a> Memory<'a> {
     pub fn word(&mut self, symbol: &str) -> Result<Value, MemoryError> {
         Ok(Value {
             tag: Value::WORD,
-            value: self.get_or_insert(symbol)?,
+            value: self.get_or_insert_symbol(symbol)?,
         })
     }
 
     pub fn set_word(&mut self, symbol: &str) -> Result<Value, MemoryError> {
         Ok(Value {
             tag: Value::SET_WORD,
-            value: self.get_or_insert(symbol)?,
+            value: self.get_or_insert_symbol(symbol)?,
         })
     }
 
-    fn get_or_insert(&mut self, symbol: &str) -> Result<Symbol, MemoryError> {
+    pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Result<Symbol, MemoryError> {
         let bytes = symbol.as_bytes();
         let len = bytes.len();
         if len >= 32 {
@@ -328,17 +348,15 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn pop(&mut self) -> Result<Value, MemoryError> {
-        if self.stack_ptr > self.stack.len() {
-            return Err(MemoryError::StackOverflow);
-        }
-        self.stack_ptr = self
-            .stack_ptr
-            .checked_sub(2)
-            .ok_or(MemoryError::StackOverflow)?;
-        Ok(Value {
-            tag: self.stack[self.stack_ptr],
-            value: self.stack[self.stack_ptr + 1],
+    pub fn pop(&mut self) -> Option<Value> {
+        self.stack_ptr.checked_sub(2).and_then(|new_ptr| {
+            self.stack.get(new_ptr..self.stack_ptr).map(|stack| {
+                self.stack_ptr = new_ptr;
+                Value {
+                    tag: stack[0],
+                    value: stack[1],
+                }
+            })
         })
     }
 }
@@ -360,9 +378,9 @@ mod tests {
     fn test_get_or_insert() -> Result<(), MemoryError> {
         let mut mem = vec![0; 0x10000];
         let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
-        let symbol = layout.get_or_insert("hello")?;
+        let symbol = layout.get_or_insert_symbol("hello")?;
         assert_eq!(symbol, 1);
-        let symbol = layout.get_or_insert("hello")?;
+        let symbol = layout.get_or_insert_symbol("hello")?;
         assert_eq!(symbol, 1);
         Ok(())
     }

@@ -49,21 +49,31 @@ impl<'a, 'b> Process<'a, 'b> {
         }
     }
 
-    pub fn load_module(&mut self, module: &Module) -> Result<(), EvalError> {
+    fn load_module(&mut self, module: &Module) -> Result<(), EvalError> {
         for (symbol, proc) in module.procs.iter() {
             let id = self.natives.len();
             self.natives.push(*proc);
-            let native_fn = Value::NativeFn(id as u32);
-            let symbol = self.memory.get_or_add_symbol(symbol)?;
-            self.root_ctx = self.root_ctx.context_put(self.memory, symbol, native_fn)?;
+            let native_fn = Value::native_fn(id as u32);
+            let symbol = self.memory.get_or_insert_symbol(symbol)?;
+            self.root_ctx = self.root_ctx.add(self.memory, symbol, native_fn)?;
         }
         Ok(())
     }
 
-    pub fn push(&mut self, value: Value) -> Result<(), EvalError> {
+    fn push_op(&mut self, value: Value) -> Result<(), EvalError> {
+        if self.ops < OP_STACK_SIZE {
+            self.op_stack[self.ops] = value;
+            self.ops += 1;
+            Ok(())
+        } else {
+            Err(EvalError::StackOverflow)
+        }
+    }
+
+    fn push(&mut self, value: Value) -> Result<(), EvalError> {
         match value.tag() {
-            Value::TAG_NATIVE_FN => self.op_stack.push(value),
-            _ => self.stack.push(value),
+            Value::NATIVE_FN => self.push_op(value),
+            _ => self.memory.push(value).map_err(EvalError::MemoryError),
         }
     }
 
