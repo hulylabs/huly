@@ -160,21 +160,22 @@ impl<'a> Memory<'a> {
 
     fn decode_string(&self, address: Address) -> Result<&str, MemoryError> {
         let address = address as usize;
-        let mut w = 0;
-        let len = loop {
-            let val = self.heap[address + w];
-            w += 1;
-            let zero_bytes = (val.leading_zeros() / 8) as usize;
-            if zero_bytes > 0 {
-                break w * 4 - zero_bytes;
+        let symbol_w = self
+            .heap
+            .get(address..address + 8)
+            .ok_or(MemoryError::OutOfMemory)?;
+
+        let symbol = unsafe { std::slice::from_raw_parts(symbol_w.as_ptr() as *const u8, 32) };
+
+        for i in 0..32 {
+            if symbol[i] == 0 {
+                unsafe {
+                    return Ok(std::str::from_utf8_unchecked(&symbol[..i]));
+                }
             }
-        };
-        unsafe {
-            Ok(std::str::from_utf8_unchecked(std::slice::from_raw_parts(
-                self.heap.as_ptr().add(address) as *const u8,
-                len,
-            )))
         }
+
+        Err(MemoryError::StringTooLong)
     }
 
     fn alloc_encoded(&mut self, encoded: [u32; 8], len: usize) -> Result<Address, MemoryError> {
@@ -321,15 +322,6 @@ impl<'a> Memory<'a> {
         } else {
             Err(MemoryError::StackOverflow)
         }
-
-        // if self.stack_ptr > self.stack.len() - 2 {
-        //     Err(MemoryError::StackOverflow)
-        // } else {
-        //     self.stack [self.stack_ptr] = value.tag;
-        //     self.stack[self.stack_ptr + 1] = value.value;
-        //     self.stack_ptr += 2;
-        //     Ok(())
-        // }
     }
 
     pub fn pop(&mut self) -> Result<Value, MemoryError> {
