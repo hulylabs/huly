@@ -246,7 +246,7 @@ mod tests {
             .collect();
 
         assert_eq!(block.len(), 1);
-        assert_eq!(layout.as_str(&block[0])?, "hello");
+        assert_eq!(layout.as_str(block[0])?, "hello");
         Ok(())
     }
 
@@ -258,8 +258,10 @@ mod tests {
         let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
         let block = parse_block(&mut memory, input)?;
 
-        assert_eq!(block.len(&memory), 4);
-        assert_eq!(memory.as_str(&block.get(&memory, 1))?, "hello");
+        assert_eq!(block.len(&memory), Some(4));
+
+        let v1 = block.get(&memory, 1).unwrap();
+        assert_eq!(memory.as_str(v1)?, "hello");
         Ok(())
     }
 

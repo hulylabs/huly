@@ -19,8 +19,12 @@ pub enum EvalError {
     ArityMismatch(usize, usize),
     #[error("Stack overflow")]
     StackOverflow,
-    #[error("Word not found")]
+    #[error("Word not found {0}")]
     WordNotFound(Symbol),
+    #[error("Function not found: {0}")]
+    FunctionNotFound(u32),
+    #[error("Internal error")]
+    InternalError,
 }
 
 //
@@ -73,12 +77,17 @@ impl<'a, 'b> Process<'a, 'b> {
         }
     }
 
+    #[inline(never)]
     fn pop_op(&mut self) -> Option<Value> {
-        if self.ops > 0 {
-            self.ops -= 1;
-            Some(self.op_stack[self.ops])
-        } else {
+        if self.ops == 0 {
             None
+        } else {
+            self.ops -= 1;
+            if let Some(value) = self.op_stack.get(self.ops) {
+                Some(*value)
+            } else {
+                None
+            }
         }
     }
 
@@ -105,22 +114,35 @@ impl<'a, 'b> Process<'a, 'b> {
     }
 
     fn read_block(&mut self, block: Block) -> Result<(), EvalError> {
-        let len = block.len(self.memory);
-        for i in 0..len {
-            self.read(block.get(self.memory, i))?;
+        if let Some(len) = block.len(self.memory) {
+            for i in 0..len {
+                if let Some(value) = block.get(self.memory, i) {
+                    println!("read {:?}", value);
+                    self.read(value)?;
+                }
+            }
+            Ok(())
+        } else {
+            Err(EvalError::InternalError)
         }
-        Ok(())
     }
 
     fn eval_stack(&mut self) -> anyhow::Result<Value> {
         while let Some(proc) = self.pop_op() {
+            println!("eval {:?}", proc);
             match proc.tag() {
                 Value::NATIVE_FN => {
-                    let id = proc.payload() as usize;
-                    let native_fn = self.natives[id];
-                    native_fn(self.memory)?
+                    let id = proc.payload();
+                    if let Some(native_fn) = self.natives.get(id as usize) {
+                        native_fn(self.memory)?
+                    } else {
+                        Err(EvalError::FunctionNotFound(id))?
+                    }
                 }
-                _ => unimplemented!(),
+                _ => {
+                    println!("{:?}", proc);
+                    Err(EvalError::InternalError)?
+                }
             }
         }
         Ok(self.pop().unwrap_or(Value::NONE))
@@ -132,6 +154,7 @@ impl<'a, 'b> Process<'a, 'b> {
 
     pub fn eval(&mut self, input: &str) -> anyhow::Result<Value> {
         let block = self.parse(input)?;
+        println!("parsed, {:?}", block.len(self.memory));
         self.read_block(block)?;
         self.eval_stack()
     }

@@ -71,15 +71,19 @@ impl TryFrom<Value> for i32 {
 }
 
 impl Block {
-    pub fn len(&self, memory: &Memory) -> usize {
-        memory.heap[self.0 as usize] as usize
+    pub fn len(&self, memory: &Memory) -> Option<usize> {
+        memory.heap.get(self.0 as usize).map(|&len| len as usize)
     }
 
-    pub fn get(&self, memory: &Memory, index: usize) -> Value {
+    pub fn get(&self, memory: &Memory, index: usize) -> Option<Value> {
         let addr = self.0 as usize + index * 2 + 1;
-        Value {
-            tag: memory.heap[addr],
-            value: memory.heap[addr + 1],
+        if let Some(mem) = memory.heap.get(addr..addr + 2) {
+            Some(Value {
+                tag: mem[0],
+                value: mem[1],
+            })
+        } else {
+            None
         }
     }
 }
@@ -272,7 +276,7 @@ impl<'a> Memory<'a> {
             })
     }
 
-    pub fn as_str(&self, value: &Value) -> Result<&str, MemoryError> {
+    pub fn as_str(&self, value: Value) -> Result<&str, MemoryError> {
         match value.tag {
             Value::STRING => self.decode_string(value.value),
             _ => Err(MemoryError::TypeMismatch),
