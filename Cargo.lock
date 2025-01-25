@@ -4557,7 +4557,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "thiserror 2.0.11",
- "xxhash-rust",
 ]
 
 [[package]]
@@ -6959,12 +6958,6 @@ checksum = "d7d8a75eaf6557bb84a65ace8609883db44a29951042ada9b393151532e41fcb"
 dependencies = [
  "xml-rs",
 ]
-
-[[package]]
-name = "xxhash-rust"
-version = "0.8.15"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fdd20c5420375476fbd4394763288da7eb0cc0b8c11deed431a91562af7335d3"
 
 [[package]]
 name = "yaml-rust2"
