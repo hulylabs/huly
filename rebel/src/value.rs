@@ -221,20 +221,25 @@ impl<'a> Memory<'a> {
             return Err(MemoryError::StackOverflow);
         }
 
-        let new_ptr = self
-            .heap_ptr
-            .checked_add(len + 1)
-            .filter(|&ptr| ptr <= self.heap.len())
-            .ok_or(MemoryError::OutOfMemory)?;
+        let new_ptr = self.heap_ptr + len + 1;
+        if new_ptr > self.heap.len() {
+            return Err(MemoryError::OutOfMemory);
+        }
 
-        self.heap[self.heap_ptr] = (len / 2) as u32;
-        for i in 0..len {
-            self.heap[self.heap_ptr + i + 1] = self.stack[stack_start + i];
+        // SAFETY: bounds are checked above, heap_ptr and heap_ptr+len+1 are valid
+        unsafe {
+            *self.heap.get_unchecked_mut(self.heap_ptr) = (len / 2) as u32;
+            std::ptr::copy_nonoverlapping(
+                self.stack.as_ptr().add(stack_start),
+                self.heap.as_mut_ptr().add(self.heap_ptr + 1),
+                len,
+            );
         }
 
         let address = self.heap_ptr as Address;
         self.heap_ptr = new_ptr;
         self.stack_ptr = stack_start;
+
         Ok(Value {
             tag: Value::BLOCK,
             value: address,
