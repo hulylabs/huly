@@ -180,16 +180,16 @@ impl<'a> Memory<'a> {
 
     fn alloc_encoded(&mut self, encoded: [u32; 8], len: usize) -> Result<Address, MemoryError> {
         assert!(len <= 8);
-        if self.heap_ptr + 8 > self.heap.len() {
-            return Err(MemoryError::OutOfMemory);
+        if let Some(in_heap) = self.heap.get_mut(self.heap_ptr..self.heap_ptr + 8) {
+            for i in 0..8 {
+                in_heap[i] = encoded[i];
+            }
+            let address = self.heap_ptr as Address;
+            self.heap_ptr += len;
+            Ok(address)
+        } else {
+            Err(MemoryError::OutOfMemory)
         }
-        let address = self.heap_ptr as Address;
-        unsafe {
-            let dst = self.heap.as_mut_ptr().add(self.heap_ptr) as *mut [u32; 8];
-            core::ptr::write(dst, encoded);
-        }
-        self.heap_ptr += len;
-        Ok(address)
     }
 
     pub fn string(&mut self, string: &str) -> Result<Value, MemoryError> {
@@ -213,38 +213,30 @@ impl<'a> Memory<'a> {
     }
 
     pub fn block(&mut self, stack_start: usize) -> Result<Value, MemoryError> {
-        let len = self
-            .stack_ptr
-            .checked_sub(stack_start)
-            .ok_or(MemoryError::StackOverflow)?;
-
-        if self.stack_ptr > self.stack.len() {
-            return Err(MemoryError::StackOverflow);
+        if let Some(in_stack) = self.stack.get(stack_start..self.stack_ptr) {
+            let len = in_stack.len();
+            if let Some(in_heap) = self.heap.get_mut(self.heap_ptr..self.heap_ptr + len + 1) {
+                if let Some((hdr, payload)) = in_heap.split_first_mut() {
+                    *hdr = (len / 2) as u32;
+                    for i in 0..len {
+                        payload[i] = in_stack[i];
+                    }
+                    let address = self.heap_ptr as Address;
+                    self.heap_ptr += len + 1;
+                    self.stack_ptr = stack_start;
+                    Ok(Value {
+                        tag: Value::BLOCK,
+                        value: address,
+                    })
+                } else {
+                    Err(MemoryError::OutOfMemory)
+                }
+            } else {
+                Err(MemoryError::OutOfMemory)
+            }
+        } else {
+            Err(MemoryError::StackOverflow)
         }
-
-        let new_ptr = self.heap_ptr + len + 1;
-        if new_ptr > self.heap.len() {
-            return Err(MemoryError::OutOfMemory);
-        }
-
-        // SAFETY: bounds are checked above, heap_ptr and heap_ptr+len+1 are valid
-        unsafe {
-            *self.heap.get_unchecked_mut(self.heap_ptr) = (len / 2) as u32;
-            std::ptr::copy_nonoverlapping(
-                self.stack.as_ptr().add(stack_start),
-                self.heap.as_mut_ptr().add(self.heap_ptr + 1),
-                len,
-            );
-        }
-
-        let address = self.heap_ptr as Address;
-        self.heap_ptr = new_ptr;
-        self.stack_ptr = stack_start;
-
-        Ok(Value {
-            tag: Value::BLOCK,
-            value: address,
-        })
     }
 
     pub fn word(&mut self, symbol: &str) -> Result<Value, MemoryError> {
