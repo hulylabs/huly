@@ -68,7 +68,11 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
                 return Ok(Token::new(
-                    self.memory.string(&self.input[start_pos..pos])?,
+                    self.memory.string(
+                        self.input
+                            .get(start_pos..pos)
+                            .ok_or(ParseError::UnexpectedEnd)?,
+                    )?,
                     false,
                 ));
             }
@@ -83,13 +87,21 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
                 ':' => {
                     return Ok(Token::new(
-                        self.memory.set_word(&self.input[start_pos..pos])?,
+                        self.memory.set_word(
+                            self.input
+                                .get(start_pos..pos)
+                                .ok_or(ParseError::UnexpectedEnd)?,
+                        )?,
                         false,
                     ))
                 }
                 c if c.is_ascii_whitespace() || c == ']' => {
                     return Ok(Token::new(
-                        self.memory.word(&self.input[start_pos..pos])?,
+                        self.memory.word(
+                            self.input
+                                .get(start_pos..pos)
+                                .ok_or(ParseError::UnexpectedEnd)?,
+                        )?,
                         c == ']',
                     ))
                 }
