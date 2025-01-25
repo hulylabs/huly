@@ -136,7 +136,6 @@ impl<'a> Memory<'a> {
 
     pub fn new_string(&mut self, string: &str) -> Result<Value, MemoryError> {
         let len = string.len();
-
         if len > 0xffff {
             return Err(MemoryError::OutOfMemory);
         }
@@ -147,13 +146,17 @@ impl<'a> Memory<'a> {
             .filter(|&ptr| ptr <= self.heap.len())
             .ok_or(MemoryError::OutOfMemory)?;
 
-        self.heap[self.heap_ptr] = len as u8;
-        self.heap[self.heap_ptr + 1] = (len >> 8) as u8;
+        // After bounds check, use unchecked operations
+        unsafe {
+            *self.heap.get_unchecked_mut(self.heap_ptr) = len as u8;
+            *self.heap.get_unchecked_mut(self.heap_ptr + 1) = (len >> 8) as u8;
 
-        self.heap
-            .get_mut(self.heap_ptr + 2..new_ptr)
-            .expect("bounds already checked")
-            .copy_from_slice(string.as_bytes());
+            std::ptr::copy_nonoverlapping(
+                string.as_ptr(),
+                self.heap.as_mut_ptr().add(self.heap_ptr + 2),
+                len,
+            );
+        }
 
         let address = self.heap_ptr as Address;
         self.heap_ptr = new_ptr;
@@ -181,25 +184,26 @@ impl<'a> Memory<'a> {
     }
 
     pub fn block(&mut self, stack_start: usize) -> Result<Value, MemoryError> {
-        let len = stack_start - self.stack_ptr;
+        let len = stack_start
+            .checked_sub(self.stack_ptr)
+            .ok_or(MemoryError::StackOverflow)?;
+
+        let new_ptr = self
+            .heap_ptr
+            .checked_add(len * 8)
+            .filter(|&ptr| ptr <= self.heap.len())
+            .ok_or(MemoryError::OutOfMemory)?;
+
+        unsafe {
+            for i in 0..len {
+                let value = *self.stack.get_unchecked(self.stack_ptr + i);
+                let dest = self.heap.as_mut_ptr().add(self.heap_ptr + i * 8) as *mut u64;
+                *dest = value;
+            }
+        }
+
         let address = self.heap_ptr as Address;
-
-        if self.heap_ptr + len * 8 > self.heap.len() {
-            return Err(MemoryError::OutOfMemory);
-        }
-
-        let mut sp = self.stack_ptr - 1;
-
-        while sp > self.stack_ptr {
-            let value = self.stack[sp];
-            self.heap
-                .get_mut(self.heap_ptr..self.heap_ptr + 8)
-                .expect("bounds already checked")
-                .copy_from_slice(&value.to_le_bytes());
-            self.heap_ptr += 8;
-            sp -= 1;
-        }
-
+        self.heap_ptr = new_ptr;
         self.stack_ptr = stack_start;
         Ok(Value::Block(address))
     }
@@ -297,22 +301,22 @@ impl<'a> Memory<'a> {
 
     pub fn push(&mut self, value: Value) -> Result<(), MemoryError> {
         if self.stack_ptr == 0 {
-            Err(MemoryError::StackOverflow)
-        } else {
-            self.stack_ptr -= 1;
-            self.stack[self.stack_ptr] = value.as_u64();
-            Ok(())
+            return Err(MemoryError::StackOverflow);
         }
+        self.stack_ptr -= 1;
+        unsafe {
+            *self.stack.get_unchecked_mut(self.stack_ptr) = value.as_u64();
+        }
+        Ok(())
     }
 
     pub fn pop(&mut self) -> Result<Value, MemoryError> {
-        if self.stack_ptr == self.stack.len() {
-            Err(MemoryError::StackOverflow)
-        } else {
-            let value = self.stack[self.stack_ptr];
-            self.stack_ptr += 1;
-            Ok(Value::from(value))
+        if self.stack_ptr >= self.stack.len() {
+            return Err(MemoryError::StackOverflow);
         }
+        let value = unsafe { *self.stack.get_unchecked(self.stack_ptr) };
+        self.stack_ptr += 1;
+        Ok(Value::from(value))
     }
 }
 

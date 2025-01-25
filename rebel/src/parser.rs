@@ -63,14 +63,43 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
         None
     }
 
-    fn parse_string(&mut self, pos: usize) -> Result<Token, ParseError> {
-        let start_pos = pos + 1; // skip the opening quote
-        for (pos, char) in self.cursor.by_ref() {
-            if char == '"' {
-                return Ok(Token::new(
-                    self.memory.new_string(&self.input[start_pos..pos])?,
-                    false,
-                ));
+    fn parse_string(&mut self, start_pos: usize) -> Result<Token, ParseError> {
+        let mut pos = start_pos + 1;
+        let bytes = self.input.as_bytes();
+
+        // Find the end of string and validate without borrowing memory
+        while pos < bytes.len() {
+            let b = unsafe { *bytes.get_unchecked(pos) };
+            if b == b'"' {
+                // Validate the found string
+                if start_pos + 1 > pos || pos > bytes.len() {
+                    return Err(ParseError::UnexpectedEnd);
+                }
+
+                // Only create string in memory once we have valid bounds
+                let slice = unsafe { self.input.get_unchecked(start_pos + 1..pos) };
+                let value = self.memory.new_string(slice)?;
+                return Ok(Token::new(value, false));
+            }
+
+            // Handle UTF-8 sequences without borrowing
+            if b & 0x80 == 0 {
+                pos += 1;
+            } else {
+                let len = if b & 0xE0 == 0xC0 {
+                    2
+                } else if b & 0xF0 == 0xE0 {
+                    3
+                } else if b & 0xF8 == 0xF0 {
+                    4
+                } else {
+                    return Err(ParseError::UnexpectedChar('\0'));
+                };
+
+                if pos + len > bytes.len() {
+                    return Err(ParseError::UnexpectedEnd);
+                }
+                pos += len;
             }
         }
 
@@ -78,24 +107,31 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
     }
 
     fn parse_word(&mut self, start_pos: usize) -> Result<Token, ParseError> {
-        for (pos, char) in self.cursor.by_ref() {
-            match char {
-                c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
-                ':' => {
-                    return Ok(Token::new(
-                        self.memory.set_word(&self.input[start_pos..pos])?,
-                        false,
-                    ))
+        let mut pos = start_pos;
+        let bytes = self.input.as_bytes();
+
+        while pos < bytes.len() {
+            let b = unsafe { *bytes.get_unchecked(pos) };
+            match b {
+                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' => {
+                    pos += 1;
                 }
-                c if c.is_ascii_whitespace() || c == ']' => {
-                    return Ok(Token::new(
-                        self.memory.word(&self.input[start_pos..pos])?,
-                        c == ']',
-                    ))
+                b':' => {
+                    // Only create one allocation after validation
+                    let slice = unsafe { self.input.get_unchecked(start_pos..pos) };
+                    let value = self.memory.set_word(slice)?;
+                    return Ok(Token::new(value, false));
                 }
-                _ => return Err(ParseError::UnexpectedChar(char)),
+                b' ' | b'\t' | b'\n' | b'\r' | b']' => {
+                    // Only create one allocation after validation
+                    let slice = unsafe { self.input.get_unchecked(start_pos..pos) };
+                    let value = self.memory.word(slice)?;
+                    return Ok(Token::new(value, b == b']'));
+                }
+                _ => return Err(ParseError::UnexpectedChar(b as char)),
             }
         }
+
         Err(ParseError::UnexpectedEnd)
     }
 
