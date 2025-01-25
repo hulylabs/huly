@@ -26,27 +26,18 @@ impl Value {
     const WORD: u32 = 0x4;
     const SET_WORD: u32 = 0x5;
     const NATIVE_FN: u32 = 0x6;
-    const NONE: u32 = 0x7;
+    const TAG_NONE: u32 = 0x7;
+
+    pub const NONE: Value = Value {
+        tag: Self::TAG_NONE,
+        value: 0,
+    };
 
     pub fn from_i32(value: i32) -> Self {
         let value = value as u32;
         Value {
             tag: Self::INT,
             value,
-        }
-    }
-
-    pub fn try_into_i32(&self) -> Option<i32> {
-        match self.tag {
-            Self::INT => Some(self.value as i32),
-            _ => None,
-        }
-    }
-
-    pub fn none() -> Self {
-        Value {
-            tag: Self::NONE,
-            value: 0,
         }
     }
 }
@@ -71,6 +62,17 @@ impl TryFrom<Value> for Block {
     fn try_from(value: Value) -> Result<Self, Self::Error> {
         match value.tag {
             Value::BLOCK => Ok(Block(value.value)),
+            _ => Err(MemoryError::TypeMismatch),
+        }
+    }
+}
+
+impl TryFrom<Value> for i32 {
+    type Error = MemoryError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value.tag {
+            Value::INT => Ok(value.value as i32),
             _ => Err(MemoryError::TypeMismatch),
         }
     }

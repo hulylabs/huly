@@ -42,7 +42,7 @@ impl<'a, 'b> Process<'a, 'b> {
     pub fn new(memory: &'a mut Memory<'b>) -> Self {
         Self {
             memory,
-            op_stack: [Value::None; OP_STACK_SIZE],
+            op_stack: [Value::NONE; OP_STACK_SIZE],
             ops: 0,
             natives: Vec::new(),
             root_ctx: Context::empty(),

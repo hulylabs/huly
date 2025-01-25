@@ -273,8 +273,8 @@ mod tests {
 
         let mut iter = ValueIterator::new(input, &mut layout);
 
-        let value = iter.next().unwrap().unwrap();
-        assert_eq!(value.try_into_i32(), Some(42));
+        let value = iter.next().unwrap()?;
+        assert_eq!(42 as i32, value.try_into()?);
 
         let value = iter.next();
         assert!(value.is_none());
