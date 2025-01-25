@@ -1,6 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::value::{Context, Memory, Symbol, Value};
+use crate::parser::{parse_block, ParseError};
+use crate::value::{Block, Context, Memory, Symbol, Value};
 use std::result::Result;
 use thiserror::Error;
 
@@ -103,14 +104,15 @@ impl<'a, 'b> Process<'a, 'b> {
         }
     }
 
-    pub fn read_all(&mut self, values: impl Iterator<Item = Value>) -> Result<(), EvalError> {
-        for value in values {
-            self.read(value)?;
+    fn read_block(&mut self, block: Block) -> Result<(), EvalError> {
+        let len = block.len(self.memory);
+        for i in 0..len {
+            self.read(block.get(self.memory, i))?;
         }
         Ok(())
     }
 
-    pub fn eval(&mut self) -> anyhow::Result<Value> {
+    fn eval_stack(&mut self) -> anyhow::Result<Value> {
         while let Some(proc) = self.pop_op() {
             match proc.tag() {
                 Value::NATIVE_FN => {
@@ -123,24 +125,38 @@ impl<'a, 'b> Process<'a, 'b> {
         }
         Ok(self.memory.pop().unwrap_or(Value::NONE))
     }
+
+    pub fn parse(&mut self, input: &str) -> Result<Block, ParseError> {
+        parse_block(self.memory, input)
+    }
+
+    pub fn eval(&mut self, input: &str) -> anyhow::Result<Value> {
+        let block = self.parse(input)?;
+        self.read_block(block)?;
+        self.eval_stack()
+    }
+}
+
+pub fn run(input: &str) -> anyhow::Result<Value> {
+    let mut bytes = vec![0; 0x10000];
+    let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
+
+    let mut process = Process::new(&mut memory);
+    process.load_module(&crate::boot::CORE_MODULE)?;
+    process.eval(input)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parser::ValueIterator;
 
-    fn run(input: &str) -> anyhow::Result<Value> {
+    pub fn run(input: &str) -> anyhow::Result<Value> {
         let mut bytes = vec![0; 0x10000];
         let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
 
-        let iterator = ValueIterator::new(input, &mut memory);
-        let values: Vec<Value> = iterator.collect::<Result<Vec<_>, _>>()?;
-
         let mut process = Process::new(&mut memory);
         process.load_module(&crate::boot::CORE_MODULE)?;
-        process.read_all(values.into_iter())?;
-        process.eval()
+        process.eval(input)
     }
 
     #[test]

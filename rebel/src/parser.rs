@@ -30,13 +30,13 @@ impl Token {
     }
 }
 
-pub struct ValueIterator<'a, 'b> {
+struct ParseIterator<'a, 'b> {
     input: &'a str,
     cursor: CharIndices<'a>,
     memory: &'a mut Memory<'b>,
 }
 
-impl<'a, 'b> Iterator for ValueIterator<'a, 'b> {
+impl<'a, 'b> Iterator for ParseIterator<'a, 'b> {
     type Item = Result<Value, ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
@@ -45,7 +45,7 @@ impl<'a, 'b> Iterator for ValueIterator<'a, 'b> {
     }
 }
 
-impl<'a, 'b> ValueIterator<'a, 'b> {
+impl<'a, 'b> ParseIterator<'a, 'b> {
     pub fn new(input: &'a str, memory: &'a mut Memory<'b>) -> Self {
         Self {
             cursor: input.char_indices(),
@@ -206,13 +206,15 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
                 .map(|v| Token::new(v, false)),
         )
     }
+}
 
-    pub fn block(&mut self) -> Result<Block, ParseError> {
-        if let Some(token) = self.parse_block() {
-            token?.value.try_into().map_err(ParseError::MemoryError)
-        } else {
-            Err(ParseError::UnexpectedEnd)
-        }
+pub fn parse_block(memory: &mut Memory, input: &str) -> Result<Block, ParseError> {
+    let mut iterator = ParseIterator::new(input, memory);
+    if let Some(token) = iterator.parse_block() {
+        let block = token?.value.try_into()?;
+        Ok(block)
+    } else {
+        Err(ParseError::UnexpectedEnd)
     }
 }
 
@@ -226,7 +228,7 @@ mod tests {
 
         let mut mem = vec![0; 0x10000];
         let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
-        let mut iter = ValueIterator::new(input, &mut layout);
+        let mut iter = ParseIterator::new(input, &mut layout);
 
         let value = iter.next();
         assert!(value.is_none());
@@ -239,7 +241,7 @@ mod tests {
 
         let mut mem = vec![0; 0x10000];
         let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
-        let block: Vec<_> = ValueIterator::new(input, &mut layout)
+        let block: Vec<_> = ParseIterator::new(input, &mut layout)
             .filter_map(Result::ok)
             .collect();
 
@@ -252,15 +254,12 @@ mod tests {
     fn test_block_1() -> Result<(), ParseError> {
         let input = "42 \"hello\" word x: \n ";
 
-        let mut mem = vec![0; 0x10000];
-        let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
-        let mut iter = ValueIterator::new(input, &mut layout);
+        let mut bytes = vec![0; 0x10000];
+        let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
+        let block = parse_block(&mut memory, input)?;
 
-        let block = iter.block()?;
-        assert!(iter.next().is_none());
-
-        assert_eq!(block.len(&layout), 4);
-        assert_eq!(layout.as_str(&block.get(&layout, 1))?, "hello");
+        assert_eq!(block.len(&memory), 4);
+        assert_eq!(memory.as_str(&block.get(&memory, 1))?, "hello");
         Ok(())
     }
 
@@ -271,7 +270,7 @@ mod tests {
         let mut mem = vec![0; 0x10000];
         let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
 
-        let mut iter = ValueIterator::new(input, &mut layout);
+        let mut iter = ParseIterator::new(input, &mut layout);
 
         let value = iter.next().unwrap()?;
         assert_eq!(42 as i32, value.try_into()?);
