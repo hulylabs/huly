@@ -3,7 +3,6 @@
 // eval.rs:
 
 use crate::value::{Memory, Value};
-use std::array::TryFromSliceError;
 use std::result::Result;
 use thiserror::Error;
 

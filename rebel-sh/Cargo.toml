@@ -1,0 +1,11 @@
+[package]
+name = "rebel-sh"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rebel = { path = "../rebel" }
+
+anyhow.workspace = true
+colored = "3.0.0"
+rustyline = "15.0.0"

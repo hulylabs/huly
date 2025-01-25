@@ -58,7 +58,7 @@ impl<'a, 'b> Process<'a, 'b> {
         }
     }
 
-    fn load_module(&mut self, module: &Module) -> Result<(), EvalError> {
+    pub fn load_module(&mut self, module: &Module) -> Result<(), EvalError> {
         for (symbol, proc) in module.procs.iter() {
             let id = self.natives.len();
             self.natives.push(*proc);
@@ -149,15 +149,6 @@ impl<'a, 'b> Process<'a, 'b> {
         self.read_block(block)?;
         self.eval_stack()
     }
-}
-
-pub fn run(input: &str) -> anyhow::Result<Value> {
-    let mut bytes = vec![0; 0x10000];
-    let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
-
-    let mut process = Process::new(&mut memory);
-    process.load_module(&crate::boot::CORE_MODULE)?;
-    process.eval(input)
 }
 
 #[cfg(test)]

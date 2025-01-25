@@ -1,10 +1,7 @@
 [workspace]
-members = [
-  "crates/huly",
-  "crates/huly-cli",
-  "crates/rebeldb",
-  "crates/rebeldb-cli", "crates/rebeldb-core",
-  "crates/rebeldb-runtime",
-  "crates/rebeldb-wasm", "rebel",
-]
+members = ["rebel", "rebel-sh"]
 resolver = "2"
+
+[workspace.dependencies]
+anyhow = "1.0.95"
+thiserror = "2.0.11"

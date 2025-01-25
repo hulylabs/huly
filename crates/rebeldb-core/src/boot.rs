@@ -1,6 +1,6 @@
 //
 
-use crate::eval::{EvalError, Module, Stack};
+use crate::eval::{Module, Stack};
 use crate::value::Value;
 
 fn add(stack: &mut Stack) -> anyhow::Result<()> {
