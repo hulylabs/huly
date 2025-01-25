@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::value::{Memory, Value};
+use crate::value::{Block, Memory, Value};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -63,43 +63,14 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
         None
     }
 
-    fn parse_string(&mut self, start_pos: usize) -> Result<Token, ParseError> {
-        let mut pos = start_pos + 1;
-        let bytes = self.input.as_bytes();
-
-        // Find the end of string and validate without borrowing memory
-        while pos < bytes.len() {
-            let b = unsafe { *bytes.get_unchecked(pos) };
-            if b == b'"' {
-                // Validate the found string
-                if start_pos + 1 > pos || pos > bytes.len() {
-                    return Err(ParseError::UnexpectedEnd);
-                }
-
-                // Only create string in memory once we have valid bounds
-                let slice = unsafe { self.input.get_unchecked(start_pos + 1..pos) };
-                let value = self.memory.new_string(slice)?;
-                return Ok(Token::new(value, false));
-            }
-
-            // Handle UTF-8 sequences without borrowing
-            if b & 0x80 == 0 {
-                pos += 1;
-            } else {
-                let len = if b & 0xE0 == 0xC0 {
-                    2
-                } else if b & 0xF0 == 0xE0 {
-                    3
-                } else if b & 0xF8 == 0xF0 {
-                    4
-                } else {
-                    return Err(ParseError::UnexpectedChar('\0'));
-                };
-
-                if pos + len > bytes.len() {
-                    return Err(ParseError::UnexpectedEnd);
-                }
-                pos += len;
+    fn parse_string(&mut self, pos: usize) -> Result<Token, ParseError> {
+        let start_pos = pos + 1; // skip the opening quote
+        for (pos, char) in self.cursor.by_ref() {
+            if char == '"' {
+                return Ok(Token::new(
+                    self.memory.string(&self.input[start_pos..pos])?,
+                    false,
+                ));
             }
         }
 
@@ -107,29 +78,24 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
     }
 
     fn parse_word(&mut self, start_pos: usize) -> Result<Token, ParseError> {
-        let mut pos = start_pos;
-        let bytes = self.input.as_bytes();
-
-        while pos < bytes.len() {
-            let b = unsafe { *bytes.get_unchecked(pos) };
-            match b {
-                b'a'..=b'z' | b'A'..=b'Z' | b'0'..=b'9' | b'_' | b'-' => {
-                    pos += 1;
+        for (pos, char) in self.cursor.by_ref() {
+            match char {
+                c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
+                ':' => {
+                    return Ok(Token::new(
+                        self.memory.set_word(&self.input[start_pos..pos])?,
+                        false,
+                    ))
                 }
-                b':' => {
-                    let slice = unsafe { self.input.get_unchecked(start_pos..pos) };
-                    let value = self.memory.set_word(slice)?;
-                    return Ok(Token::new(value, false));
+                c if c.is_ascii_whitespace() || c == ']' => {
+                    return Ok(Token::new(
+                        self.memory.word(&self.input[start_pos..pos])?,
+                        c == ']',
+                    ))
                 }
-                b' ' | b'\t' | b'\n' | b'\r' | b']' => {
-                    let slice = unsafe { self.input.get_unchecked(start_pos..pos) };
-                    let value = self.memory.word(slice)?;
-                    return Ok(Token::new(value, b == b']'));
-                }
-                _ => return Err(ParseError::UnexpectedChar(b as char)),
+                _ => return Err(ParseError::UnexpectedChar(char)),
             }
         }
-
         Err(ParseError::UnexpectedEnd)
     }
 
@@ -177,7 +143,8 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
         } else {
             value as i32
         };
-        Ok(Token::new(Value::new_int(value), end_of_block))
+
+        Ok(Token::new(Value::from_i32(value), end_of_block))
     }
 
     fn parse_value(&mut self) -> Option<Result<Token, ParseError>> {
@@ -227,12 +194,14 @@ impl<'a, 'b> ValueIterator<'a, 'b> {
                 .map(|v| Token::new(v, false)),
         )
     }
-}
 
-pub fn parse(input: &str, memory: &mut Memory) -> Result<Vec<Value>, ParseError> {
-    ValueIterator::new(input, memory)
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| err.into())
+    pub fn block(&mut self) -> Result<Block, ParseError> {
+        if let Some(token) = self.parse_block() {
+            token?.value.try_into().map_err(ParseError::MemoryError)
+        } else {
+            Err(ParseError::UnexpectedEnd)
+        }
+    }
 }
 
 #[cfg(test)]
@@ -268,6 +237,22 @@ mod tests {
     }
 
     #[test]
+    fn test_block_1() -> Result<(), ParseError> {
+        let input = "42 \"hello\" word x: \n ";
+
+        let mut mem = vec![0; 0x10000];
+        let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
+        let mut iter = ValueIterator::new(input, &mut layout);
+
+        let block = iter.block()?;
+        assert!(iter.next().is_none());
+
+        assert_eq!(block.len(&layout), 4);
+        assert_eq!(layout.as_str(&block.get(&layout, 1))?, "hello");
+        Ok(())
+    }
+
+    #[test]
     fn test_number_1() -> Result<(), ParseError> {
         let input = "42";
 
@@ -277,7 +262,7 @@ mod tests {
         let mut iter = ValueIterator::new(input, &mut layout);
 
         let value = iter.next().unwrap().unwrap();
-        assert_eq!(value.get_int(), Some(42));
+        assert_eq!(value.try_into_i32(), Some(42));
 
         let value = iter.next();
         assert!(value.is_none());

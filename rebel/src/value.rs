@@ -9,6 +9,9 @@ pub type Symbol = Address;
 #[derive(Debug, Clone, Copy)]
 pub struct Context(Address);
 
+#[derive(Debug)]
+pub struct Block(Address);
+
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
     tag: u32,
@@ -25,7 +28,7 @@ impl Value {
     const NATIVE_FN: u32 = 0x6;
     const NONE: u32 = 0x7;
 
-    pub fn new_int(value: i32) -> Self {
+    pub fn from_i32(value: i32) -> Self {
         let value = value as u32;
         Value {
             tag: Self::INT,
@@ -33,10 +36,42 @@ impl Value {
         }
     }
 
-    pub fn get_int(&self) -> Option<i32> {
+    pub fn try_into_i32(&self) -> Option<i32> {
         match self.tag {
             Self::INT => Some(self.value as i32),
             _ => None,
+        }
+    }
+
+    pub fn none() -> Self {
+        Value {
+            tag: Self::NONE,
+            value: 0,
+        }
+    }
+}
+
+impl Block {
+    pub fn len(&self, memory: &Memory) -> usize {
+        memory.heap[self.0 as usize] as usize
+    }
+
+    pub fn get(&self, memory: &Memory, index: usize) -> Value {
+        let addr = self.0 as usize + index * 2 + 1;
+        Value {
+            tag: memory.heap[addr],
+            value: memory.heap[addr + 1],
+        }
+    }
+}
+
+impl TryFrom<Value> for Block {
+    type Error = MemoryError;
+
+    fn try_from(value: Value) -> Result<Self, Self::Error> {
+        match value.tag {
+            Value::BLOCK => Ok(Block(value.value)),
+            _ => Err(MemoryError::TypeMismatch),
         }
     }
 }
@@ -81,6 +116,7 @@ pub enum MemoryError {
     StackOverflow,
 }
 
+#[derive(Debug)]
 pub struct Memory<'a> {
     symbol_table: &'a mut [u32],
     symbol_count: usize,
@@ -155,13 +191,13 @@ impl<'a> Memory<'a> {
         Ok(address)
     }
 
-    pub fn new_string(&mut self, string: &str) -> Result<Value, MemoryError> {
+    pub fn string(&mut self, string: &str) -> Result<Value, MemoryError> {
         let len = string.len();
         if len >= 32 {
             return Err(MemoryError::StringTooLong);
         }
         let encoded = Self::encode_string(string);
-        self.alloc_encoded(encoded, (len + 1) / 4)
+        self.alloc_encoded(encoded, len / 4 + 1)
             .map(|address| Value {
                 tag: Value::STRING,
                 value: address,
@@ -180,14 +216,19 @@ impl<'a> Memory<'a> {
             .checked_sub(self.stack_ptr)
             .ok_or(MemoryError::StackOverflow)?;
 
+        if stack_start > self.stack.len() {
+            return Err(MemoryError::StackOverflow);
+        }
+
         let new_ptr = self
             .heap_ptr
-            .checked_add(len)
+            .checked_add(len + 1)
             .filter(|&ptr| ptr <= self.heap.len())
             .ok_or(MemoryError::OutOfMemory)?;
 
-        for i in 0..len {
-            self.heap[self.heap_ptr + i] = self.stack[stack_start - i - 1];
+        self.heap[self.heap_ptr] = (len / 2) as u32;
+        for i in 1..len + 1 {
+            self.heap[self.heap_ptr + i] = self.stack[stack_start - i];
         }
 
         let address = self.heap_ptr as Address;
@@ -225,7 +266,7 @@ impl<'a> Memory<'a> {
         }
 
         let encoded = Self::encode_string(symbol);
-        let words = (len + 1) / 4;
+        let words = len / 4 + 1;
         let h = fast_hash(&encoded) as usize;
 
         let mut index = h % table_len;
