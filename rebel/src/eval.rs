@@ -82,11 +82,7 @@ impl<'a, 'b> Process<'a, 'b> {
             None
         } else {
             self.ops -= 1;
-            if let Some(value) = self.op_stack.get(self.ops) {
-                Some(*value)
-            } else {
-                None
-            }
+            self.op_stack.get(self.ops).map(|value| *value)
         }
     }
 

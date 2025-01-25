@@ -77,14 +77,10 @@ impl Block {
 
     pub fn get(&self, memory: &Memory, index: usize) -> Option<Value> {
         let addr = self.0 as usize + index * 2 + 1;
-        if let Some(mem) = memory.heap.get(addr..addr + 2) {
-            Some(Value {
+        memory.heap.get(addr..addr + 2).map(|mem| Value {
                 tag: mem[0],
                 value: mem[1],
             })
-        } else {
-            None
-        }
     }
 }
 
