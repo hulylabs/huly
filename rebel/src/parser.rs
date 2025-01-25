@@ -108,7 +108,14 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
                 _ => return Err(ParseError::UnexpectedChar(char)),
             }
         }
-        Err(ParseError::UnexpectedEnd)
+        Ok(Token::new(
+            self.memory.word(
+                self.input
+                    .get(start_pos..)
+                    .ok_or(ParseError::UnexpectedEnd)?,
+            )?,
+            false,
+        ))
     }
 
     fn parse_number(&mut self, char: char) -> Result<Token, ParseError> {

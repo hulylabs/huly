@@ -24,7 +24,7 @@ impl Value {
     const BLOCK: u32 = 0x2;
     const CONTEXT: u32 = 0x3;
     pub const WORD: u32 = 0x4;
-    const SET_WORD: u32 = 0x5;
+    pub const SET_WORD: u32 = 0x5;
     pub const NATIVE_FN: u32 = 0x6;
     const TAG_NONE: u32 = 0x7;
 
@@ -78,9 +78,9 @@ impl Block {
     pub fn get(&self, memory: &Memory, index: usize) -> Option<Value> {
         let addr = self.0 as usize + index * 2 + 1;
         memory.heap.get(addr..addr + 2).map(|mem| Value {
-                tag: mem[0],
-                value: mem[1],
-            })
+            tag: mem[0],
+            value: mem[1],
+        })
     }
 }
 
@@ -396,6 +396,15 @@ impl<'a> Memory<'a> {
         self.pop_frame(1).map(|frame| Value {
             tag: frame[0],
             value: frame[1],
+        })
+    }
+
+    pub fn peek(&mut self) -> Option<Value> {
+        self.stack_ptr.checked_sub(2).and_then(|new_ptr| {
+            self.stack.get(new_ptr..self.stack_ptr).map(|mem| Value {
+                tag: mem[0],
+                value: mem[1],
+            })
         })
     }
 }

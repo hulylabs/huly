@@ -91,6 +91,7 @@ impl<'a, 'b> Process<'a, 'b> {
     fn push(&mut self, value: Value) -> Result<(), EvalError> {
         match value.tag() {
             Value::NATIVE_FN => self.push_op(value),
+            Value::SET_WORD => self.push_op(value),
             _ => self.memory.push(value).map_err(EvalError::MemoryError),
         }
     }
@@ -134,6 +135,10 @@ impl<'a, 'b> Process<'a, 'b> {
                         Err(EvalError::FunctionNotFound(id))?
                     }
                 }
+                Value::SET_WORD => {
+                    let value = self.memory.peek().ok_or(EvalError::StackUnderflow)?;
+                    self.root_ctx = self.root_ctx.add(self.memory, proc.payload(), value)?;
+                }
                 _ => Err(EvalError::InternalError)?,
             }
         }
@@ -162,6 +167,25 @@ mod tests {
         let mut process = Process::new(&mut memory);
         process.load_module(&crate::boot::CORE_MODULE)?;
         process.eval(input)
+    }
+
+    #[test]
+    fn test_set_get_word() -> anyhow::Result<()> {
+        let mut bytes = vec![0; 0x10000];
+        let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
+        let mut process = Process::new(&mut memory);
+        process.load_module(&crate::boot::CORE_MODULE)?;
+
+        let value = process.eval("x: 5")?;
+        assert_eq!(5 as i32, value.try_into()?);
+
+        let value = process.eval("x")?;
+        assert_eq!(5 as i32, value.try_into()?);
+
+        let value = process.eval("add x 2")?;
+        assert_eq!(7 as i32, value.try_into()?);
+
+        Ok(())
     }
 
     #[test]
