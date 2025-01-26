@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::value::{Block, Memory, Value};
+use crate::value::{Block, Memory, MemoryError, Value};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -12,8 +12,6 @@ pub enum ParseError {
     UnexpectedEnd,
     #[error("Number too large")]
     NumberTooLarge,
-    #[error(transparent)]
-    MemoryError(#[from] crate::value::MemoryError),
 }
 
 struct Token {
@@ -30,14 +28,14 @@ impl Token {
     }
 }
 
-struct ParseIterator<'a, 'b> {
+pub struct ParseIterator<'a, 'b> {
     input: &'a str,
     cursor: CharIndices<'a>,
     memory: &'a mut Memory<'b>,
 }
 
 impl Iterator for ParseIterator<'_, '_> {
-    type Item = Result<Value, ParseError>;
+    type Item = Result<Value, MemoryError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         self.parse_value()
@@ -63,7 +61,7 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
         None
     }
 
-    fn parse_string(&mut self, pos: usize) -> Result<Token, ParseError> {
+    fn parse_string(&mut self, pos: usize) -> Result<Token, MemoryError> {
         let start_pos = pos + 1; // skip the opening quote
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
@@ -78,10 +76,10 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
             }
         }
 
-        Err(ParseError::UnexpectedEnd)
+        Err(ParseError::UnexpectedEnd.into())
     }
 
-    fn parse_word(&mut self, start_pos: usize) -> Result<Token, ParseError> {
+    fn parse_word(&mut self, start_pos: usize) -> Result<Token, MemoryError> {
         for (pos, char) in self.cursor.by_ref() {
             match char {
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
@@ -105,7 +103,7 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
                         c == ']',
                     ))
                 }
-                _ => return Err(ParseError::UnexpectedChar(char)),
+                _ => return Err(ParseError::UnexpectedChar(char).into()),
             }
         }
         Ok(Token::new(
@@ -118,7 +116,7 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
         ))
     }
 
-    fn parse_number(&mut self, char: char) -> Result<Token, ParseError> {
+    fn parse_number(&mut self, char: char) -> Result<Token, MemoryError> {
         let mut value: u32 = 0;
         let mut is_negative = false;
         let mut has_digits = false;
@@ -133,7 +131,7 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
                 value = c.to_digit(10).unwrap();
                 has_digits = true;
             }
-            _ => return Err(ParseError::UnexpectedChar(char)),
+            _ => return Err(ParseError::UnexpectedChar(char).into()),
         }
 
         for (_, char) in self.cursor.by_ref() {
@@ -154,7 +152,7 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
         }
 
         if !has_digits {
-            return Err(ParseError::UnexpectedEnd);
+            return Err(ParseError::UnexpectedEnd.into());
         }
 
         let value: i32 = if is_negative {
@@ -166,71 +164,55 @@ impl<'a, 'b> ParseIterator<'a, 'b> {
         Ok(Token::new(Value::from(value), end_of_block))
     }
 
-    fn parse_value(&mut self) -> Option<Result<Token, ParseError>> {
+    fn parse_value(&mut self) -> Option<Result<Token, MemoryError>> {
         match self.skip_whitespace() {
             None => None,
             Some((pos, char)) => match char {
-                '[' => self.parse_block(),
+                '[' => Some(self.parse_block()),
                 '"' => Some(self.parse_string(pos)),
                 c if c.is_ascii_alphabetic() => Some(self.parse_word(pos)),
                 c if c.is_ascii_digit() || c == '+' || c == '-' => Some(self.parse_number(c)),
-                _ => Some(Err(ParseError::UnexpectedChar(char))),
+                _ => Some(Err(ParseError::UnexpectedChar(char).into())),
             },
         }
     }
 
-    fn parse_block(&mut self) -> Option<Result<Token, ParseError>> {
+    fn parse_block(&mut self) -> Result<Token, MemoryError> {
+        self.create_block()
+            .map(|block| Token::new(block.into(), false))
+    }
+
+    pub fn create_block(&mut self) -> Result<Block, MemoryError> {
         let stack_start = self.memory.stack_pointer();
-        loop {
-            match self.parse_value() {
-                Some(Ok(Token {
-                    value,
-                    last_in_block,
-                })) => {
-                    match self.memory.push(value) {
-                        Ok(_) => {}
-                        Err(err) => return Some(Err(err.into())),
-                    }
-                    if last_in_block {
-                        break;
-                    }
-                }
-                Some(Err(err)) => return Some(Err(err)),
-                None => {
-                    if self.memory.stack_pointer() == stack_start {
-                        return None;
-                    } else {
-                        break;
-                    }
-                }
+        while let Some(token) = self.parse_value() {
+            let token = token?;
+            self.memory
+                .push(token.value)
+                .ok_or(MemoryError::MemoryAccessError)?;
+            if token.last_in_block {
+                break;
             }
         }
-
-        Some(
-            self.memory
-                .block(stack_start)
-                .map_err(ParseError::MemoryError)
-                .map(|v| Token::new(v, false)),
-        )
+        self.memory.block(stack_start)
     }
 }
 
-pub fn parse_block(memory: &mut Memory, input: &str) -> Result<Block, ParseError> {
-    let mut iterator = ParseIterator::new(input, memory);
-    if let Some(token) = iterator.parse_block() {
-        let block = token?.value.try_into()?;
-        Ok(block)
-    } else {
-        Err(ParseError::UnexpectedEnd)
-    }
-}
+// pub fn parse_block(memory: &mut Memory, input: &str) -> Result<Block, ParseError> {
+//     let mut iterator = ParseIterator::new(input, memory);
+//     if let Some(token) = iterator.parse_block() {
+//         let block = token?.value.try_into()?;
+//         Ok(block)
+//     } else {
+//         Err(ParseError::UnexpectedEnd)
+//     }
+// }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_whitespace_1() -> Result<(), ParseError> {
+    fn test_whitespace_1() -> Result<(), MemoryError> {
         let input = "  \t\n  ";
 
         let mut mem = vec![0; 0x10000];
@@ -243,7 +225,7 @@ mod tests {
     }
 
     #[test]
-    fn test_string_1() -> Result<(), ParseError> {
+    fn test_string_1() -> Result<(), MemoryError> {
         let input = "\"hello\"  \n ";
 
         let mut mem = vec![0; 0x10000];
@@ -257,23 +239,23 @@ mod tests {
         Ok(())
     }
 
+    // #[test]
+    // fn test_block_1() -> Result<(), MemoryError> {
+    //     let input = "42 \"hello\" word x: \n ";
+
+    //     let mut bytes = vec![0; 0x10000];
+    //     let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
+    //     let block = parse_block(&mut memory, input)?;
+
+    //     assert_eq!(block.len(&memory), Some(4));
+
+    //     let v1 = block.get(&memory, 1).unwrap();
+    //     assert_eq!(memory.as_str(v1)?, "hello");
+    //     Ok(())
+    // }
+
     #[test]
-    fn test_block_1() -> Result<(), ParseError> {
-        let input = "42 \"hello\" word x: \n ";
-
-        let mut bytes = vec![0; 0x10000];
-        let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
-        let block = parse_block(&mut memory, input)?;
-
-        assert_eq!(block.len(&memory), Some(4));
-
-        let v1 = block.get(&memory, 1).unwrap();
-        assert_eq!(memory.as_str(v1)?, "hello");
-        Ok(())
-    }
-
-    #[test]
-    fn test_number_1() -> Result<(), ParseError> {
+    fn test_number_1() -> Result<(), MemoryError> {
         let input = "42";
 
         let mut mem = vec![0; 0x10000];

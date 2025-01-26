@@ -1,6 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::hash::fast_hash;
+use crate::parser::{ParseError, ParseIterator};
 use thiserror::Error;
 
 pub type Address = u32;
@@ -9,8 +10,14 @@ pub type Symbol = Address;
 #[derive(Debug, Clone, Copy)]
 pub struct Context(Address);
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct Block(Address);
+
+pub type NativeFn = fn(&mut Memory, usize) -> Result<(), MemoryError>;
+
+pub struct Module {
+    pub procs: &'static [(&'static str, NativeFn)],
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Value {
@@ -33,18 +40,19 @@ impl Value {
         value: 0,
     };
 
-    pub fn tag(&self) -> u32 {
-        self.tag
-    }
-
-    pub fn payload(&self) -> u32 {
-        self.value
-    }
-
-    pub fn native_fn(id: u32) -> Self {
+    fn native_fn(id: u32) -> Self {
         Value {
             tag: Self::NATIVE_FN,
             value: id,
+        }
+    }
+
+    //
+
+    fn eval_read(self, memory: &mut Memory) -> Option<()> {
+        match self.tag {
+            Value::NATIVE_FN | Value::SET_WORD => memory.push_op(self),
+            _ => memory.push(self),
         }
     }
 }
@@ -70,11 +78,9 @@ impl TryFrom<Value> for i32 {
     }
 }
 
-impl Block {
-    pub fn new(address: Address) -> Self {
-        Block(address)
-    }
+//
 
+impl Block {
     pub fn len(&self, memory: &Memory) -> Option<usize> {
         memory.heap.get(self.0 as usize).map(|&len| len as usize)
     }
@@ -85,6 +91,48 @@ impl Block {
             tag: mem[0],
             value: mem[1],
         })
+    }
+
+    pub fn parse(memory: &mut Memory, input: &str) -> Result<Block, MemoryError> {
+        let mut iter = ParseIterator::new(input, memory);
+        iter.create_block()
+    }
+
+    fn eval<'a>(self, memory: &'a mut Memory) -> Result<(Context, Value), MemoryError> {
+        if let Some(len) = self.len(memory) {
+            for i in 0..len {
+                if let Some(value) = self.get(memory, i) {
+                    match value.tag {
+                        Value::WORD => {
+                            let word_value = ctx
+                                .get(memory, value.value)
+                                .ok_or(MemoryError::WordNotFound(value.value))?;
+                            word_value
+                                .eval_read(memory)
+                                .ok_or(MemoryError::MemoryAccessError)?;
+                        }
+                        _ => value
+                            .eval_read(memory)
+                            .ok_or(MemoryError::MemoryAccessError)?,
+                    }
+                }
+            }
+        }
+
+        while let Some(op) = memory.pop_op() {
+            match *op {
+                [Value::NATIVE_FN, id, bp] => memory.call(id, bp)?,
+                [Value::SET_WORD, sym, bp] => {
+                    let value = memory
+                        .peek(bp as usize)
+                        .ok_or(MemoryError::StackUnderflow)?;
+                    ctx = ctx.add(memory, sym, value)?
+                }
+                _ => return Err(MemoryError::InternalError),
+            }
+        }
+
+        Ok((ctx, memory.clear_stack().unwrap_or(Value::NONE)))
     }
 }
 
@@ -99,43 +147,48 @@ impl TryFrom<Value> for Block {
     }
 }
 
+impl From<Block> for Value {
+    fn from(block: Block) -> Self {
+        Value {
+            tag: Value::BLOCK,
+            value: block.0,
+        }
+    }
+}
+
 impl Context {
-    pub fn empty() -> Self {
-        Context(0)
+    fn head(self, memory: &mut Memory) -> Option<Address> {
+        memory.heap.get(self.0 as usize).copied()
     }
 
     /// Each context entry stored as below (u32 values):
     /// [symbol, next, tag, value]
-    pub fn add(
-        self,
-        memory: &mut Memory,
-        symbol: Symbol,
-        value: Value,
-    ) -> Result<Self, MemoryError> {
+    pub fn add(self, memory: &mut Memory, symbol: Symbol, value: Value) -> Option<Self> {
         let mut addr = self.0;
         while addr != 0 {
-            if let Some(entry) = memory.heap.get_mut(addr as usize..addr as usize + 4) {
-                if entry[0] == symbol {
-                    entry[2] = value.tag;
-                    entry[3] = value.value;
-                    return Ok(self);
-                }
-                addr = entry[1];
-            } else {
-                return Err(MemoryError::OutOfMemory);
+            let a = addr as usize;
+            let entry = memory.heap.get(a..a + 2)?;
+            if entry[0] == symbol {
+                return memory.heap.get_mut(a + 2..a + 4).map(|mem| {
+                    mem[0] = value.tag;
+                    mem[1] = value.value;
+                    self
+                });
             }
+            addr = entry[1];
         }
-        if let Some(new_entry) = memory.heap.get_mut(memory.heap_ptr..memory.heap_ptr + 4) {
-            new_entry[0] = symbol;
-            new_entry[1] = self.0;
-            new_entry[2] = value.tag;
-            new_entry[3] = value.value;
-            let address = memory.heap_ptr as Address;
-            memory.heap_ptr += 4;
-            Ok(Context(address))
-        } else {
-            Err(MemoryError::OutOfMemory)
-        }
+        memory
+            .heap
+            .get_mut(memory.heap_ptr..memory.heap_ptr + 4)
+            .map(|new_entry| {
+                new_entry[0] = symbol;
+                new_entry[1] = self.0;
+                new_entry[2] = value.tag;
+                new_entry[3] = value.value;
+                let address = memory.heap_ptr as Address;
+                memory.heap_ptr += 4;
+                Context(address)
+            })
     }
 
     pub fn get(&self, memory: &Memory, symbol: Symbol) -> Option<Value> {
@@ -184,6 +237,22 @@ pub enum MemoryError {
     TypeMismatch,
     #[error("Stack overflow")]
     StackOverflow,
+    #[error("Word not found: {0}")]
+    WordNotFound(Symbol),
+    #[error("Internal error")]
+    InternalError,
+    #[error("Stack underflow")]
+    StackUnderflow,
+    #[error("Function not found: {0}")]
+    FunctionNotFound(u32),
+    #[error(transparent)]
+    RuntimeError(#[from] anyhow::Error),
+    #[error(transparent)]
+    ParseError(#[from] ParseError),
+    #[error("Memory access error")]
+    MemoryAccessError,
+    #[error("BadArguments")]
+    BadArguments,
 }
 
 #[derive(Debug)]
@@ -194,24 +263,88 @@ pub struct Memory<'a> {
     heap_ptr: usize,
     stack: &'a mut [u32],
     stack_ptr: usize,
+    ops: &'a mut [u32],
+    ops_ptr: usize,
+    env: &'a mut [u32],
+    env_ptr: usize,
+    natives: Vec<NativeFn>,
 }
 
 impl<'a> Memory<'a> {
+    const ENV_STACK_SIZE: usize = 128;
+    const OP_STACK_SIZE: usize = 128;
+
     pub fn new(
         mem: &'a mut [u32],
         heap_start: usize,
         stack_size: usize,
     ) -> Result<Self, MemoryError> {
         let (symbol_table, rest) = mem.split_at_mut(heap_start);
-        let (heap, stack) = rest.split_at_mut(rest.len() - stack_size);
+        let (heap, rest) = rest.split_at_mut(rest.len() - stack_size);
+        let (stack, rest) = rest.split_at_mut(Self::ENV_STACK_SIZE + Self::OP_STACK_SIZE);
+        let (env, ops) = rest.split_at_mut(Self::ENV_STACK_SIZE);
         Ok(Self {
             symbol_table,
             heap,
             stack,
+            ops,
+            env,
             symbol_count: 0,
             heap_ptr: 1, //TODO: something, we should not use 0 addresse
             stack_ptr: 0,
+            ops_ptr: 0,
+            env_ptr: 0,
+            natives: Vec::new(),
         })
+    }
+
+    // fn get_global(&self, global: usize) -> Option<u32> {
+    //     self.globals.get(global).copied()
+    // }
+
+    // fn set_global(&mut self, global: usize, value: u32) -> Result<(), MemoryError> {
+    //     self.globals
+    //         .get_mut(global)
+    //         .map(|slot| *slot = value)
+    //         .ok_or(MemoryError::MemoryAccessError)
+    // }
+
+    fn get_top_env(&self) -> Option<Context> {
+        self.env.last().copied().map(Context)
+    }
+
+    fn set_top_env(&mut self, ctx: Context) -> Option<()> {
+        self.env.last_mut().map(|slot| *slot = ctx.0)
+    }
+
+    fn get_env(&self, symbol: Symbol) -> Option<Value> {
+        self.env.get(0..self.env_ptr).and_then(|env| {
+            env.iter()
+                .rev()
+                .find_map(|&ctx| Context(ctx).get(self, symbol))
+        })
+    }
+
+    pub fn load_module(&mut self, module: &Module) -> Result<(), MemoryError> {
+        let mut ctx = self.get_top_env().ok_or(MemoryError::MemoryAccessError)?;
+        for (symbol, proc) in module.procs.iter() {
+            let id = self.natives.len();
+            self.natives.push(*proc);
+            let native_fn = Value::native_fn(id as u32);
+            let symbol = self.get_or_insert_symbol(symbol)?;
+            ctx = ctx
+                .add(self, symbol, native_fn)
+                .ok_or(MemoryError::MemoryAccessError)?;
+        }
+        self.set_top_env(ctx).ok_or(MemoryError::MemoryAccessError)
+    }
+
+    fn call(&mut self, id: u32, bp: u32) -> Result<(), MemoryError> {
+        if let Some(native_fn) = self.natives.get(id as usize) {
+            native_fn(self, bp as usize)
+        } else {
+            Err(MemoryError::FunctionNotFound(id))
+        }
     }
 
     fn encode_string(string: &str) -> [u32; 8] {
@@ -284,7 +417,7 @@ impl<'a> Memory<'a> {
     }
 
     #[allow(clippy::manual_memcpy)]
-    pub fn block(&mut self, stack_start: usize) -> Result<Value, MemoryError> {
+    pub fn block(&mut self, stack_start: usize) -> Result<Block, MemoryError> {
         if let Some(in_stack) = self.stack.get(stack_start..self.stack_ptr) {
             let len = in_stack.len();
             if let Some(in_heap) = self.heap.get_mut(self.heap_ptr..self.heap_ptr + len + 1) {
@@ -296,10 +429,7 @@ impl<'a> Memory<'a> {
                     let address = self.heap_ptr as Address;
                     self.heap_ptr += len + 1;
                     self.stack_ptr = stack_start;
-                    Ok(Value {
-                        tag: Value::BLOCK,
-                        value: address,
-                    })
+                    Ok(Block(address))
                 } else {
                     Err(MemoryError::OutOfMemory)
                 }
@@ -377,15 +507,14 @@ impl<'a> Memory<'a> {
         self.stack_ptr
     }
 
-    pub fn push(&mut self, value: Value) -> Result<(), MemoryError> {
-        if let Some(slot) = self.stack.get_mut(self.stack_ptr..self.stack_ptr + 2) {
-            slot[0] = value.tag;
-            slot[1] = value.value;
-            self.stack_ptr += 2;
-            Ok(())
-        } else {
-            Err(MemoryError::StackOverflow)
-        }
+    pub fn push(&mut self, value: Value) -> Option<()> {
+        self.stack
+            .get_mut(self.stack_ptr..self.stack_ptr + 2)
+            .map(|slot| {
+                slot[0] = value.tag;
+                slot[1] = value.value;
+                self.stack_ptr += 2;
+            })
     }
 
     pub fn pop_from(&mut self, bp: usize) -> Option<&[u32]> {
@@ -405,8 +534,28 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn clear(&mut self) -> Option<Value> {
+    pub fn clear_stack(&mut self) -> Option<Value> {
         self.peek(0).inspect(|_| self.stack_ptr = 0)
+    }
+
+    fn push_op(&mut self, value: Value) -> Option<()> {
+        self.ops
+            .get_mut(self.ops_ptr..self.ops_ptr + 3)
+            .map(|stack| {
+                stack[0] = value.tag;
+                stack[1] = value.value;
+                stack[2] = self.stack_ptr as u32;
+                self.ops_ptr += 3;
+            })
+    }
+
+    fn pop_op(&mut self) -> Option<&[u32]> {
+        if self.ops_ptr < 3 {
+            None
+        } else {
+            self.ops_ptr -= 3;
+            self.ops.get(self.ops_ptr..self.ops_ptr + 3)
+        }
     }
 }
 
@@ -424,6 +573,48 @@ mod tests {
         assert_eq!(symbol, 1);
         let symbol = layout.get_or_insert_symbol("hello")?;
         assert_eq!(symbol, 1);
+        Ok(())
+    }
+
+    pub fn run(input: &str) -> Result<Value, MemoryError> {
+        let mut bytes = vec![0; 0x10000];
+        let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
+        memory.load_module(&crate::boot::CORE_MODULE)?;
+        let block = Block::parse(&mut memory, input)?;
+        let ctx = Context::empty();
+        block.eval(&mut memory, ctx)
+    }
+
+    #[test]
+    fn test_set_get_word() -> anyhow::Result<()> {
+        let mut bytes = vec![0; 0x10000];
+        let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
+        let mut process = Process::new(&mut memory);
+        process.load_module(&crate::boot::CORE_MODULE)?;
+
+        let value = process.eval("x: 5")?;
+        assert_eq!(5 as i32, value.try_into()?);
+
+        let value = process.eval("x")?;
+        assert_eq!(5 as i32, value.try_into()?);
+
+        let value = process.eval("add x 2")?;
+        assert_eq!(7 as i32, value.try_into()?);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_read_all_1() -> anyhow::Result<()> {
+        let value = run("5")?;
+        assert_eq!(5 as i32, value.try_into()?);
+        Ok(())
+    }
+
+    #[test]
+    fn test_proc_1() -> anyhow::Result<()> {
+        let value = run("add 7 8")?;
+        assert_eq!(15 as i32, value.try_into()?);
         Ok(())
     }
 }
