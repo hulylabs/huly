@@ -1,21 +1,25 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::eval::{EvalError, Module};
-use crate::value::Value;
+use crate::value::{Block, Memory, Value};
 
-fn add(stack: &[u32]) -> anyhow::Result<Value> {
-    match stack {
-        [Value::INT, a, Value::INT, b, ..] => {
+fn add(memory: &mut Memory, bp: usize) -> anyhow::Result<()> {
+    match memory.pop_from(bp) {
+        Some([Value::INT, a, Value::INT, b, ..]) => {
             let result = *a as i32 + *b as i32;
-            Ok(result.into())
+            memory.push(result.into())?;
+            Ok(())
         }
         _ => Err(EvalError::BadArguments.into()),
     }
 }
 
-fn context(stack: &[u32]) -> anyhow::Result<Value> {
-    match stack {
-        [Value::BLOCK, address, ..] => Ok(Value::NONE),
+fn context(memory: &mut Memory, bp: usize) -> anyhow::Result<()> {
+    match memory.pop_from(bp) {
+        Some([Value::BLOCK, address, ..]) => {
+            let block = Block::new(*address);
+            Ok(())
+        }
         _ => Err(EvalError::BadArguments.into()),
     }
 }

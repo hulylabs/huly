@@ -29,7 +29,7 @@ pub enum EvalError {
 
 //
 
-pub type NativeFn = fn(&[u32]) -> anyhow::Result<Value>;
+pub type NativeFn = fn(&mut Memory, usize) -> anyhow::Result<()>;
 
 pub struct Module {
     pub procs: &'static [(&'static str, NativeFn)],
@@ -133,12 +133,7 @@ impl<'a, 'b> Process<'a, 'b> {
             match *op {
                 [Value::NATIVE_FN, id, bp] => {
                     if let Some(native_fn) = self.natives.get(id as usize) {
-                        if let Some(stack) = self.memory.pop_from(bp as usize) {
-                            let value = native_fn(stack)?;
-                            self.memory.push(value)?;
-                        } else {
-                            Err(EvalError::StackUnderflow)?
-                        }
+                        native_fn(self.memory, bp as usize)?
                     } else {
                         Err(EvalError::FunctionNotFound(id))?
                     }

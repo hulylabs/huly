@@ -71,6 +71,10 @@ impl TryFrom<Value> for i32 {
 }
 
 impl Block {
+    pub fn new(address: Address) -> Self {
+        Block(address)
+    }
+
     pub fn len(&self, memory: &Memory) -> Option<usize> {
         memory.heap.get(self.0 as usize).map(|&len| len as usize)
     }
