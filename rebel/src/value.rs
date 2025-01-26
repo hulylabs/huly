@@ -401,17 +401,8 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn pop_root(&mut self) -> Option<Value> {
-        if self.stack_ptr != 2 {
-            self.stack_ptr = 0;
-            None
-        } else {
-            self.stack_ptr = 0;
-            self.stack.get(0..2).map(|mem| Value {
-                tag: mem[0],
-                value: mem[1],
-            })
-        }
+    pub fn clear(&mut self) -> Option<Value> {
+        self.peek(0).inspect(|_| self.stack_ptr = 0)
     }
 }
 

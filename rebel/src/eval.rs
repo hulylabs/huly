@@ -155,7 +155,7 @@ impl<'a, 'b> Process<'a, 'b> {
                 _ => return Err(EvalError::InternalError.into()),
             }
         }
-        Ok(self.memory.pop_root().unwrap_or(Value::NONE))
+        Ok(self.memory.clear().unwrap_or(Value::NONE))
     }
 
     pub fn parse(&mut self, input: &str) -> Result<Block, ParseError> {
