@@ -69,7 +69,6 @@ impl<'a, 'b> Process<'a, 'b> {
         Ok(())
     }
 
-    #[inline(never)]
     fn push_op(&mut self, value: [u32; 3]) -> Result<(), EvalError> {
         if let Some(stack) = self.op_stack.get_mut(self.ops..self.ops + 3) {
             stack[0] = value[0];
