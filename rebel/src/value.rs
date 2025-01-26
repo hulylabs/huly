@@ -407,9 +407,9 @@ impl<'a> Memory<'a> {
             None
         } else {
             self.stack_ptr = 0;
-            Some(Value {
-                tag: self.stack[0],
-                value: self.stack[1],
+            self.stack.get(0..2).map(|mem| Value {
+                tag: mem[0],
+                value: mem[1],
             })
         }
     }
