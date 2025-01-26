@@ -31,7 +31,7 @@ pub enum EvalError {
 
 //
 
-pub type NativeFn = fn(&mut Memory) -> anyhow::Result<()>;
+pub type NativeFn = fn(&[u32]) -> anyhow::Result<Value>;
 
 pub struct Module {
     pub procs: &'static [(&'static str, NativeFn)],
@@ -44,14 +44,14 @@ pub struct Process<'a, 'b> {
     ops: usize,
     natives: Vec<NativeFn>,
     root_ctx: Context,
-    op_stack: [Value; OP_STACK_SIZE],
+    op_stack: [u32; OP_STACK_SIZE],
 }
 
 impl<'a, 'b> Process<'a, 'b> {
     pub fn new(memory: &'a mut Memory<'b>) -> Self {
         Self {
             memory,
-            op_stack: [Value::NONE; OP_STACK_SIZE],
+            op_stack: [0; OP_STACK_SIZE],
             ops: 0,
             natives: Vec::new(),
             root_ctx: Context::empty(),
@@ -69,38 +69,44 @@ impl<'a, 'b> Process<'a, 'b> {
         Ok(())
     }
 
-    fn push_op(&mut self, value: Value) -> Result<(), EvalError> {
-        if self.ops < OP_STACK_SIZE {
-            self.op_stack[self.ops] = value;
-            self.ops += 1;
+    fn push_op(&mut self, value: [u32; 3]) -> Result<(), EvalError> {
+        if self.ops + 3 <= OP_STACK_SIZE {
+            self.op_stack[self.ops] = value[0];
+            self.op_stack[self.ops + 1] = value[1];
+            self.op_stack[self.ops + 2] = value[2];
+            self.ops += 3;
             Ok(())
         } else {
             Err(EvalError::StackOverflow)
         }
     }
 
-    fn pop_op(&mut self) -> Option<Value> {
-        if self.ops == 0 {
+    fn pop_op(&mut self) -> Option<&[u32]> {
+        if self.ops < 3 {
             None
         } else {
-            self.ops -= 1;
-            self.op_stack.get(self.ops).copied()
+            self.ops -= 3;
+            self.op_stack.get(self.ops..self.ops + 3)
         }
     }
 
     fn push(&mut self, value: Value) -> Result<(), EvalError> {
         match value.tag() {
-            Value::NATIVE_FN => self.push_op(value),
-            Value::SET_WORD => self.push_op(value),
+            Value::NATIVE_FN => self.push_op([
+                value.tag(),
+                value.payload(),
+                self.memory.stack_pointer() as u32,
+            ]),
+            Value::SET_WORD => self.push_op([
+                value.tag(),
+                value.payload(),
+                self.memory.stack_pointer() as u32,
+            ]),
             _ => self.memory.push(value).map_err(EvalError::MemoryError),
         }
     }
 
-    fn pop(&mut self) -> Option<Value> {
-        self.memory.pop()
-    }
-
-    pub fn read(&mut self, value: Value) -> Result<(), EvalError> {
+    fn read(&mut self, value: Value) -> Result<(), EvalError> {
         match value.tag() {
             Value::WORD => self.push(
                 self.root_ctx
@@ -125,24 +131,31 @@ impl<'a, 'b> Process<'a, 'b> {
     }
 
     fn eval_stack(&mut self) -> anyhow::Result<Value> {
-        while let Some(proc) = self.pop_op() {
-            match proc.tag() {
-                Value::NATIVE_FN => {
-                    let id = proc.payload();
+        while let Some(op) = self.pop_op() {
+            match *op {
+                [Value::NATIVE_FN, id, bp] => {
                     if let Some(native_fn) = self.natives.get(id as usize) {
-                        native_fn(self.memory)?
+                        if let Some(stack) = self.memory.pop_from(bp as usize) {
+                            let value = native_fn(stack)?;
+                            self.memory.push(value)?;
+                        } else {
+                            Err(EvalError::StackUnderflow)?
+                        }
                     } else {
                         Err(EvalError::FunctionNotFound(id))?
                     }
                 }
-                Value::SET_WORD => {
-                    let value = self.memory.peek().ok_or(EvalError::StackUnderflow)?;
-                    self.root_ctx = self.root_ctx.add(self.memory, proc.payload(), value)?;
+                [Value::SET_WORD, sym, bp] => {
+                    let value = self
+                        .memory
+                        .peek(bp as usize)
+                        .ok_or(EvalError::StackUnderflow)?;
+                    self.root_ctx = self.root_ctx.add(self.memory, sym, value)?;
                 }
-                _ => Err(EvalError::InternalError)?,
+                _ => return Err(EvalError::InternalError.into()),
             }
         }
-        Ok(self.pop().unwrap_or(Value::NONE))
+        Ok(self.memory.pop_root().unwrap_or(Value::NONE))
     }
 
     pub fn parse(&mut self, input: &str) -> Result<Block, ParseError> {

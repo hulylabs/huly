@@ -384,28 +384,34 @@ impl<'a> Memory<'a> {
         }
     }
 
-    pub fn pop_frame(&mut self, size: usize) -> Option<&[u32]> {
-        self.stack_ptr.checked_sub(size * 2).and_then(|new_ptr| {
-            self.stack.get(new_ptr..self.stack_ptr).inspect(|_| {
-                self.stack_ptr = new_ptr;
-            })
+    pub fn pop_from(&mut self, bp: usize) -> Option<&[u32]> {
+        self.stack.get(bp..self.stack_ptr).inspect(|_| {
+            self.stack_ptr = bp;
         })
     }
 
-    pub fn pop(&mut self) -> Option<Value> {
-        self.pop_frame(1).map(|frame| Value {
-            tag: frame[0],
-            value: frame[1],
-        })
-    }
-
-    pub fn peek(&mut self) -> Option<Value> {
-        self.stack_ptr.checked_sub(2).and_then(|new_ptr| {
-            self.stack.get(new_ptr..self.stack_ptr).map(|mem| Value {
+    pub fn peek(&mut self, bp: usize) -> Option<Value> {
+        if bp + 2 > self.stack_ptr {
+            None
+        } else {
+            self.stack.get(bp..bp + 2).map(|mem| Value {
                 tag: mem[0],
                 value: mem[1],
             })
-        })
+        }
+    }
+
+    pub fn pop_root(&mut self) -> Option<Value> {
+        if self.stack_ptr != 2 {
+            self.stack_ptr = 0;
+            None
+        } else {
+            self.stack_ptr = 0;
+            Some(Value {
+                tag: self.stack[0],
+                value: self.stack[1],
+            })
+        }
     }
 }
 

@@ -1,20 +1,18 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::eval::{EvalError, Module};
-use crate::value::{Memory, Value};
+use crate::value::Value;
 
-fn add(memory: &mut Memory) -> anyhow::Result<()> {
-    if let Some(frame) = memory.pop_frame(2) {
-        match frame {
-            [Value::INT, a, Value::INT, b] => {
-                let result = *a as i32 + *b as i32;
-                memory.push(result.into())?;
-                Ok(())
-            }
-            _ => Err(EvalError::MismatchedType.into()),
+fn add(stack: &[u32]) -> anyhow::Result<Value> {
+    if stack.len() != 4 {
+        return Err(EvalError::NotEnoughArgs.into());
+    }
+    match stack {
+        [Value::INT, a, Value::INT, b] => {
+            let result = *a as i32 + *b as i32;
+            Ok(result.into())
         }
-    } else {
-        Err(EvalError::StackUnderflow.into())
+        _ => Err(EvalError::MismatchedType.into()),
     }
 }
 
