@@ -21,7 +21,7 @@ pub struct Value {
 impl Value {
     pub const INT: u32 = 0x0;
     const STRING: u32 = 0x1;
-    const BLOCK: u32 = 0x2;
+    pub const BLOCK: u32 = 0x2;
     const CONTEXT: u32 = 0x3;
     pub const WORD: u32 = 0x4;
     pub const SET_WORD: u32 = 0x5;

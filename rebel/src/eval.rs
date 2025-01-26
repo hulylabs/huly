@@ -7,16 +7,14 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EvalError {
+    #[error("Bad arguments")]
+    BadArguments,
     #[error("mismatched type")]
     MismatchedType,
-    #[error("not enough arguments")]
-    NotEnoughArgs,
     #[error(transparent)]
     ParseError(#[from] crate::parser::ParseError),
     #[error(transparent)]
     MemoryError(#[from] crate::value::MemoryError),
-    #[error("arity mismatch: expecting {0} parameters, provided {1}")]
-    ArityMismatch(usize, usize),
     #[error("Stack overflow")]
     StackOverflow,
     #[error("Stack underflow")]
