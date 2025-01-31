@@ -7,7 +7,6 @@ use std::arch::x86_64::*;
 use std::arch::aarch64::*;
 
 #[cfg(all(target_arch = "x86_64", target_feature = "sse4.2"))]
-#[inline(always)]
 pub fn hash_u32x8(input: &[u32; 8]) -> u32 {
     unsafe {
         let mut hash: u32 = 0;
@@ -19,7 +18,6 @@ pub fn hash_u32x8(input: &[u32; 8]) -> u32 {
 }
 
 #[cfg(all(target_arch = "aarch64", target_feature = "crc"))]
-#[inline(always)]
 pub fn hash_u32x8(input: &[u32; 8]) -> u32 {
     unsafe {
         let mut hash: u32 = 0;
@@ -34,58 +32,16 @@ pub fn hash_u32x8(input: &[u32; 8]) -> u32 {
     all(target_arch = "x86_64", target_feature = "sse4.2"),
     all(target_arch = "aarch64", target_feature = "crc")
 )))]
-#[inline(always)]
 pub fn hash_u32x8(input: &[u32; 8]) -> u32 {
     let mut h: u32 = 0x811C9DC5;
+    const PRIME: u32 = 0x01000193;
 
-    h ^= input[0];
-    h = h.wrapping_mul(0x01000193);
-    h ^= input[1];
-    h = h.wrapping_mul(0x01000193);
-    h ^= input[2];
-    h = h.wrapping_mul(0x01000193);
-    h ^= input[3];
-    h = h.wrapping_mul(0x01000193);
-    h ^= input[4];
-    h = h.wrapping_mul(0x01000193);
-    h ^= input[5];
-    h = h.wrapping_mul(0x01000193);
-    h ^= input[6];
-    h = h.wrapping_mul(0x01000193);
-    h ^= input[7];
-    h = h.wrapping_mul(0x01000193);
+    for &value in input {
+        h ^= value;
+        h = h.wrapping_mul(PRIME);
+    }
 
     h
-}
-
-// pub fn hash(arr: &[u32; 8]) -> u32 {
-//     let mut hash = 0x811c9dc5u32;
-
-//     const PRIMES: [u32; 8] = [
-//         0x85ebca77, 0xc2b2ae35, 0x27d4eb2f, 0x165667b1, 0xd3a99177, 0xa9bcae53, 0x71d13517,
-//         0xfd7046c5,
-//     ];
-
-//     for i in 0..8 {
-//         hash ^= arr[i].rotate_right(i as u32 * 3); // Rotate input before XOR
-//         hash = hash.rotate_left(13);
-//         hash = hash.wrapping_mul(PRIMES[i]);
-//         hash ^= hash.rotate_right(17); // Additional mixing step
-//     }
-
-//     // Final mixing
-//     hash ^= hash >> 16;
-//     hash = hash.wrapping_mul(0x85ebca6b);
-//     hash ^= hash >> 13;
-//     hash = hash.wrapping_mul(0xc2b2ae35);
-//     hash ^= hash >> 16;
-
-//     hash
-// }
-
-#[inline(never)]
-pub fn hash_test(value: &[u32; 8]) -> u32 {
-    hash_u32x8(value)
 }
 
 #[cfg(test)]
