@@ -5,5 +5,7 @@ pub type Address = Word;
 
 // pub mod core;
 // mod parse;
-pub mod mem;
+mod hash;
+mod mem;
+mod symbol;
 // mod stack;
