@@ -1,7 +1,19 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::RebelError;
 use std::str::CharIndices;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ParseError {
+    #[error("unexpected character: `{0}`")]
+    UnexpectedChar(char),
+    #[error("unexpected end of input")]
+    EndOfInput,
+    #[error("integer overflow")]
+    IntegerOverflow,
+    #[error("internal error")]
+    InternalError,
+}
 
 pub enum WordKind {
     Word,
@@ -9,11 +21,11 @@ pub enum WordKind {
 }
 
 pub trait Collector {
-    fn string(&self, string: &str) -> Result<(), RebelError>;
-    fn word(&self, kind: WordKind, word: &str) -> Result<(), RebelError>;
-    fn integer(&mut self, value: i32) -> Result<(), RebelError>;
-    fn begin_block(&self) -> Result<(), RebelError>;
-    fn end_block(&self) -> Result<(), RebelError>;
+    fn string(&self, string: &str) -> Result<(), ParseError>;
+    fn word(&self, kind: WordKind, word: &str) -> Result<(), ParseError>;
+    fn integer(&mut self, value: i32) -> Result<(), ParseError>;
+    fn begin_block(&self) -> Result<(), ParseError>;
+    fn end_block(&self) -> Result<(), ParseError>;
 }
 
 pub struct Parser<'a, C: Collector> {
@@ -43,22 +55,22 @@ where
         None
     }
 
-    fn parse_string(&mut self, pos: usize) -> Result<(), RebelError> {
+    fn parse_string(&mut self, pos: usize) -> Result<(), ParseError> {
         let start_pos = pos + 1; // Skip the opening quote
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
                 self.collector.string(
                     self.input
                         .get(start_pos..pos)
-                        .ok_or(RebelError::EndOfInput)?,
+                        .ok_or(ParseError::EndOfInput)?,
                 )?;
                 return Ok(());
             }
         }
-        Err(RebelError::EndOfInput)
+        Err(ParseError::EndOfInput)
     }
 
-    fn parse_word(&mut self, start_pos: usize) -> Result<bool, RebelError> {
+    fn parse_word(&mut self, start_pos: usize) -> Result<bool, ParseError> {
         for (pos, char) in self.cursor.by_ref() {
             match char {
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
@@ -67,7 +79,7 @@ where
                         WordKind::SetWord,
                         self.input
                             .get(start_pos..pos)
-                            .ok_or(RebelError::EndOfInput)?,
+                            .ok_or(ParseError::EndOfInput)?,
                     )?;
                     return Ok(false);
                 }
@@ -76,21 +88,21 @@ where
                         WordKind::Word,
                         self.input
                             .get(start_pos..pos)
-                            .ok_or(RebelError::EndOfInput)?,
+                            .ok_or(ParseError::EndOfInput)?,
                     )?;
                     return Ok(c == ']');
                 }
-                _ => return Err(RebelError::UnexpectedChar(char)),
+                _ => return Err(ParseError::UnexpectedChar(char)),
             }
         }
         self.collector.word(
             WordKind::Word,
-            self.input.get(start_pos..).ok_or(RebelError::EndOfInput)?,
+            self.input.get(start_pos..).ok_or(ParseError::EndOfInput)?,
         )?;
         Ok(false)
     }
 
-    fn parse_number(&mut self, char: char) -> Result<bool, RebelError> {
+    fn parse_number(&mut self, char: char) -> Result<bool, ParseError> {
         let mut value: i32 = 0;
         let mut is_negative = false;
         let mut has_digits = false;
@@ -102,21 +114,21 @@ where
                 is_negative = true;
             }
             c if c.is_ascii_digit() => {
-                value = c.to_digit(10).ok_or(RebelError::InternalError)? as i32;
+                value = c.to_digit(10).ok_or(ParseError::InternalError)? as i32;
                 has_digits = true;
             }
-            _ => return Err(RebelError::UnexpectedChar(char).into()),
+            _ => return Err(ParseError::UnexpectedChar(char).into()),
         }
 
         for (_, char) in self.cursor.by_ref() {
             match char {
                 c if c.is_ascii_digit() => {
                     has_digits = true;
-                    let digit = c.to_digit(10).ok_or(RebelError::InternalError)? as i32;
+                    let digit = c.to_digit(10).ok_or(ParseError::InternalError)? as i32;
                     value = value
                         .checked_mul(10)
                         .and_then(|v| v.checked_add(digit))
-                        .ok_or(RebelError::IntegerOverflow)?;
+                        .ok_or(ParseError::IntegerOverflow)?;
                 }
                 ']' => {
                     end_of_block = true;
@@ -126,15 +138,15 @@ where
             }
         }
         if !has_digits {
-            return Err(RebelError::EndOfInput.into());
+            return Err(ParseError::EndOfInput);
         }
         if is_negative {
-            value = value.checked_neg().ok_or(RebelError::IntegerOverflow)?;
+            value = value.checked_neg().ok_or(ParseError::IntegerOverflow)?;
         }
         self.collector.integer(value).map(|_| end_of_block)
     }
 
-    fn parse(&mut self) -> Result<(), RebelError> {
+    fn parse(&mut self) -> Result<(), ParseError> {
         while let Some((pos, char)) = self.skip_whitespace() {
             match char {
                 '[' => self.collector.begin_block()?,
@@ -142,15 +154,15 @@ where
                 '"' => self.parse_string(pos)?,
                 c if c.is_ascii_alphabetic() => {
                     if self.parse_word(pos)? {
-                        self.collector.end_block();
+                        self.collector.end_block()?;
                     }
                 }
                 c if c.is_ascii_digit() || c == '+' || c == '-' => {
                     if self.parse_number(c)? {
-                        self.collector.end_block();
+                        self.collector.end_block()?;
                     }
                 }
-                _ => return Err(RebelError::UnexpectedChar(char).into()),
+                _ => return Err(ParseError::UnexpectedChar(char).into()),
             }
         }
         Ok(())
