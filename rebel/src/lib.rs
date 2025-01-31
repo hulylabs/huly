@@ -7,5 +7,4 @@ pub type Offset = Word;
 mod hash;
 mod mem;
 mod parse;
-mod symbol;
 // mod stack;

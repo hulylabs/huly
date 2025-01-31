@@ -145,17 +145,17 @@ impl<T> Stack<T>
 where
     T: AsMut<[Word]>,
 {
-    pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Option<Offset> {
+    pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Option<()> {
         self.data
             .as_mut()
             .split_first_mut()
             .and_then(|(size, slot)| {
-                let result = *size;
-                let len = result as usize;
+                let len = *size as usize;
                 let remaining = slot.len() - len;
                 if remaining < N {
                     None
                 } else {
+                    *size += N as u32;
                     slot.get_mut(len..len + N).map(|items| {
                         items
                             .iter_mut()
@@ -163,25 +163,24 @@ where
                             .for_each(|(slot, value)| {
                                 *slot = *value;
                             })
-                    })?;
-                    *size += N as u32;
-                    Some(result)
+                    })
+                    // Some(result)
                 }
             })
     }
 
-    pub fn push_all(&mut self, values: &[Word]) -> Option<Offset> {
+    pub fn push_all(&mut self, values: &[Word]) -> Option<()> {
         self.data
             .as_mut()
             .split_first_mut()
             .and_then(|(size, slot)| {
-                let result = *size;
-                let len = result as usize;
+                let len = *size as usize;
                 let remaining = slot.len() - len;
                 let values_len = values.len();
                 if remaining < values_len {
                     None
                 } else {
+                    *size += values_len as u32;
                     slot.get_mut(len..len + values_len).map(|items| {
                         items
                             .iter_mut()
@@ -189,9 +188,7 @@ where
                             .for_each(|(slot, value)| {
                                 *slot = *value;
                             })
-                    })?;
-                    *size += values_len as u32;
-                    Some(result)
+                    })
                 }
             })
     }
@@ -287,7 +284,8 @@ where
                     let stored_offset = *offset;
 
                     if stored_offset == 0 {
-                        let address = heap.push(str.buf)?;
+                        let address = heap.len()?;
+                        heap.push(str.buf)?;
                         *offset = address;
                         *count = *count + 1;
                         return Some(address);
@@ -349,19 +347,19 @@ where
             WordKind::Word => Tag::Word,
             WordKind::SetWord => Tag::SetWord,
         };
-        self.stack.push([tag.into(), offset]).map(|_| ())
+        self.stack.push([tag.into(), offset])
     }
 
     fn integer(&mut self, value: i32) -> Option<()> {
-        self.stack.push([Tag::Int.into(), value as u32]).map(|_| ())
+        self.stack.push([Tag::Int.into(), value as u32])
     }
 
     fn begin_block(&mut self) -> Option<()> {
-        self.ops.push([self.stack.len()?]).map(|_| ())
+        self.ops.push([self.stack.len()?])
     }
 
     fn end_block(&mut self) -> Option<()> {
         let block = self.stack.pop_all(self.ops.pop::<1>()?[0])?;
-        self.heap.push_all(block).map(|_| ())
+        self.heap.push_all(block)
     }
 }
