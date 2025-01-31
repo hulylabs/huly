@@ -29,7 +29,6 @@ impl From<Tag> for Word {
 
 pub struct Memory<T> {
     data: T,
-    symbols: Offset,
     heap: Offset,
     stack: Offset,
     ops: Offset,
@@ -72,7 +71,6 @@ where
 
         Some(Self {
             data,
-            symbols: 0,
             heap,
             stack,
             ops,
@@ -110,14 +108,12 @@ where
 
     pub fn layout(
         &mut self,
-    ) -> Option<
-        ((
-            SymbolTable<&mut [Word]>,
-            Stack<&mut [Word]>,
-            Stack<&mut [Word]>,
-            Stack<&mut [Word]>,
-        )),
-    > {
+    ) -> Option<(
+        SymbolTable<&mut [Word]>,
+        Stack<&mut [Word]>,
+        Stack<&mut [Word]>,
+        Stack<&mut [Word]>,
+    )> {
         let (rest, stack) = self
             .data
             .as_mut()
