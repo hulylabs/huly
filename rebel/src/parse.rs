@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::mem::{Collector, WordKind};
+use crate::mem::{Collector, ParseCollector, WordKind};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -175,35 +175,37 @@ where
 
 #[cfg(test)]
 mod tests {
-    // use super::*;
+    use crate::mem::Memory;
 
-    // #[test]
-    // fn test_whitespace_1() -> Result<(), MemoryError> {
-    //     let input = "  \t\n  ";
+    use super::*;
 
-    //     let mut mem = vec![0; 0x10000];
-    //     let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
-    //     let mut iter = ParseIterator::new(input, &mut layout);
+    #[test]
+    fn test_whitespace_1() -> Result<(), ParseError> {
+        let input = "  \t\n  ";
 
-    //     let value = iter.next();
-    //     assert!(value.is_none());
-    //     Ok(())
-    // }
+        let mut buf = vec![0; 0x10000];
+        let mut mem = Memory::new(&mut buf, 0x1000).ok_or(ParseError::MemoryError)?;
+        let layout = mem.layout().ok_or(ParseError::MemoryError)?;
+        let collector = ParseCollector::new(layout);
+        let mut parser = Parser::new(input, collector);
 
-    // #[test]
-    // fn test_string_1() -> Result<(), MemoryError> {
-    //     let input = "\"hello\"  \n ";
+        parser.parse()?;
+        Ok(())
+    }
 
-    //     let mut mem = vec![0; 0x10000];
-    //     let mut layout = Memory::new(&mut mem, 0x1000, 0x1000)?;
-    //     let block: Vec<_> = ParseIterator::new(input, &mut layout)
-    //         .filter_map(Result::ok)
-    //         .collect();
+    #[test]
+    fn test_string_1() -> Result<(), ParseError> {
+        let input = "\"hello\"  \n ";
 
-    //     assert_eq!(block.len(), 1);
-    //     assert_eq!(layout.as_str(block[0])?, "hello");
-    //     Ok(())
-    // }
+        let mut buf = vec![0; 0x10000];
+        let mut mem = Memory::new(&mut buf, 0x1000).ok_or(ParseError::MemoryError)?;
+        let layout = mem.layout().ok_or(ParseError::MemoryError)?;
+        let collector = ParseCollector::new(layout);
+        let mut parser = Parser::new(input, collector);
+
+        parser.parse()?;
+        Ok(())
+    }
 
     // #[test]
     // fn test_block_1() -> Result<(), MemoryError> {
