@@ -3,6 +3,7 @@
 pub type Word = u32;
 pub type Address = Word;
 
-pub mod core;
-mod parse;
-mod stack;
+// pub mod core;
+// mod parse;
+pub mod mem;
+// mod stack;

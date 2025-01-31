@@ -22,12 +22,13 @@ where
     pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Option<()> {
         self.data
             .as_mut()
-            .get_mut(self.sp..self.sp + N)
-            .map(|slot| {
-                slot.iter_mut().zip(value.iter()).for_each(|(slot, value)| {
-                    *slot = *value;
-                });
-                self.sp += N;
+            .split_first()
+            .map(|(len, slot)| {
+                slot.split_first().map(|len, items|{
+                    items.iter_mut().zip(value.iter()).for_each(|(item, value)| {
+                        *item = *value;
+                    });
+                    len += N;
             })
     }
 
