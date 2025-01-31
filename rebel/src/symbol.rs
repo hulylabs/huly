@@ -1,6 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use super::{Offset, Word};
+use crate::hash::hash_u32x8;
 use crate::mem::Stack;
 
 // S Y M B O L
@@ -25,7 +26,7 @@ impl InlineString {
     }
 
     pub fn hash(&self) -> u32 {
-        crate::hash::hash(&self.buf)
+        hash_u32x8(&self.buf)
     }
 }
 

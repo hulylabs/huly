@@ -4,8 +4,8 @@ pub type Word = u32;
 pub type Offset = Word;
 
 // pub mod core;
-pub mod hash;
+mod hash;
 mod mem;
 mod parse;
-// mod symbol;
+mod symbol;
 // mod stack;

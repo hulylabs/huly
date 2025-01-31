@@ -2,6 +2,25 @@
 
 use super::{Offset, Word};
 
+// T A G
+
+#[repr(u32)]
+enum Tag {
+    Int,
+    Block,
+}
+
+pub enum WordKind {
+    Word,
+    SetWord,
+}
+
+impl From<Tag> for Word {
+    fn from(tag: Tag) -> Self {
+        tag as Word
+    }
+}
+
 // M E M O R Y
 
 pub struct Memory<T> {
@@ -100,6 +119,10 @@ where
         Self { data }
     }
 
+    pub fn len(&self) -> Option<Word> {
+        self.data.as_ref().get(0).copied()
+    }
+
     pub fn peek<const N: usize>(&self, offset: Offset) -> Option<[Word; N]> {
         let offset = offset as usize;
         self.data.as_ref().split_first().and_then(|(_, slot)| {
@@ -138,6 +161,32 @@ where
             })
     }
 
+    pub fn push_all(&mut self, values: &[Word]) -> Option<Offset> {
+        self.data
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(size, slot)| {
+                let result = *size;
+                let len = result as usize;
+                let remaining = slot.len() - len;
+                let values_len = values.len();
+                if remaining < values_len {
+                    None
+                } else {
+                    slot.get_mut(len..len + values_len).map(|items| {
+                        items
+                            .iter_mut()
+                            .zip(values.iter())
+                            .for_each(|(slot, value)| {
+                                *slot = *value;
+                            })
+                    })?;
+                    *size += values_len as u32;
+                    Some(result)
+                }
+            })
+    }
+
     fn pop<const N: usize>(&mut self) -> Option<[Word; N]> {
         self.data
             .as_mut()
@@ -155,5 +204,72 @@ where
                     })
                 })
             })
+    }
+
+    fn pop_all(&mut self, offset: Offset) -> Option<&[Word]> {
+        self.data
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(size, slot)| {
+                size.checked_sub(offset).and_then(|sp| {
+                    let len = sp as usize;
+                    *size = sp;
+                    slot.get(len..len + offset as usize)
+                })
+            })
+    }
+}
+
+// P A R S E  C O L L E C T O R
+
+pub trait Collector {
+    fn string(&self, string: &str) -> Option<()>;
+    fn word(&self, kind: WordKind, word: &str) -> Option<()>;
+    fn integer(&mut self, value: i32) -> Option<()>;
+    fn begin_block(&mut self) -> Option<()>;
+    fn end_block(&mut self) -> Option<()>;
+}
+
+pub struct ParseCollector<T> {
+    ops: Stack<T>,
+    stack: Stack<T>,
+    heap: Stack<T>,
+}
+
+impl<T> ParseCollector<T>
+where
+    T: AsMut<[Word]> + AsRef<[Word]>,
+{
+    pub fn new(ops: Stack<T>, stack: Stack<T>, heap: Stack<T>) -> Self {
+        Self { ops, stack, heap }
+    }
+}
+
+impl<T> Collector for ParseCollector<T>
+where
+    T: AsMut<[Word]> + AsRef<[Word]>,
+{
+    fn string(&self, string: &str) -> Option<()> {
+        unimplemented!()
+    }
+
+    fn word(&self, kind: WordKind, word: &str) -> Option<()> {
+        unimplemented!()
+    }
+
+    fn integer(&mut self, value: i32) -> Option<()> {
+        self.stack.push([Tag::Int.into(), value as u32])?;
+        Some(())
+    }
+
+    fn begin_block(&mut self) -> Option<()> {
+        self.ops.push([self.stack.len()?])?;
+        Some(())
+    }
+
+    fn end_block(&mut self) -> Option<()> {
+        let block = self.stack.pop_all(self.ops.pop::<1>()?[0])?;
+        self.heap.push_all(block)?;
+        Some(())
     }
 }

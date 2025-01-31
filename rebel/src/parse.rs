@@ -1,5 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
+use crate::mem::{Collector, WordKind};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -13,19 +14,8 @@ pub enum ParseError {
     IntegerOverflow,
     #[error("internal error")]
     InternalError,
-}
-
-pub enum WordKind {
-    Word,
-    SetWord,
-}
-
-pub trait Collector {
-    fn string(&self, string: &str) -> Result<(), ParseError>;
-    fn word(&self, kind: WordKind, word: &str) -> Result<(), ParseError>;
-    fn integer(&mut self, value: i32) -> Result<(), ParseError>;
-    fn begin_block(&self) -> Result<(), ParseError>;
-    fn end_block(&self) -> Result<(), ParseError>;
+    #[error("memory error")]
+    MemoryError,
 }
 
 pub struct Parser<'a, C: Collector> {
@@ -59,11 +49,13 @@ where
         let start_pos = pos + 1; // Skip the opening quote
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
-                self.collector.string(
-                    self.input
-                        .get(start_pos..pos)
-                        .ok_or(ParseError::EndOfInput)?,
-                )?;
+                self.collector
+                    .string(
+                        self.input
+                            .get(start_pos..pos)
+                            .ok_or(ParseError::EndOfInput)?,
+                    )
+                    .ok_or(ParseError::MemoryError)?;
                 return Ok(());
             }
         }
@@ -75,30 +67,36 @@ where
             match char {
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
                 ':' => {
-                    self.collector.word(
-                        WordKind::SetWord,
-                        self.input
-                            .get(start_pos..pos)
-                            .ok_or(ParseError::EndOfInput)?,
-                    )?;
+                    self.collector
+                        .word(
+                            WordKind::SetWord,
+                            self.input
+                                .get(start_pos..pos)
+                                .ok_or(ParseError::EndOfInput)?,
+                        )
+                        .ok_or(ParseError::MemoryError)?;
                     return Ok(false);
                 }
                 c if c.is_ascii_whitespace() || c == ']' => {
-                    self.collector.word(
-                        WordKind::Word,
-                        self.input
-                            .get(start_pos..pos)
-                            .ok_or(ParseError::EndOfInput)?,
-                    )?;
+                    self.collector
+                        .word(
+                            WordKind::Word,
+                            self.input
+                                .get(start_pos..pos)
+                                .ok_or(ParseError::EndOfInput)?,
+                        )
+                        .ok_or(ParseError::MemoryError)?;
                     return Ok(c == ']');
                 }
                 _ => return Err(ParseError::UnexpectedChar(char)),
             }
         }
-        self.collector.word(
-            WordKind::Word,
-            self.input.get(start_pos..).ok_or(ParseError::EndOfInput)?,
-        )?;
+        self.collector
+            .word(
+                WordKind::Word,
+                self.input.get(start_pos..).ok_or(ParseError::EndOfInput)?,
+            )
+            .ok_or(ParseError::MemoryError)?;
         Ok(false)
     }
 
@@ -143,23 +141,29 @@ where
         if is_negative {
             value = value.checked_neg().ok_or(ParseError::IntegerOverflow)?;
         }
-        self.collector.integer(value).map(|_| end_of_block)
+        self.collector
+            .integer(value)
+            .map(|_| end_of_block)
+            .ok_or(ParseError::MemoryError)
     }
 
     fn parse(&mut self) -> Result<(), ParseError> {
         while let Some((pos, char)) = self.skip_whitespace() {
             match char {
-                '[' => self.collector.begin_block()?,
-                ']' => self.collector.end_block()?,
+                '[' => self
+                    .collector
+                    .begin_block()
+                    .ok_or(ParseError::MemoryError)?,
+                ']' => self.collector.end_block().ok_or(ParseError::MemoryError)?,
                 '"' => self.parse_string(pos)?,
                 c if c.is_ascii_alphabetic() => {
                     if self.parse_word(pos)? {
-                        self.collector.end_block()?;
+                        self.collector.end_block().ok_or(ParseError::MemoryError)?;
                     }
                 }
                 c if c.is_ascii_digit() || c == '+' || c == '-' => {
                     if self.parse_number(c)? {
-                        self.collector.end_block()?;
+                        self.collector.end_block().ok_or(ParseError::MemoryError)?;
                     }
                 }
                 _ => return Err(ParseError::UnexpectedChar(char).into()),
