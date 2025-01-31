@@ -1,28 +1,28 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use super::{Address, Word};
+use super::{Offset, Word};
 
 // M E M O R Y
 
 pub struct Memory<T> {
     data: T,
-    heap: Address,
-    stack: Address,
-    ops: Address,
+    heap: Offset,
+    stack: Offset,
+    ops: Offset,
 }
 
 impl<T> Memory<T>
 where
     T: AsRef<[Word]>,
 {
-    fn len(&self, address: Address) -> Option<usize> {
+    fn len(&self, address: Offset) -> Option<usize> {
         self.data
             .as_ref()
             .get(address as usize)
             .map(|len| *len as usize)
     }
 
-    fn slice_get(&self, address: Address) -> Option<&[Word]> {
+    fn slice_get(&self, address: Offset) -> Option<&[Word]> {
         let address = address as usize;
         let len = self.data.as_ref().get(address).copied()? as usize;
         self.data.as_ref().get(address + 1..address + len)
@@ -40,8 +40,8 @@ where
     const STACK_SIZE: u32 = 1024;
     const OPS_SIZE: u32 = 256;
 
-    pub fn new(data: T, heap: Address) -> Option<Self> {
-        let len = data.as_ref().len() as Address;
+    pub fn new(data: T, heap: Offset) -> Option<Self> {
+        let len = data.as_ref().len() as Offset;
         let stack = len.checked_sub(Self::STACK_SIZE)?;
         let ops = stack.checked_sub(Self::OPS_SIZE)?;
         let heap_size = ops.checked_sub(heap)?;
@@ -60,13 +60,13 @@ where
         Some(mem)
     }
 
-    fn slice_get_mut(&mut self, address: Address) -> Option<&mut [Word]> {
+    fn slice_get_mut(&mut self, address: Offset) -> Option<&mut [Word]> {
         let address = address as usize;
         let len = self.data.as_ref().get(address).copied()? as usize;
         self.data.as_mut().get_mut(address + 1..address + len)
     }
 
-    fn alloc(&mut self, address: Address, size: Address) -> Option<()> {
+    fn alloc(&mut self, address: Offset, size: Offset) -> Option<()> {
         self.data
             .as_mut()
             .get_mut(address as usize)
@@ -100,7 +100,7 @@ where
         Self { data }
     }
 
-    fn peek<const N: usize>(&self, offset: Address) -> Option<[Word; N]> {
+    pub fn peek<const N: usize>(&self, offset: Offset) -> Option<[Word; N]> {
         let offset = offset as usize;
         self.data.as_ref().split_first().and_then(|(_, slot)| {
             slot.get(offset..offset + N)
@@ -113,17 +113,17 @@ impl<T> Stack<T>
 where
     T: AsMut<[Word]>,
 {
-    fn push<const N: usize>(&mut self, value: [Word; N]) -> Option<()> {
+    pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Option<Offset> {
         self.data
             .as_mut()
             .split_first_mut()
             .and_then(|(size, slot)| {
-                let len = *size as usize;
+                let result = *size;
+                let len = result as usize;
                 let remaining = slot.len() - len;
                 if remaining < N {
                     None
                 } else {
-                    *size += N as u32;
                     slot.get_mut(len..len + N).map(|items| {
                         items
                             .iter_mut()
@@ -131,7 +131,9 @@ where
                             .for_each(|(slot, value)| {
                                 *slot = *value;
                             })
-                    })
+                    })?;
+                    *size += N as u32;
+                    Some(result)
                 }
             })
     }
