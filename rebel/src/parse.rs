@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::mem::{Collector, ParseCollector, WordKind};
+use crate::mem::{Collector, WordKind};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -186,8 +186,7 @@ mod tests {
         let mut buf = vec![0; 0x10000];
         let mut mem = Memory::new(&mut buf, 0x1000).ok_or(ParseError::MemoryError)?;
         let layout = mem.layout().ok_or(ParseError::MemoryError)?;
-        let collector = ParseCollector::new(layout);
-        let mut parser = Parser::new(input, collector);
+        let mut parser = Parser::new(input, layout);
 
         parser.parse()?;
         Ok(())
@@ -200,8 +199,7 @@ mod tests {
         let mut buf = vec![0; 0x10000];
         let mut mem = Memory::new(&mut buf, 0x1000).ok_or(ParseError::MemoryError)?;
         let layout = mem.layout().ok_or(ParseError::MemoryError)?;
-        let collector = ParseCollector::new(layout);
-        let mut parser = Parser::new(input, collector);
+        let mut parser = Parser::new(input, layout);
 
         parser.parse()?;
         Ok(())

@@ -27,33 +27,18 @@ impl From<Tag> for Word {
 
 // M E M O R Y
 
+pub struct MemoryLayout<T> {
+    ops: Stack<T>,
+    stack: Stack<T>,
+    heap: Stack<T>,
+    symbols: SymbolTable<T>,
+}
+
 pub struct Memory<T> {
     data: T,
     heap: Offset,
     stack: Offset,
     ops: Offset,
-}
-
-impl<T> Memory<T>
-where
-    T: AsRef<[Word]>,
-{
-    // fn len(&self, address: Offset) -> Option<usize> {
-    //     self.data
-    //         .as_ref()
-    //         .get(address as usize)
-    //         .map(|len| *len as usize)
-    // }
-
-    // fn slice_get(&self, address: Offset) -> Option<&[Word]> {
-    //     let address = address as usize;
-    //     let len = self.data.as_ref().get(address).copied()? as usize;
-    //     self.data.as_ref().get(address + 1..address + len)
-    // }
-
-    // fn get_heap(&self) -> Option<Stack<&[Word]>> {
-    //     self.slice_get(self.heap).map(Stack::new)
-    // }
 }
 
 impl<T> Memory<T>
@@ -77,55 +62,19 @@ where
         })
     }
 
-    // fn slice_get_mut(&mut self, address: Offset) -> Option<&mut [Word]> {
-    //     let address = address as usize;
-    //     let len = self.data.as_ref().get(address).copied()? as usize;
-    //     self.data.as_mut().get_mut(address + 1..address + len)
-    // }
-
-    // fn alloc(&mut self, address: Offset, size: Offset) -> Option<()> {
-    //     self.data
-    //         .as_mut()
-    //         .get_mut(address as usize)
-    //         .map(|len| *len = size)
-    // }
-
-    // fn get_heap_mut(&mut self) -> Option<Stack<&mut [Word]>> {
-    //     self.slice_get_mut(self.heap).map(Stack::new)
-    // }
-
-    // fn get_stack_mut(&mut self) -> Option<Stack<&mut [Word]>> {
-    //     self.slice_get_mut(self.stack).map(Stack::new)
-    // }
-
-    // fn get_ops_mut(&mut self) -> Option<Stack<&mut [Word]>> {
-    //     self.slice_get_mut(self.ops).map(Stack::new)
-    // }
-
-    // fn get_symbols_mut(&mut self) -> Option<SymbolTable<&mut [Word]>> {
-    //     self.slice_get_mut(self.symbols).map(SymbolTable::new)
-    // }
-
-    pub fn layout(
-        &mut self,
-    ) -> Option<(
-        SymbolTable<&mut [Word]>,
-        Stack<&mut [Word]>,
-        Stack<&mut [Word]>,
-        Stack<&mut [Word]>,
-    )> {
+    pub fn layout(&mut self) -> Option<MemoryLayout<&mut [Word]>> {
         let (rest, stack) = self
             .data
             .as_mut()
             .split_at_mut_checked(self.stack as usize)?;
         let (rest, ops) = rest.split_at_mut_checked(self.ops as usize)?;
         let (symbols, heap) = rest.split_at_mut_checked(self.heap as usize)?;
-        Some((
-            SymbolTable::new(symbols),
-            Stack::new(heap),
-            Stack::new(ops),
-            Stack::new(stack),
-        ))
+        Some(MemoryLayout {
+            symbols: SymbolTable::new(symbols),
+            heap: Stack::new(heap),
+            ops: Stack::new(ops),
+            stack: Stack::new(stack),
+        })
     }
 }
 
@@ -321,25 +270,7 @@ pub trait Collector {
     fn end_block(&mut self) -> Option<()>;
 }
 
-pub struct ParseCollector<T> {
-    ops: Stack<T>,
-    stack: Stack<T>,
-    heap: Stack<T>,
-    symbols: SymbolTable<T>,
-}
-
-impl<T> ParseCollector<T> {
-    pub fn new(layout: (SymbolTable<T>, Stack<T>, Stack<T>, Stack<T>)) -> Self {
-        Self {
-            symbols: layout.0,
-            heap: layout.1,
-            ops: layout.2,
-            stack: layout.3,
-        }
-    }
-}
-
-impl<T> Collector for ParseCollector<T>
+impl<T> Collector for MemoryLayout<T>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
