@@ -68,22 +68,15 @@ where
         let len = data.as_ref().len() as Offset;
         let stack = len.checked_sub(Self::STACK_SIZE)?;
         let ops = stack.checked_sub(Self::OPS_SIZE)?;
-        let heap_size = ops.checked_sub(heap)?;
+        // let heap_size = ops.checked_sub(heap)?;
 
-        let mut mem = Self {
+        Some(Self {
             data,
             symbols: 0,
             heap,
             stack,
             ops,
-        };
-
-        // mem.alloc(0, heap)?; // symbol table
-        // mem.alloc(heap, heap_size)?;
-        // mem.alloc(ops, Self::OPS_SIZE)?;
-        // mem.alloc(stack, Self::STACK_SIZE)?;
-
-        Some(mem)
+        })
     }
 
     // fn slice_get_mut(&mut self, address: Offset) -> Option<&mut [Word]> {
@@ -383,7 +376,7 @@ where
 
     fn end_block(&mut self) -> Option<()> {
         println!("end_block");
-        let block = self.stack.pop_all(self.ops.pop::<1>()?[0])?;
-        self.heap.push_all(block)
+        let block_data = self.stack.pop_all(self.ops.pop::<1>()?[0])?;
+        self.heap.push_all(block_data)
     }
 }
