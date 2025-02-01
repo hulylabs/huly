@@ -1,34 +1,22 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use super::Word;
-use crate::parse::{Collector, WordKind};
-use crate::stack::{Stack, StackIter};
-use thiserror::Error;
-
-#[derive(Debug, Error)]
-pub enum RebelError {
-    #[error("out of memory")]
-    OutOfMemory,
-    #[error("Stack overflow")]
-    StackOverflow,
-    #[error("Stack underflow")]
-    StackUnderflow,
-    #[error("unexpected character: `{0}`")]
-    UnexpectedChar(char),
-    #[error("unexpected end of input")]
-    EndOfInput,
-    #[error("integer overflow")]
-    IntegerOverflow,
-    #[error("internal error")]
-    InternalError,
-}
+use super::{Offset, Word};
+use crate::hash::hash_u32x8;
 
 // T A G
 
-#[repr(u32)]
 enum Tag {
-    Int,
-    Block,
+    None = 0,
+    Int = 1,
+    Block = 2,
+    String = 3,
+    Word = 4,
+    SetWord = 5,
+}
+
+pub enum WordKind {
+    Word,
+    SetWord,
 }
 
 impl From<Tag> for Word {
@@ -37,119 +25,414 @@ impl From<Tag> for Word {
     }
 }
 
-// B L O C K
+const TAG_NONE: Word = Tag::None as Word;
+const TAG_INT: Word = Tag::Int as Word;
+const TAG_BLOCK: Word = Tag::Block as Word;
+const TAG_STRING: Word = Tag::String as Word;
+const TAG_WORD: Word = Tag::Word as Word;
+const TAG_SET_WORD: Word = Tag::SetWord as Word;
 
-pub struct Block {
-    address: Word,
+impl From<Word> for Tag {
+    fn from(word: Word) -> Self {
+        match word {
+            TAG_NONE => Tag::None,
+            TAG_INT => Tag::Int,
+            TAG_BLOCK => Tag::Block,
+            TAG_STRING => Tag::String,
+            TAG_WORD => Tag::Word,
+            TAG_SET_WORD => Tag::SetWord,
+            _ => Tag::None,
+        }
+    }
 }
 
-impl Block {
-    fn new(address: Word) -> Self {
-        Self { address }
+// V A L U E
+
+struct Value {
+    tag: Tag,
+    value: Word,
+}
+
+impl Value {
+    fn new(tag: Tag, value: Word) -> Self {
+        Self { tag, value }
+    }
+}
+
+impl From<Value> for [Word; 2] {
+    fn from(value: Value) -> Self {
+        [value.tag.into(), value.value]
+    }
+}
+
+// B L O C K
+
+struct Block<T>(T);
+
+impl<T> Block<T>
+where
+    T: AsRef<[Word]>,
+{
+    fn get_block(&self, addr: Offset) -> Option<Block<&[Word]>> {
+        let data = self.0.as_ref();
+        let addr = addr as usize;
+        let len = data.get(addr).copied()? as usize;
+        let start = addr + 1;
+        data.get(start..start + len).map(|block| Block(block))
     }
 
-    pub fn len<H>(&self, memory: &Memory<H, (), (), ()>) -> Option<usize>
-    where
-        H: AsRef<[Word]>,
-    {
-        memory
-            .heap
-            .peek::<1>(self.address)
-            .map(|[len]| *len as usize)
+    fn peek<const N: usize>(&self, addr: Offset) -> Option<[u32; N]> {
+        self.get_block(addr).map(|block| {
+            let mut words = [0; N];
+            block.0.iter().enumerate().for_each(|(i, slot)| {
+                words[i] = *slot;
+            });
+            words
+        })
+    }
+}
+
+impl<T> Block<T>
+where
+    T: AsMut<[Word]>,
+{
+    fn init(&mut self, size: u32) -> Option<()> {
+        self.0.as_mut().first_mut().map(|slot| *slot = size)
     }
 
-    pub fn items<'a, H>(self, memory: &'a Memory<H, (), (), ()>) -> Option<StackIter<'a>>
+    fn poke<const N: usize>(&mut self, addr: Offset, words: [u32; N]) -> Option<()> {
+        let (len, data) = self.0.as_mut().split_first_mut()?;
+        let addr = addr as usize;
+        if addr + N > *len as usize {
+            None
+        } else {
+            data.get_mut(addr..addr + N).map(|block| {
+                block
+                    .iter_mut()
+                    .zip(words.iter())
+                    .for_each(|(slot, value)| {
+                        *slot = *value;
+                    });
+            })
+        }
+    }
+
+    fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
+        let (len, data) = self.0.as_mut().split_first_mut()?;
+        let addr = *len as usize;
+        data.get_mut(addr..addr + N).map(|block| {
+            block
+                .iter_mut()
+                .zip(words.iter())
+                .for_each(|(slot, value)| {
+                    *slot = *value;
+                });
+            *len += N as u32;
+            addr as Offset
+        })
+    }
+
+    fn alloc_n(&mut self, words: u32) -> Option<(Offset, &mut [Word])> {
+        let (len, data) = self.0.as_mut().split_first_mut()?;
+        data.get_mut(*len as usize..(*len + words) as usize)
+            .map(|data| (*len, data))
+            .inspect(|_| *len += words)
+    }
+
+    fn alloc_block(&mut self, values: &[Word]) -> Option<Offset> {
+        let len = values.len() as u32;
+        self.alloc_n(len + 1).and_then(|(addr, data)| {
+            data.split_first_mut().map(|(size, block)| {
+                *size = len;
+                block
+                    .iter_mut()
+                    .zip(values.iter())
+                    .for_each(|(slot, value)| {
+                        *slot = *value;
+                    });
+                addr
+            })
+        })
+    }
+
+    fn get_block_mut(&mut self, addr: Offset) -> Option<&mut [Word]> {
+        let addr = addr as usize;
+        let len = self.0.as_mut().get(addr).copied()? as usize;
+        self.0.as_mut().get_mut(addr + 1..addr + 1 + len)
+    }
+}
+
+//
+
+struct Stack<T>(T);
+
+impl<T> Stack<T>
+where
+    T: AsRef<[Word]>,
+{
+    fn len(&self) -> Option<u32> {
+        self.0.as_ref().first().copied()
+    }
+}
+
+impl<T> Stack<T>
+where
+    T: AsMut<[Word]>,
+{
+    fn init(&mut self) -> Option<()> {
+        self.0.as_mut().first_mut().map(|slot| *slot = 0)
+    }
+
+    fn push<const N: usize>(&mut self, words: [u32; N]) -> Option<()> {
+        let (len, data) = self.0.as_mut().split_first_mut()?;
+        let addr = *len as usize;
+        data.get_mut(addr..addr + N).map(|block| {
+            block
+                .iter_mut()
+                .zip(words.iter())
+                .for_each(|(slot, value)| {
+                    *slot = *value;
+                });
+            *len += N as u32
+        })
+    }
+
+    fn pop<const N: usize>(&mut self) -> Option<[u32; N]> {
+        let (len, data) = self.0.as_mut().split_first_mut()?;
+        len.checked_sub(N as u32).and_then(|new_len| {
+            let addr = new_len as usize;
+            data.get(addr..addr + N).map(|block| {
+                let mut words = [0; N];
+                block
+                    .iter()
+                    .zip(words.iter_mut())
+                    .for_each(|(slot, value)| {
+                        *value = *slot;
+                    });
+                *len = new_len;
+                words
+            })
+        })
+    }
+
+    fn pop_all(&mut self, offset: Offset) -> Option<&[Word]> {
+        let (len, data) = self.0.as_mut().split_first_mut()?;
+        len.checked_sub(offset).and_then(|size| {
+            let addr = offset as usize;
+            data.get(addr..addr + size as usize).inspect(|_| {
+                *len = offset;
+            })
+        })
+    }
+}
+
+// S Y M B O L
+
+struct InlineString {
+    buf: [u32; 8],
+}
+
+impl InlineString {
+    fn new(string: &str) -> Option<Self> {
+        let bytes = string.as_bytes();
+        let len = bytes.len();
+        if len < 32 {
+            let mut buf = [0; 8];
+            for i in 0..len {
+                buf[i / 4] |= (bytes[i] as u32) << ((i % 4) * 8);
+            }
+            Some(InlineString { buf })
+        } else {
+            None
+        }
+    }
+
+    pub fn hash(&self) -> u32 {
+        hash_u32x8(&self.buf)
+    }
+}
+
+// S Y M B O L   T A B L E
+
+type Symbol = Offset;
+
+struct SymbolTable<T>(T);
+
+impl<T> SymbolTable<T>
+where
+    T: AsMut<[Word]>,
+{
+    fn get_or_insert_symbol<H>(&mut self, str: InlineString, heap: &mut Block<H>) -> Option<Symbol>
     where
-        H: AsRef<[Word]>,
+        H: AsRef<[Word]> + AsMut<[Word]>,
     {
-        let items_address = self.address + 1;
-        self.len(memory)
-            .and_then(|len| memory.heap.iter(items_address, len))
+        self.0.as_mut().split_first_mut().and_then(|(count, data)| {
+            let table_len = data.len() as u32;
+            let h = str.hash();
+            let mut index = h.checked_rem(table_len)?;
+
+            for _probe in 0..table_len {
+                let offset = data.get_mut(index as usize)?;
+                let stored_offset = *offset;
+
+                if stored_offset == 0 {
+                    let address = heap.alloc(str.buf)?;
+                    *offset = address;
+                    *count += 1;
+                    return Some(address);
+                }
+
+                if str.buf == heap.peek(stored_offset)? {
+                    return Some(stored_offset);
+                }
+                index = (index + 1).checked_rem(table_len)?;
+            }
+            None
+        })
+    }
+}
+
+// C O N T E X T
+
+struct Context<T>(T);
+
+impl<T> Context<T> {
+    fn hash_u32(val: u32) -> u32 {
+        const GOLDEN_RATIO: u32 = 0x9E3779B9;
+        val.wrapping_mul(GOLDEN_RATIO)
+    }
+}
+
+impl<T> Context<T>
+where
+    T: AsRef<[Word]>,
+{
+    fn get(&self, symbol: Symbol) -> Option<Value> {
+        self.0.as_ref().split_first().and_then(|(_, data)| {
+            let table_len = (data.len() / 3) as u32;
+            let h = Self::hash_u32(symbol);
+            let mut index = h.checked_rem(table_len)?;
+
+            for _probe in 0..table_len {
+                let entry_offset = (index * 3) as usize;
+                let entry = data.get(entry_offset..entry_offset + 3)?;
+                if entry[0] == symbol {
+                    return Some(Value::new(entry[1].into(), entry[2]));
+                }
+
+                index = (index + 1).checked_rem(table_len)?;
+            }
+            None
+        })
+    }
+}
+
+impl<T> Context<T>
+where
+    T: AsMut<[Word]>,
+{
+    fn put(&mut self, symbol: Symbol, value: Value) -> Option<()> {
+        self.0.as_mut().split_first_mut().and_then(|(count, data)| {
+            let table_len = (data.len() / 3) as u32;
+            let h = Self::hash_u32(symbol);
+            let mut index = h.checked_rem(table_len)?;
+
+            for _probe in 0..table_len {
+                let entry_offset = (index * 3) as usize;
+                let entry = data.get_mut(entry_offset..entry_offset + 3)?;
+                let stored_symbol = entry[0];
+
+                if stored_symbol == 0 || stored_symbol == symbol {
+                    entry[0] = symbol;
+                    entry[1] = value.tag.into();
+                    entry[2] = value.value;
+                    *count += 1;
+                    return Some(());
+                }
+
+                index = (index + 1).checked_rem(table_len)?;
+            }
+            None
+        })
     }
 }
 
 // M E M O R Y
 
-pub struct Memory<H, S, O, E> {
-    heap: Stack<H>,
-    stack: Stack<S>,
+pub struct Memory<H, Y, S, O> {
     ops: Stack<O>,
-    env: Stack<E>,
+    stack: Stack<S>,
+    heap: Block<H>,
+    symbols: SymbolTable<Y>,
 }
 
-impl<H, S, O, E> Memory<H, S, O, E>
+type SimpleLayout<'a> = Memory<&'a mut [Word], &'a mut [Word], &'a mut [Word], &'a mut [Word]>;
+
+pub fn init_memory(
+    memory: &mut [Word],
+    stack_size: usize,
+    ops_size: usize,
+    symbols_size: usize,
+) -> Option<SimpleLayout> {
+    let (rest, stack) = memory.split_at_mut_checked(memory.len() - stack_size)?;
+    let (rest, ops) = rest.split_at_mut_checked(rest.len() - ops_size)?;
+    let (symbols, heap) = rest.split_at_mut_checked(symbols_size)?;
+
+    Some(SimpleLayout {
+        symbols: SymbolTable(symbols),
+        heap: Block(heap),
+        ops: Stack(ops),
+        stack: Stack(stack),
+    })
+}
+
+// P A R S E  C O L L E C T O R
+
+pub trait Collector {
+    fn string(&mut self, string: &str) -> Option<()>;
+    fn word(&mut self, kind: WordKind, word: &str) -> Option<()>;
+    fn integer(&mut self, value: i32) -> Option<()>;
+    fn begin_block(&mut self) -> Option<()>;
+    fn end_block(&mut self) -> Option<()>;
+}
+
+impl<H, Y, S, O> Collector for Memory<H, Y, S, O>
 where
     H: AsMut<[Word]> + AsRef<[Word]>,
-    S: AsMut<[Word]>,
+    S: AsMut<[Word]> + AsRef<[Word]>,
+    Y: AsMut<[Word]>,
     O: AsMut<[Word]>,
-    E: AsMut<[Word]>,
 {
-    pub fn new(heap: H, stack: S, ops: O, env: E) -> Self {
-        Memory {
-            heap: Stack::new(heap),
-            stack: Stack::new(stack),
-            ops: Stack::new(ops),
-            env: Stack::new(env),
-        }
-    }
-}
-
-impl<'a> Memory<&'a mut [Word], &'a mut [Word], &'a mut [Word], &'a mut [Word]> {
-    const OPS_SIZE: usize = 128;
-    const ENV_SIZE: usize = 128;
-
-    pub fn from_slice(memory: &'a mut [Word], heap_size: usize) -> Result<Self, RebelError> {
-        let total_size = memory.len();
-        let stack_size = total_size
-            .checked_sub(heap_size + Self::OPS_SIZE + Self::ENV_SIZE)
-            .ok_or(RebelError::OutOfMemory)?;
-
-        let (heap_slice, rest) = memory.split_at_mut(heap_size);
-        let (stack_slice, rest) = rest.split_at_mut(stack_size);
-        let (ops_slice, env_slice) = rest.split_at_mut(Self::OPS_SIZE);
-
-        Ok(Memory {
-            heap: Stack::new(heap_slice),
-            stack: Stack::new(stack_slice),
-            ops: Stack::new(ops_slice),
-            env: Stack::new(env_slice),
-        })
-    }
-}
-
-// I N T E R P R E T E R
-
-pub struct Interpreter<'a, H, S, O, E> {
-    memory: &'a mut Memory<H, S, O, E>,
-}
-
-impl<'a, H, S, O, E> Collector for Interpreter<'a, H, S, O, E>
-where
-    H: AsMut<[Word]>,
-    S: AsMut<[Word]>,
-    O: AsMut<[Word]>,
-    E: AsMut<[Word]>,
-{
-    fn string(&self, string: &str) -> Result<(), RebelError> {
-        unimplemented!()
+    fn string(&mut self, string: &str) -> Option<()> {
+        println!("string: {:?}", string);
+        let string = InlineString::new(string)?;
+        let offset = self.heap.alloc(string.buf)?;
+        self.stack.push([Tag::String.into(), offset])
     }
 
-    fn word(&self, kind: WordKind, word: &str) -> Result<(), RebelError> {
-        unimplemented!()
+    fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
+        let symbol = InlineString::new(word)?;
+        let offset = self.symbols.get_or_insert_symbol(symbol, &mut self.heap)?;
+        let tag = match kind {
+            WordKind::Word => Tag::Word,
+            WordKind::SetWord => Tag::SetWord,
+        };
+        self.stack.push([tag.into(), offset])
     }
 
-    fn integer(&mut self, value: i32) -> Result<(), RebelError> {
-        self.memory
-            .stack
-            .push([Tag::Int.into(), value as Word])
-            .ok_or(RebelError::StackOverflow)
+    fn integer(&mut self, value: i32) -> Option<()> {
+        self.stack.push([Tag::Int.into(), value as u32])
     }
 
-    fn begin_block(&self) -> Result<(), RebelError> {
-        unimplemented!()
+    fn begin_block(&mut self) -> Option<()> {
+        println!("begin_block");
+        self.ops.push([self.stack.len()?])
     }
 
-    fn end_block(&self) -> Result<(), RebelError> {
-        unimplemented!()
+    fn end_block(&mut self) -> Option<()> {
+        println!("end_block");
+        let block_data = self.stack.pop_all(self.ops.pop::<1>()?[0])?;
+        let offset = self.heap.alloc_block(block_data)?;
+        self.stack.push([Tag::Block.into(), offset])
     }
 }

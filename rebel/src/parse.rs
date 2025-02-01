@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::mem::{Collector, WordKind};
+use crate::core::{Collector, WordKind};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -175,7 +175,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::mem::Memory;
+    use crate::core::init_memory;
 
     use super::*;
 
@@ -183,10 +183,9 @@ mod tests {
     fn test_whitespace_1() -> Result<(), ParseError> {
         let input = "  \t\n  ";
 
-        let mut buf = vec![0; 0x10000];
-        let mut mem = Memory::new(&mut buf, 0x1000).ok_or(ParseError::MemoryError)?;
-        let layout = mem.layout().ok_or(ParseError::MemoryError)?;
-        let mut parser = Parser::new(input, layout);
+        let mut buf = vec![0; 0x10000].into_boxed_slice();
+        let mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut parser = Parser::new(input, mem);
 
         parser.parse()?;
         Ok(())
@@ -196,10 +195,9 @@ mod tests {
     fn test_string_1() -> Result<(), ParseError> {
         let input = "\"hello\"  \n ";
 
-        let mut buf = vec![0; 0x10000];
-        let mut mem = Memory::new(&mut buf, 0x1000).ok_or(ParseError::MemoryError)?;
-        let layout = mem.layout().ok_or(ParseError::MemoryError)?;
-        let mut parser = Parser::new(input, layout);
+        let mut buf = vec![0; 0x10000].into_boxed_slice();
+        let mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut parser = Parser::new(input, mem);
 
         parser.parse()?;
         Ok(())
