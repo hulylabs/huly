@@ -184,7 +184,7 @@ mod tests {
         let input = "  \t\n  ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut mem = init_memory(&mut buf, 256, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
         let mut parser = Parser::new(input, &mut mem);
         parser.parse()?;
 
@@ -196,7 +196,7 @@ mod tests {
         let input = "\"hello\"  \n ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut mem = init_memory(&mut buf, 256, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
         let mut parser = Parser::new(input, &mut mem);
         parser.parse()?;
 
@@ -208,7 +208,7 @@ mod tests {
         let input = "42 \"hello\" word x: \n ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut mem = init_memory(&mut buf, 256, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
         let mut parser = Parser::new(input, &mut mem);
         parser.parse()?;
 
