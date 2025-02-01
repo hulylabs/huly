@@ -115,7 +115,7 @@ where
                 value = c.to_digit(10).ok_or(ParseError::InternalError)? as i32;
                 has_digits = true;
             }
-            _ => return Err(ParseError::UnexpectedChar(char).into()),
+            _ => return Err(ParseError::UnexpectedChar(char)),
         }
 
         for (_, char) in self.cursor.by_ref() {
@@ -166,7 +166,7 @@ where
                         self.collector.end_block().ok_or(ParseError::MemoryError)?;
                     }
                 }
-                _ => return Err(ParseError::UnexpectedChar(char).into()),
+                _ => return Err(ParseError::UnexpectedChar(char)),
             }
         }
         Ok(())

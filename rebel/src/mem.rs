@@ -93,7 +93,7 @@ where
     }
 
     pub fn len(&self) -> Option<Word> {
-        self.data.as_ref().get(0).copied()
+        self.data.as_ref().first().copied()
     }
 
     pub fn peek<const N: usize>(&self, offset: Offset) -> Option<[Word; N]> {
@@ -246,7 +246,7 @@ where
                         let address = heap.len()?;
                         heap.push(str.buf)?;
                         *offset = address;
-                        *count = *count + 1;
+                        *count += 1;
                         return Some(address);
                     }
 
