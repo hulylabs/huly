@@ -5,7 +5,7 @@ use crate::hash::hash_u32x8;
 
 // T A G
 
-enum Tag {
+pub enum Tag {
     None = 0,
     Int = 1,
     Block = 2,
@@ -364,6 +364,15 @@ pub struct Memory<H, Y, S, O> {
     stack: Stack<S>,
     heap: Block<H>,
     symbols: SymbolTable<Y>,
+}
+
+impl<H, Y, S, O> Memory<H, Y, S, O>
+where
+    S: AsMut<[Word]>,
+{
+    pub fn pop_all(&mut self) -> Option<&[Word]> {
+        self.stack.pop_all(0)
+    }
 }
 
 type SimpleLayout<'a> = Memory<&'a mut [Word], &'a mut [Word], &'a mut [Word], &'a mut [Word]>;

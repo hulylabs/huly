@@ -21,14 +21,14 @@ pub enum ParseError {
 pub struct Parser<'a, C: Collector> {
     input: &'a str,
     cursor: CharIndices<'a>,
-    collector: C,
+    collector: &'a mut C,
 }
 
 impl<'a, C> Parser<'a, C>
 where
     C: Collector,
 {
-    pub fn new(input: &'a str, collector: C) -> Self {
+    pub fn new(input: &'a str, collector: &'a mut C) -> Self {
         Self {
             input,
             collector,
@@ -175,7 +175,7 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::core::init_memory;
+    use crate::core::{init_memory, Tag};
 
     use super::*;
 
@@ -184,10 +184,10 @@ mod tests {
         let input = "  \t\n  ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
-        let mut parser = Parser::new(input, mem);
-
+        let mut mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut parser = Parser::new(input, &mut mem);
         parser.parse()?;
+
         Ok(())
     }
 
@@ -196,27 +196,37 @@ mod tests {
         let input = "\"hello\"  \n ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
-        let mut parser = Parser::new(input, mem);
-
+        let mut mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut parser = Parser::new(input, &mut mem);
         parser.parse()?;
+
         Ok(())
     }
 
-    // #[test]
-    // fn test_block_1() -> Result<(), MemoryError> {
-    //     let input = "42 \"hello\" word x: \n ";
+    #[test]
+    fn test_block_1() -> Result<(), ParseError> {
+        let input = "42 \"hello\" word x: \n ";
 
-    //     let mut bytes = vec![0; 0x10000];
-    //     let mut memory = Memory::new(&mut bytes, 0x1000, 0x1000)?;
-    //     let block = parse_block(&mut memory, input)?;
+        let mut buf = vec![0; 0x10000].into_boxed_slice();
+        let mut mem = init_memory(&mut buf, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut parser = Parser::new(input, &mut mem);
+        parser.parse()?;
 
-    //     assert_eq!(block.len(&memory), Some(4));
+        let stack = mem.pop_all().ok_or(ParseError::MemoryError)?;
+        assert_eq!(stack.len(), 8);
 
-    //     let v1 = block.get(&memory, 1).unwrap();
-    //     assert_eq!(memory.as_str(v1)?, "hello");
-    //     Ok(())
-    // }
+        assert_eq!(stack[0], Tag::Int.into());
+        assert_eq!(stack[1], 42);
+        assert_eq!(stack[2], Tag::String.into());
+
+        assert_eq!(stack[4], Tag::Word.into());
+
+        assert_eq!(stack[6], Tag::SetWord.into());
+
+        // let v1 = block.get(&memory, 1).unwrap();
+        // assert_eq!(memory.as_str(v1)?, "hello");
+        Ok(())
+    }
 
     // #[test]
     // fn test_number_1() -> Result<(), MemoryError> {
