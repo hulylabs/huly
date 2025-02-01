@@ -5,11 +5,12 @@ use crate::hash::hash_u32x8;
 
 // T A G
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Tag {
     None = 0,
     Int = 1,
     Block = 2,
-    String = 3,
+    InlineString = 3,
     Word = 4,
     SetWord = 5,
 }
@@ -28,7 +29,7 @@ impl From<Tag> for Word {
 const TAG_NONE: Word = Tag::None as Word;
 const TAG_INT: Word = Tag::Int as Word;
 const TAG_BLOCK: Word = Tag::Block as Word;
-const TAG_STRING: Word = Tag::String as Word;
+const TAG_INLINE_STRING: Word = Tag::InlineString as Word;
 const TAG_WORD: Word = Tag::Word as Word;
 const TAG_SET_WORD: Word = Tag::SetWord as Word;
 
@@ -38,7 +39,7 @@ impl From<Word> for Tag {
             TAG_NONE => Tag::None,
             TAG_INT => Tag::Int,
             TAG_BLOCK => Tag::Block,
-            TAG_STRING => Tag::String,
+            TAG_INLINE_STRING => Tag::InlineString,
             TAG_WORD => Tag::Word,
             TAG_SET_WORD => Tag::SetWord,
             _ => Tag::None,
@@ -48,7 +49,7 @@ impl From<Word> for Tag {
 
 // V A L U E
 
-struct Value {
+pub struct Value {
     tag: Tag,
     value: Word,
 }
@@ -56,6 +57,26 @@ struct Value {
 impl Value {
     fn new(tag: Tag, value: Word) -> Self {
         Self { tag, value }
+    }
+
+    pub fn as_str<H, Y, S, O>(&self, memory: &Memory<H, Y, S, O>) -> Option<&str>
+    where
+        H: AsRef<[Word]>,
+    {
+        match self.tag {
+            Tag::InlineString => {
+                let buf = memory.heap.peek::<8>(self.value)?;
+                let buf = unsafe { std::mem::transmute::<_, &[u8; 32]>(buf) };
+                let len = buf[0] as usize;
+                buf.get(1..len + 1)
+                    .map(|buf| unsafe { std::str::from_utf8_unchecked(buf) })
+            }
+            _ => Some("<not a string>"),
+        }
+    }
+
+    pub fn tag(&self) -> Tag {
+        self.tag
     }
 }
 
@@ -81,13 +102,15 @@ where
         data.get(start..start + len).map(|block| Block(block))
     }
 
-    fn peek<const N: usize>(&self, addr: Offset) -> Option<[u32; N]> {
-        self.get_block(addr).map(|block| {
-            let mut words = [0; N];
-            block.0.iter().enumerate().for_each(|(i, slot)| {
-                words[i] = *slot;
-            });
-            words
+    fn peek<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
+        self.0.as_ref().split_first().and_then(|(len, data)| {
+            let begin = addr as usize;
+            let end = begin + N;
+            if end > *len as usize {
+                None
+            } else {
+                data.get(begin..end).and_then(|block| block.try_into().ok())
+            }
         })
     }
 }
@@ -226,33 +249,20 @@ where
     }
 }
 
-// S Y M B O L
-
-struct InlineString {
-    buf: [u32; 8],
-}
-
-impl InlineString {
-    fn new(string: &str) -> Option<Self> {
-        let bytes = string.as_bytes();
-        let len = bytes.len();
-        if len < 32 {
-            let mut buf = [0; 8];
-            for i in 0..len {
-                buf[i / 4] |= (bytes[i] as u32) << ((i % 4) * 8);
-            }
-            Some(InlineString { buf })
-        } else {
-            None
-        }
-    }
-
-    pub fn hash(&self) -> u32 {
-        hash_u32x8(&self.buf)
-    }
-}
-
 // S Y M B O L   T A B L E
+
+fn inline_string(string: &str) -> Option<[u32; 8]> {
+    let bytes = string.as_bytes();
+    let len = bytes.len();
+    if len < 32 {
+        let mut buf = [0; 32];
+        buf[0] = len as u8;
+        buf[1..len + 1].copy_from_slice(bytes);
+        Some(unsafe { std::mem::transmute(buf) })
+    } else {
+        None
+    }
+}
 
 type Symbol = Offset;
 
@@ -262,13 +272,13 @@ impl<T> SymbolTable<T>
 where
     T: AsMut<[Word]>,
 {
-    fn get_or_insert_symbol<H>(&mut self, str: InlineString, heap: &mut Block<H>) -> Option<Symbol>
+    fn get_or_insert_symbol<H>(&mut self, str: [u32; 8], heap: &mut Block<H>) -> Option<Symbol>
     where
         H: AsRef<[Word]> + AsMut<[Word]>,
     {
         self.0.as_mut().split_first_mut().and_then(|(count, data)| {
             let table_len = data.len() as u32;
-            let h = str.hash();
+            let h = hash_u32x8(&str);
             let mut index = h.checked_rem(table_len)?;
 
             for _probe in 0..table_len {
@@ -276,13 +286,13 @@ where
                 let stored_offset = *offset;
 
                 if stored_offset == 0 {
-                    let address = heap.alloc(str.buf)?;
+                    let address = heap.alloc(str)?;
                     *offset = address;
                     *count += 1;
                     return Some(address);
                 }
 
-                if str.buf == heap.peek(stored_offset)? {
+                if &str == heap.peek(stored_offset)? {
                     return Some(stored_offset);
                 }
                 index = (index + 1).checked_rem(table_len)?;
@@ -370,8 +380,14 @@ impl<H, Y, S, O> Memory<H, Y, S, O>
 where
     S: AsMut<[Word]>,
 {
-    pub fn pop_all(&mut self) -> Option<&[Word]> {
-        self.stack.pop_all(0)
+    pub fn pop_values<'a>(&'a mut self) -> Option<impl Iterator<Item = Value> + 'a> {
+        let data = self.stack.pop_all(0)?;
+        let mut iter = data.iter();
+        Some(std::iter::from_fn(move || {
+            let tag = iter.next()?;
+            let value = iter.next()?;
+            Some(Value::new((*tag).into(), *value))
+        }))
     }
 }
 
@@ -414,14 +430,14 @@ where
 {
     fn string(&mut self, string: &str) -> Option<()> {
         println!("string: {:?}", string);
-        let string = InlineString::new(string)?;
-        let offset = self.heap.alloc(string.buf)?;
-        self.stack.push([Tag::String.into(), offset])
+        let offset = self.heap.alloc(inline_string(string)?)?;
+        self.stack.push([Tag::InlineString.into(), offset])
     }
 
     fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
-        let symbol = InlineString::new(word)?;
-        let offset = self.symbols.get_or_insert_symbol(symbol, &mut self.heap)?;
+        let offset = self
+            .symbols
+            .get_or_insert_symbol(inline_string(word)?, &mut self.heap)?;
         let tag = match kind {
             WordKind::Word => Tag::Word,
             WordKind::SetWord => Tag::SetWord,
