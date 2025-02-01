@@ -13,6 +13,7 @@ pub enum Tag {
     InlineString = 3,
     Word = 4,
     SetWord = 5,
+    NativeFn = 6,
 }
 
 pub enum WordKind {
@@ -32,6 +33,7 @@ const TAG_BLOCK: Word = Tag::Block as Word;
 const TAG_INLINE_STRING: Word = Tag::InlineString as Word;
 const TAG_WORD: Word = Tag::Word as Word;
 const TAG_SET_WORD: Word = Tag::SetWord as Word;
+const TAG_NATIVE_FN: Word = Tag::NativeFn as Word;
 
 impl From<Word> for Tag {
     fn from(word: Word) -> Self {
@@ -155,26 +157,30 @@ where
         })
     }
 
-    fn alloc_n(&mut self, words: u32) -> Option<(Offset, &mut [Word])> {
+    fn reserve(&mut self, words: u32) -> Option<(Offset, &mut [Word])> {
         let (len, data) = self.0.as_mut().split_first_mut()?;
         data.get_mut(*len as usize..(*len + words) as usize)
             .map(|data| (*len, data))
             .inspect(|_| *len += words)
     }
 
-    fn alloc_block(&mut self, values: &[Word]) -> Option<Offset> {
-        let len = values.len() as u32;
-        self.alloc_n(len + 1).and_then(|(addr, data)| {
+    fn alloc_empty(&mut self, len: Offset) -> Option<(Offset, &mut [Word])> {
+        self.reserve(len + 1).and_then(|(addr, data)| {
             data.split_first_mut().map(|(size, block)| {
                 *size = len;
-                block
-                    .iter_mut()
-                    .zip(values.iter())
-                    .for_each(|(slot, value)| {
-                        *slot = *value;
-                    });
-                addr
+                (addr, block)
             })
+        })
+    }
+
+    fn alloc_block(&mut self, values: &[Word]) -> Option<Offset> {
+        self.alloc_empty(values.len() as u32).map(|(addr, data)| {
+            data.iter_mut()
+                .zip(values.iter())
+                .for_each(|(slot, value)| {
+                    *slot = *value;
+                });
+            addr
         })
     }
 
@@ -272,6 +278,10 @@ impl<T> SymbolTable<T>
 where
     T: AsMut<[Word]>,
 {
+    fn init(&mut self) -> Option<()> {
+        self.0.as_mut().first_mut().map(|slot| *slot = 0)
+    }
+
     fn get_or_insert_symbol<H>(&mut self, str: [u32; 8], heap: &mut Block<H>) -> Option<Symbol>
     where
         H: AsRef<[Word]> + AsMut<[Word]>,
@@ -317,7 +327,7 @@ impl<T> Context<T>
 where
     T: AsRef<[Word]>,
 {
-    fn get(&self, symbol: Symbol) -> Option<Value> {
+    fn get(&self, symbol: Symbol) -> Option<[u32; 2]> {
         self.0.as_ref().split_first().and_then(|(_, data)| {
             let table_len = (data.len() / 3) as u32;
             let h = Self::hash_u32(symbol);
@@ -327,7 +337,7 @@ where
                 let entry_offset = (index * 3) as usize;
                 let entry = data.get(entry_offset..entry_offset + 3)?;
                 if entry[0] == symbol {
-                    return Some(Value::new(entry[1].into(), entry[2]));
+                    return Some([entry[1], entry[2]]);
                 }
 
                 index = (index + 1).checked_rem(table_len)?;
@@ -341,6 +351,10 @@ impl<T> Context<T>
 where
     T: AsMut<[Word]>,
 {
+    fn init(&mut self) -> Option<()> {
+        self.0.as_mut().first_mut().map(|slot| *slot = 0)
+    }
+
     fn put(&mut self, symbol: Symbol, value: Value) -> Option<()> {
         self.0.as_mut().split_first_mut().and_then(|(count, data)| {
             let table_len = (data.len() / 3) as u32;
@@ -377,10 +391,44 @@ pub struct Memory<H, Y, S, O, P> {
     parse: Stack<P>,
 }
 
+struct EvalContext<'a, H, Y, S, O, P> {
+    memory: &'a Memory<H, Y, S, O, P>,
+    parse: Stack<Box<[Word]>>,
+    ops: Stack<Box<[Word]>>,
+}
+
+impl<'a, H, Y, S, O, P> EvalContext<'a, H, Y, S, O, P> {
+    fn new(memory: &'a Memory<H, Y, S, O, P>) -> Self {
+        Self {
+            memory,
+            parse: Stack(Box::new([0; 256])),
+            ops: Stack(Box::new([0; 256])),
+        }
+    }
+}
+
 impl<H, Y, S, O, P> Memory<H, Y, S, O, P>
 where
+    H: AsMut<[Word]>,
+    Y: AsMut<[Word]>,
+    S: AsMut<[Word]>,
+    O: AsMut<[Word]>,
     P: AsMut<[Word]>,
 {
+    fn init(&mut self) -> Option<()> {
+        self.symbols.init()?;
+        self.parse.init()?;
+        self.ops.init()?;
+        self.stack.init()?;
+
+        self.heap.init(0)?;
+        let (root_ctx, root_ctx_data) = self.heap.alloc_empty(128)?;
+        Context(root_ctx_data).init()?;
+        debug_assert_eq!(root_ctx, 0);
+
+        Some(())
+    }
+
     pub fn pop_values<'a>(&'a mut self) -> Option<impl Iterator<Item = Value> + 'a> {
         let data = self.parse.pop_all(0)?;
         let mut iter = data.iter();
@@ -391,24 +439,31 @@ where
         }))
     }
 
-    // fn read_parsed(&mut self) -> Option<()> {
-    //     if let Some(len) = block.len(self.memory) {
-    //         for i in 0..len {
-    //             if let Some(value) = block.get(self.memory, i) {
-    //                 self.read(value)?;
-    //             }
-    //         }
-    //         Ok(())
-    //     } else {
-    //         Err(EvalError::InternalError)
-    //     }
-    // }
+    fn read_parsed(&mut self) -> Option<()> {
+        let root_ctx = self.heap.get_block_mut(0).map(Context)?;
+        let data = self.parse.pop_all(0)?;
 
-    // pub fn eval_parsed(&mut self) -> Option<()> {
-    //     self.read_parsed()?;
-    //     self.eval_stack()?;
-    //     Some(())
-    // }
+        for chunk in data.chunks_exact(2) {
+            let value = match chunk[0] {
+                TAG_WORD => root_ctx.get(chunk[1])?,
+                _ => [chunk[0], chunk[1]],
+            };
+
+            if value[0] == TAG_NATIVE_FN || value[0] == TAG_SET_WORD {
+                self.ops.push(value)?;
+            } else {
+                self.stack.push(value)?;
+            }
+        }
+
+        Some(())
+    }
+
+    pub fn eval_parsed(&mut self) -> Option<()> {
+        self.read_parsed()?;
+        // self.eval_stack()?;
+        Some(())
+    }
 }
 
 type SimpleLayout<'a> =
@@ -426,13 +481,16 @@ pub fn init_memory(
     let (rest, parse) = rest.split_at_mut_checked(rest.len() - parse_size)?;
     let (symbols, heap) = rest.split_at_mut_checked(symbols_size)?;
 
-    Some(SimpleLayout {
-        symbols: SymbolTable(symbols),
+    let mut mem = SimpleLayout {
         heap: Block(heap),
+        symbols: SymbolTable(symbols),
         ops: Stack(ops),
         stack: Stack(stack),
         parse: Stack(parse),
-    })
+    };
+
+    mem.init()?;
+    Some(mem)
 }
 
 // P A R S E  C O L L E C T O R
