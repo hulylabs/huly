@@ -5,7 +5,6 @@ use crate::hash::hash_u32x8;
 
 // T A G
 
-#[repr(u32)]
 enum Tag {
     None = 0,
     Int = 1,
@@ -71,7 +70,7 @@ impl From<Value> for [Word; 2] {
 pub struct MemoryLayout<T> {
     ops: Stack<T>,
     stack: Stack<T>,
-    heap: Stack<T>,
+    heap: Heap<T>,
     symbols: SymbolTable<T>,
 }
 
@@ -114,7 +113,7 @@ where
         let (symbols, heap) = rest.split_at_mut_checked(self.heap as usize)?;
         Some(MemoryLayout {
             symbols: SymbolTable::new(symbols),
-            heap: Stack::new(heap),
+            heap: Heap::new(heap),
             ops: Stack::new(ops),
             stack: Stack::new(stack),
         })
@@ -273,7 +272,7 @@ where
     pub fn get_or_insert_symbol(
         &mut self,
         str: InlineString,
-        heap: &mut Stack<T>,
+        heap: &mut Heap<T>,
     ) -> Option<Symbol> {
         self.data
             .as_mut()
@@ -376,6 +375,59 @@ where
                 }
                 None
             })
+    }
+}
+
+// H E A P
+
+pub struct Heap<T> {
+    data: T,
+}
+
+impl<T> Heap<T>
+where
+    T: AsRef<[Word]>,
+{
+    pub fn new(data: T) -> Self {
+        Self { data }
+    }
+}
+
+impl<T> Heap<T>
+where
+    T: AsMut<[Word]>,
+{
+    fn reserve(&mut self, size: Offset) -> Option<(Offset, &mut [Word])> {
+        let (bump_pointer, data) = self.data.as_mut().split_first_mut()?;
+        let addr = *bump_pointer as usize;
+        let size = size + 1; // allocate one more word for block length
+        let len = size as usize;
+        data.get_mut(addr..addr + len)
+            .and_then(|block| block.split_first_mut())
+            .map(|(block_len, block_data)| {
+                *block_len = size;
+                *bump_pointer += size;
+                // we return offset in `Self::data` slice, wich is one bump pointer more. This is also important to avoid zero pointer values.
+                ((addr + 1) as Offset, block_data)
+            })
+    }
+
+    pub fn alloc_block(&mut self, size: Offset) -> Option<Value> {
+        let (addr, data) = self.reserve(size)?;
+        data.first_mut().map(|len| *len = 0)?;
+        Some(Value::new(Tag::Block, addr))
+    }
+
+    pub fn alloc<const N: usize>(&mut self, hash: [u32; N]) -> Option<Offset> {
+        let (bump_pointer, data) = self.data.as_mut().split_first_mut()?;
+        let addr = *bump_pointer as usize;
+        data.get_mut(addr..addr + 8).map(|block| {
+            block.iter_mut().zip(hash.iter()).for_each(|(slot, value)| {
+                *slot = *value;
+            });
+            *bump_pointer += 8;
+            addr as Offset
+        })
     }
 }
 
