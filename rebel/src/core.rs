@@ -2,6 +2,13 @@
 
 use super::{Offset, Word};
 use crate::hash::hash_u32x8;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum RebelError {
+    #[error(transparent)]
+    AnyError(#[from] anyhow::Error),
+}
 
 // T A G
 
@@ -202,6 +209,14 @@ where
     fn len(&self) -> Option<u32> {
         self.0.as_ref().first().copied()
     }
+
+    fn peek<const N: usize>(&self) -> Option<&[Word]> {
+        let (len, data) = self.0.as_ref().split_first()?;
+        len.checked_sub(N as u32).and_then(|offset| {
+            let addr = offset as usize;
+            data.get(addr..addr + N)
+        })
+    }
 }
 
 impl<T> Stack<T>
@@ -212,7 +227,7 @@ where
         self.0.as_mut().first_mut().map(|slot| *slot = 0)
     }
 
-    fn push<const N: usize>(&mut self, words: [u32; N]) -> Option<()> {
+    fn push_offset<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
         let (len, data) = self.0.as_mut().split_first_mut()?;
         let addr = *len as usize;
         data.get_mut(addr..addr + N).map(|block| {
@@ -222,8 +237,13 @@ where
                 .for_each(|(slot, value)| {
                     *slot = *value;
                 });
-            *len += N as u32
+            *len += N as u32;
+            addr as Offset
         })
+    }
+
+    fn push<const N: usize>(&mut self, words: [u32; N]) -> Option<()> {
+        self.push_offset(words).map(|_| ())
     }
 
     fn pop<const N: usize>(&mut self) -> Option<[u32; N]> {
@@ -355,7 +375,7 @@ where
         self.0.as_mut().first_mut().map(|slot| *slot = 0)
     }
 
-    fn put(&mut self, symbol: Symbol, value: Value) -> Option<()> {
+    fn put(&mut self, symbol: Symbol, value: [Word; 2]) -> Option<()> {
         self.0.as_mut().split_first_mut().and_then(|(count, data)| {
             let table_len = (data.len() / 3) as u32;
             let h = Self::hash_u32(symbol);
@@ -368,8 +388,8 @@ where
 
                 if stored_symbol == 0 || stored_symbol == symbol {
                     entry[0] = symbol;
-                    entry[1] = value.tag.into();
-                    entry[2] = value.value;
+                    entry[1] = value[0];
+                    entry[2] = value[1];
                     *count += 1;
                     return Some(());
                 }
@@ -383,10 +403,16 @@ where
 
 // M E M O R Y
 
+pub struct NativeFn {
+    func: fn(stack: Stack<Box<[Word]>>, heap: Block<&mut [Word]>) -> Result<(), RebelError>,
+    arity: u32,
+}
+
 pub struct Memory<H, Y, S> {
     stack: Stack<S>,
     heap: Block<H>,
     symbols: SymbolTable<Y>,
+    natives: Vec<NativeFn>,
 }
 
 impl<H, Y, S> Memory<H, Y, S>
@@ -422,6 +448,7 @@ pub fn init_memory(
         heap: Block(heap),
         symbols: SymbolTable(symbols),
         stack: Stack(stack),
+        natives: Vec::new(),
     };
 
     mem.init()?;
@@ -449,7 +476,7 @@ pub struct EvalContext<'a, H, Y, S> {
 impl<'a, H, Y, S> EvalContext<'a, H, Y, S>
 where
     H: AsMut<[Word]>,
-    S: AsMut<[Word]>,
+    S: AsMut<[Word]> + AsRef<[Word]>,
 {
     pub fn new(memory: &'a mut Memory<H, Y, S>) -> Self {
         Self {
@@ -470,7 +497,7 @@ where
     }
 
     fn read_parsed(&mut self) -> Option<()> {
-        let root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
+        let mut root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
         let data = self.parse.pop_all(0)?;
 
         for chunk in data.chunks_exact(2) {
@@ -479,10 +506,34 @@ where
                 _ => [chunk[0], chunk[1]],
             };
 
-            if value[0] == TAG_NATIVE_FN || value[0] == TAG_SET_WORD {
-                self.ops.push(value)?;
-            } else {
-                self.memory.stack.push(value)?;
+            let sp = self.memory.stack.push_offset(value)?;
+
+            match value[0] {
+                TAG_NATIVE_FN => {
+                    let native_fn = self.memory.natives.get(value[1] as usize)?;
+                    self.ops.push([sp, native_fn.arity * 2])?;
+                }
+                TAG_SET_WORD => {
+                    self.ops.push([sp, 2])?;
+                }
+                _ => {}
+            }
+
+            if let Some([bp, arity]) = self.ops.peek::<2>() {
+                if sp == bp + arity {
+                    let frame = self.memory.stack.pop_all(*bp)?;
+                    let op: [Word; 2] = frame.get(0..2).and_then(|op| op.try_into().ok())?;
+                    match op {
+                        [TAG_SET_WORD, sym] => {
+                            let value: [Word; 2] =
+                                frame.get(2..4).and_then(|value| value.try_into().ok())?;
+                            root_ctx.put(sym, value)?;
+                        }
+                        _ => {
+                            return None;
+                        }
+                    }
+                }
             }
         }
 
