@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Collector, WordKind};
+use crate::core::{Collector, EvalContext, WordKind};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -184,8 +184,9 @@ mod tests {
         let input = "  \t\n  ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
-        let mut parser = Parser::new(input, &mut mem);
+        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut ctx = EvalContext::new(&mut mem);
+        let mut parser = Parser::new(input, &mut ctx);
         parser.parse()?;
 
         Ok(())
@@ -196,8 +197,9 @@ mod tests {
         let input = "\"hello\"  \n ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
-        let mut parser = Parser::new(input, &mut mem);
+        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut ctx = EvalContext::new(&mut mem);
+        let mut parser = Parser::new(input, &mut ctx);
         parser.parse()?;
 
         Ok(())
@@ -208,11 +210,12 @@ mod tests {
         let input = "42 \"hello\" word x: \n ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 256, 256, 1024).ok_or(ParseError::MemoryError)?;
-        let mut parser = Parser::new(input, &mut mem);
+        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut ctx = EvalContext::new(&mut mem);
+        let mut parser = Parser::new(input, &mut ctx);
         parser.parse()?;
 
-        let stack: Vec<_> = mem.pop_values().unwrap().collect();
+        let stack: Vec<_> = ctx.pop_values().unwrap().collect();
 
         assert_eq!(stack.len(), 4);
 

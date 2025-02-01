@@ -61,7 +61,7 @@ impl Value {
         Self { tag, value }
     }
 
-    pub fn as_str<H, Y, S, O, P>(&self, memory: &Memory<H, Y, S, O, P>) -> Option<&str>
+    pub fn as_str<H, Y, S>(&self, memory: &Memory<H, Y, S>) -> Option<&str>
     where
         H: AsRef<[Word]>,
     {
@@ -383,42 +383,20 @@ where
 
 // M E M O R Y
 
-pub struct Memory<H, Y, S, O, P> {
-    ops: Stack<O>,
+pub struct Memory<H, Y, S> {
     stack: Stack<S>,
     heap: Block<H>,
     symbols: SymbolTable<Y>,
-    parse: Stack<P>,
 }
 
-struct EvalContext<'a, H, Y, S, O, P> {
-    memory: &'a Memory<H, Y, S, O, P>,
-    parse: Stack<Box<[Word]>>,
-    ops: Stack<Box<[Word]>>,
-}
-
-impl<'a, H, Y, S, O, P> EvalContext<'a, H, Y, S, O, P> {
-    fn new(memory: &'a Memory<H, Y, S, O, P>) -> Self {
-        Self {
-            memory,
-            parse: Stack(Box::new([0; 256])),
-            ops: Stack(Box::new([0; 256])),
-        }
-    }
-}
-
-impl<H, Y, S, O, P> Memory<H, Y, S, O, P>
+impl<H, Y, S> Memory<H, Y, S>
 where
     H: AsMut<[Word]>,
     Y: AsMut<[Word]>,
     S: AsMut<[Word]>,
-    O: AsMut<[Word]>,
-    P: AsMut<[Word]>,
 {
     fn init(&mut self) -> Option<()> {
         self.symbols.init()?;
-        self.parse.init()?;
-        self.ops.init()?;
         self.stack.init()?;
 
         self.heap.init(0)?;
@@ -428,65 +406,22 @@ where
 
         Some(())
     }
-
-    pub fn pop_values<'a>(&'a mut self) -> Option<impl Iterator<Item = Value> + 'a> {
-        let data = self.parse.pop_all(0)?;
-        let mut iter = data.iter();
-        Some(std::iter::from_fn(move || {
-            let tag = iter.next()?;
-            let value = iter.next()?;
-            Some(Value::new((*tag).into(), *value))
-        }))
-    }
-
-    fn read_parsed(&mut self) -> Option<()> {
-        let root_ctx = self.heap.get_block_mut(0).map(Context)?;
-        let data = self.parse.pop_all(0)?;
-
-        for chunk in data.chunks_exact(2) {
-            let value = match chunk[0] {
-                TAG_WORD => root_ctx.get(chunk[1])?,
-                _ => [chunk[0], chunk[1]],
-            };
-
-            if value[0] == TAG_NATIVE_FN || value[0] == TAG_SET_WORD {
-                self.ops.push(value)?;
-            } else {
-                self.stack.push(value)?;
-            }
-        }
-
-        Some(())
-    }
-
-    pub fn eval_parsed(&mut self) -> Option<()> {
-        self.read_parsed()?;
-        // self.eval_stack()?;
-        Some(())
-    }
 }
 
-type SimpleLayout<'a> =
-    Memory<&'a mut [Word], &'a mut [Word], &'a mut [Word], &'a mut [Word], &'a mut [Word]>;
+type SimpleLayout<'a> = Memory<&'a mut [Word], &'a mut [Word], &'a mut [Word]>;
 
 pub fn init_memory(
     memory: &mut [Word],
     stack_size: usize,
-    ops_size: usize,
-    parse_size: usize,
     symbols_size: usize,
 ) -> Option<SimpleLayout> {
     let (rest, stack) = memory.split_at_mut_checked(memory.len() - stack_size)?;
-    let (rest, ops) = rest.split_at_mut_checked(rest.len() - ops_size)?;
-    let (rest, parse) = rest.split_at_mut_checked(rest.len() - parse_size)?;
     let (symbols, heap) = rest.split_at_mut_checked(symbols_size)?;
 
     let mut mem = SimpleLayout {
         heap: Block(heap),
         symbols: SymbolTable(symbols),
-        ops: Stack(ops),
         stack: Stack(stack),
-        parse: Stack(parse),
     };
 
     mem.init()?;
@@ -503,23 +438,80 @@ pub trait Collector {
     fn end_block(&mut self) -> Option<()>;
 }
 
-impl<H, Y, S, O, P> Collector for Memory<H, Y, S, O, P>
+// E V A L  C O N T E X T
+
+pub struct EvalContext<'a, H, Y, S> {
+    memory: &'a mut Memory<H, Y, S>,
+    parse: Stack<Box<[Word]>>,
+    ops: Stack<Box<[Word]>>,
+}
+
+impl<'a, H, Y, S> EvalContext<'a, H, Y, S>
+where
+    H: AsMut<[Word]>,
+    S: AsMut<[Word]>,
+{
+    pub fn new(memory: &'a mut Memory<H, Y, S>) -> Self {
+        Self {
+            memory,
+            parse: Stack(Box::new([0; 256])),
+            ops: Stack(Box::new([0; 256])),
+        }
+    }
+
+    pub fn pop_values<'b>(&'b mut self) -> Option<impl Iterator<Item = Value> + 'b> {
+        let data = self.parse.pop_all(0)?;
+        let mut iter = data.iter();
+        Some(std::iter::from_fn(move || {
+            let tag = iter.next()?;
+            let value = iter.next()?;
+            Some(Value::new((*tag).into(), *value))
+        }))
+    }
+
+    fn read_parsed(&mut self) -> Option<()> {
+        let root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
+        let data = self.parse.pop_all(0)?;
+
+        for chunk in data.chunks_exact(2) {
+            let value = match chunk[0] {
+                TAG_WORD => root_ctx.get(chunk[1])?,
+                _ => [chunk[0], chunk[1]],
+            };
+
+            if value[0] == TAG_NATIVE_FN || value[0] == TAG_SET_WORD {
+                self.ops.push(value)?;
+            } else {
+                self.memory.stack.push(value)?;
+            }
+        }
+
+        Some(())
+    }
+
+    pub fn eval_parsed(&mut self) -> Option<()> {
+        self.read_parsed()?;
+        // self.eval_stack()?;
+        Some(())
+    }
+}
+
+impl<'a, H, Y, S> Collector for EvalContext<'a, H, Y, S>
 where
     H: AsMut<[Word]> + AsRef<[Word]>,
     Y: AsMut<[Word]>,
-    P: AsMut<[Word]> + AsRef<[Word]>,
-    O: AsMut<[Word]>,
 {
     fn string(&mut self, string: &str) -> Option<()> {
         println!("string: {:?}", string);
-        let offset = self.heap.alloc(inline_string(string)?)?;
+        let offset = self.memory.heap.alloc(inline_string(string)?)?;
         self.parse.push([Tag::InlineString.into(), offset])
     }
 
     fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
         let offset = self
+            .memory
             .symbols
-            .get_or_insert_symbol(inline_string(word)?, &mut self.heap)?;
+            .get_or_insert_symbol(inline_string(word)?, &mut self.memory.heap)?;
         let tag = match kind {
             WordKind::Word => Tag::Word,
             WordKind::SetWord => Tag::SetWord,
@@ -539,7 +531,7 @@ where
     fn end_block(&mut self) -> Option<()> {
         println!("end_block");
         let block_data = self.parse.pop_all(self.ops.pop::<1>()?[0])?;
-        let offset = self.heap.alloc_block(block_data)?;
+        let offset = self.memory.heap.alloc_block(block_data)?;
         self.parse.push([Tag::Block.into(), offset])
     }
 }
