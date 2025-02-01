@@ -7,11 +7,12 @@ use crate::hash::hash_u32x8;
 
 #[repr(u32)]
 enum Tag {
-    Int,
-    Block,
-    String,
-    Word,
-    SetWord,
+    None = 0,
+    Int = 1,
+    Block = 2,
+    String = 3,
+    Word = 4,
+    SetWord = 5,
 }
 
 pub enum WordKind {
@@ -25,6 +26,46 @@ impl From<Tag> for Word {
     }
 }
 
+const TAG_NONE: Word = Tag::None as Word;
+const TAG_INT: Word = Tag::Int as Word;
+const TAG_BLOCK: Word = Tag::Block as Word;
+const TAG_STRING: Word = Tag::String as Word;
+const TAG_WORD: Word = Tag::Word as Word;
+const TAG_SET_WORD: Word = Tag::SetWord as Word;
+
+impl From<Word> for Tag {
+    fn from(word: Word) -> Self {
+        match word {
+            TAG_NONE => Tag::None,
+            TAG_INT => Tag::Int,
+            TAG_BLOCK => Tag::Block,
+            TAG_STRING => Tag::String,
+            TAG_WORD => Tag::Word,
+            TAG_SET_WORD => Tag::SetWord,
+            _ => Tag::None,
+        }
+    }
+}
+
+// V A L U E
+
+pub struct Value {
+    tag: Tag,
+    value: Word,
+}
+
+impl Value {
+    pub fn new(tag: Tag, value: Word) -> Self {
+        Self { tag, value }
+    }
+}
+
+impl From<Value> for [Word; 2] {
+    fn from(value: Value) -> Self {
+        [value.tag.into(), value.value]
+    }
+}
+
 // M E M O R Y
 
 pub struct MemoryLayout<T> {
@@ -33,6 +74,8 @@ pub struct MemoryLayout<T> {
     heap: Stack<T>,
     symbols: SymbolTable<T>,
 }
+
+pub type MemoryMut<'a> = MemoryLayout<&'a mut [Word]>;
 
 pub struct Memory<T> {
     data: T,
@@ -213,6 +256,8 @@ impl InlineString {
 
 // S Y M B O L   T A B L E
 
+pub type Symbol = Offset;
+
 pub struct SymbolTable<T> {
     data: T,
 }
@@ -229,7 +274,7 @@ where
         &mut self,
         str: InlineString,
         heap: &mut Stack<T>,
-    ) -> Option<Offset> {
+    ) -> Option<Symbol> {
         self.data
             .as_mut()
             .split_first_mut()
@@ -253,6 +298,80 @@ where
                     if str.buf == heap.peek(stored_offset)? {
                         return Some(stored_offset);
                     }
+                    index = (index + 1).checked_rem(table_len)?;
+                }
+                None
+            })
+    }
+}
+
+// C O N T E X T
+
+pub struct Context<T> {
+    data: T,
+}
+
+impl<T> Context<T> {
+    fn hash_u32(val: u32) -> u32 {
+        const GOLDEN_RATIO: u32 = 0x9E3779B9;
+        val.wrapping_mul(GOLDEN_RATIO)
+    }
+}
+
+impl<T> Context<T>
+where
+    T: AsRef<[Word]>,
+{
+    pub fn new(data: T) -> Self {
+        Self { data }
+    }
+
+    pub fn get(&self, symbol: Symbol) -> Option<Value> {
+        self.data.as_ref().split_first().and_then(|(_, data)| {
+            let table_len = (data.len() / 3) as u32;
+            let h = Self::hash_u32(symbol);
+            let mut index = h.checked_rem(table_len)?;
+
+            for _probe in 0..table_len {
+                let entry_offset = (index * 3) as usize;
+                let entry = data.get(entry_offset..entry_offset + 3)?;
+                if entry[0] == symbol {
+                    return Some(Value::new(entry[1].into(), entry[2]));
+                }
+
+                index = (index + 1).checked_rem(table_len)?;
+            }
+            None
+        })
+    }
+}
+
+impl<T> Context<T>
+where
+    T: AsMut<[Word]>,
+{
+    pub fn put(&mut self, symbol: Symbol, value: Value) -> Option<()> {
+        self.data
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(count, data)| {
+                let table_len = (data.len() / 3) as u32;
+                let h = Self::hash_u32(symbol);
+                let mut index = h.checked_rem(table_len)?;
+
+                for _probe in 0..table_len {
+                    let entry_offset = (index * 3) as usize;
+                    let entry = data.get_mut(entry_offset..entry_offset + 3)?;
+                    let stored_symbol = entry[0];
+
+                    if stored_symbol == 0 || stored_symbol == symbol {
+                        entry[0] = symbol;
+                        entry[1] = value.tag.into();
+                        entry[2] = value.value;
+                        *count += 1;
+                        return Some(());
+                    }
+
                     index = (index + 1).checked_rem(table_len)?;
                 }
                 None

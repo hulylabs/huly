@@ -1,35 +1,35 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::parser::{parse_block, ParseError};
-use crate::value::{Block, Context, Memory, Symbol, Value};
+use crate::mem::MemoryMut;
+use crate::parse::ParseError;
 use std::result::Result;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum EvalError {
-    #[error("Bad arguments")]
-    BadArguments,
-    #[error("mismatched type")]
-    MismatchedType,
-    #[error(transparent)]
-    ParseError(#[from] crate::parser::ParseError),
-    #[error(transparent)]
-    MemoryError(#[from] crate::value::MemoryError),
-    #[error("Stack overflow")]
-    StackOverflow,
-    #[error("Stack underflow")]
-    StackUnderflow,
-    #[error("Word not found {0}")]
-    WordNotFound(Symbol),
-    #[error("Function not found: {0}")]
-    FunctionNotFound(u32),
-    #[error("Internal error")]
-    InternalError,
+    // #[error("Bad arguments")]
+    // BadArguments,
+    // #[error("mismatched type")]
+    // MismatchedType,
+    // #[error(transparent)]
+    // ParseError(#[from] crate::parser::ParseError),
+    // #[error(transparent)]
+    // MemoryError(#[from] crate::value::MemoryError),
+    // #[error("Stack overflow")]
+    // StackOverflow,
+    // #[error("Stack underflow")]
+    // StackUnderflow,
+    // #[error("Word not found {0}")]
+    // WordNotFound(Symbol),
+    // #[error("Function not found: {0}")]
+    // FunctionNotFound(u32),
+    // #[error("Internal error")]
+    // InternalError,
 }
 
 //
 
-pub type NativeFn = fn(&mut Memory, usize) -> anyhow::Result<()>;
+pub type NativeFn = fn(&mut MemoryMut, usize) -> anyhow::Result<()>;
 
 pub struct Module {
     pub procs: &'static [(&'static str, NativeFn)],
@@ -38,21 +38,15 @@ pub struct Module {
 const OP_STACK_SIZE: usize = 256;
 
 pub struct Process<'a, 'b> {
-    memory: &'a mut Memory<'b>,
-    ops: usize,
+    memory: &'a mut MemoryMut<'b>,
     natives: Vec<NativeFn>,
-    root_ctx: Context,
-    op_stack: [u32; OP_STACK_SIZE],
 }
 
 impl<'a, 'b> Process<'a, 'b> {
-    pub fn new(memory: &'a mut Memory<'b>) -> Self {
+    pub fn new(memory: &'a mut MemoryMut<'b>) -> Self {
         Self {
             memory,
-            op_stack: [0; OP_STACK_SIZE],
-            ops: 0,
             natives: Vec::new(),
-            root_ctx: Context::empty(),
         }
     }
 
