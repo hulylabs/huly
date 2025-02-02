@@ -721,7 +721,6 @@ where
     Y: AsMut<[Word]>,
 {
     fn string(&mut self, string: &str) -> Result<(), RebelError> {
-        println!("string: {:?}", string);
         let offset = self.memory.heap.alloc(inline_string(string)?)?;
         self.parse.push([Tag::InlineString.into(), offset])
     }
@@ -743,12 +742,10 @@ where
     }
 
     fn begin_block(&mut self) -> Result<(), RebelError> {
-        println!("begin_block");
         self.ops.push([self.parse.len()?])
     }
 
     fn end_block(&mut self) -> Result<(), RebelError> {
-        println!("end_block");
         let block_data = self.parse.pop_all(self.ops.pop::<1>()?[0])?;
         let offset = self.memory.heap.alloc_block(block_data)?;
         self.parse.push([Tag::Block.into(), offset])
