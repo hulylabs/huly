@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Collector, WordKind};
+use crate::core::{Collector, RebelError, WordKind};
 use std::str::CharIndices;
 use thiserror::Error;
 
@@ -45,62 +45,53 @@ where
         None
     }
 
-    fn parse_string(&mut self, pos: usize) -> Result<(), ParseError> {
+    fn parse_string(&mut self, pos: usize) -> Result<(), RebelError> {
         let start_pos = pos + 1; // Skip the opening quote
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
-                self.collector
-                    .string(
-                        self.input
-                            .get(start_pos..pos)
-                            .ok_or(ParseError::EndOfInput)?,
-                    )
-                    .ok_or(ParseError::MemoryError)?;
-                return Ok(());
+                return self.collector.string(
+                    self.input
+                        .get(start_pos..pos)
+                        .ok_or(ParseError::EndOfInput)?,
+                );
             }
         }
-        Err(ParseError::EndOfInput)
+        Err(ParseError::EndOfInput.into())
     }
 
-    fn parse_word(&mut self, start_pos: usize) -> Result<bool, ParseError> {
+    fn parse_word(&mut self, start_pos: usize) -> Result<bool, RebelError> {
         for (pos, char) in self.cursor.by_ref() {
             match char {
                 c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
                 ':' => {
-                    self.collector
-                        .word(
-                            WordKind::SetWord,
-                            self.input
-                                .get(start_pos..pos)
-                                .ok_or(ParseError::EndOfInput)?,
-                        )
-                        .ok_or(ParseError::MemoryError)?;
+                    self.collector.word(
+                        WordKind::SetWord,
+                        self.input
+                            .get(start_pos..pos)
+                            .ok_or(ParseError::EndOfInput)?,
+                    )?;
                     return Ok(false);
                 }
                 c if c.is_ascii_whitespace() || c == ']' => {
-                    self.collector
-                        .word(
-                            WordKind::Word,
-                            self.input
-                                .get(start_pos..pos)
-                                .ok_or(ParseError::EndOfInput)?,
-                        )
-                        .ok_or(ParseError::MemoryError)?;
+                    self.collector.word(
+                        WordKind::Word,
+                        self.input
+                            .get(start_pos..pos)
+                            .ok_or(ParseError::EndOfInput)?,
+                    )?;
                     return Ok(c == ']');
                 }
-                _ => return Err(ParseError::UnexpectedChar(char)),
+                _ => return Err(ParseError::UnexpectedChar(char).into()),
             }
         }
-        self.collector
-            .word(
-                WordKind::Word,
-                self.input.get(start_pos..).ok_or(ParseError::EndOfInput)?,
-            )
-            .ok_or(ParseError::MemoryError)?;
+        self.collector.word(
+            WordKind::Word,
+            self.input.get(start_pos..).ok_or(ParseError::EndOfInput)?,
+        )?;
         Ok(false)
     }
 
-    fn parse_number(&mut self, char: char) -> Result<bool, ParseError> {
+    fn parse_number(&mut self, char: char) -> Result<bool, RebelError> {
         let mut value: i32 = 0;
         let mut is_negative = false;
         let mut has_digits = false;
@@ -115,7 +106,7 @@ where
                 value = c.to_digit(10).ok_or(ParseError::InternalError)? as i32;
                 has_digits = true;
             }
-            _ => return Err(ParseError::UnexpectedChar(char)),
+            _ => return Err(ParseError::UnexpectedChar(char).into()),
         }
 
         for (_, char) in self.cursor.by_ref() {
@@ -136,37 +127,31 @@ where
             }
         }
         if !has_digits {
-            return Err(ParseError::EndOfInput);
+            return Err(ParseError::EndOfInput.into());
         }
         if is_negative {
             value = value.checked_neg().ok_or(ParseError::IntegerOverflow)?;
         }
-        self.collector
-            .integer(value)
-            .map(|_| end_of_block)
-            .ok_or(ParseError::MemoryError)
+        self.collector.integer(value).map(|_| end_of_block)
     }
 
-    pub fn parse(&mut self) -> Result<(), ParseError> {
+    pub fn parse(&mut self) -> Result<(), RebelError> {
         while let Some((pos, char)) = self.skip_whitespace() {
             match char {
-                '[' => self
-                    .collector
-                    .begin_block()
-                    .ok_or(ParseError::MemoryError)?,
-                ']' => self.collector.end_block().ok_or(ParseError::MemoryError)?,
+                '[' => self.collector.begin_block()?,
+                ']' => self.collector.end_block()?,
                 '"' => self.parse_string(pos)?,
                 c if c.is_ascii_alphabetic() => {
                     if self.parse_word(pos)? {
-                        self.collector.end_block().ok_or(ParseError::MemoryError)?;
+                        self.collector.end_block()?;
                     }
                 }
                 c if c.is_ascii_digit() || c == '+' || c == '-' => {
                     if self.parse_number(c)? {
-                        self.collector.end_block().ok_or(ParseError::MemoryError)?;
+                        self.collector.end_block()?;
                     }
                 }
-                _ => return Err(ParseError::UnexpectedChar(char)),
+                _ => return Err(ParseError::UnexpectedChar(char).into()),
             }
         }
         Ok(())
@@ -176,15 +161,15 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{init_memory, Tag};
+    use crate::core::{init_memory, EvalContext, Tag};
     use crate::Word;
 
     #[test]
-    fn test_whitespace_1() -> Result<(), ParseError> {
+    fn test_whitespace_1() -> Result<(), RebelError> {
         let input = "  \t\n  ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut mem = init_memory(&mut buf, 256, 1024)?;
         let mut ctx = EvalContext::new(&mut mem);
         let mut parser = Parser::new(input, &mut ctx);
         parser.parse()?;
@@ -193,11 +178,11 @@ mod tests {
     }
 
     #[test]
-    fn test_string_1() -> Result<(), ParseError> {
+    fn test_string_1() -> Result<(), RebelError> {
         let input = "\"hello\"  \n ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut mem = init_memory(&mut buf, 256, 1024)?;
         let mut ctx = EvalContext::new(&mut mem);
         let mut parser = Parser::new(input, &mut ctx);
         parser.parse()?;
@@ -206,11 +191,11 @@ mod tests {
     }
 
     #[test]
-    fn test_block_1() -> Result<(), ParseError> {
+    fn test_block_1() -> Result<(), RebelError> {
         let input = "42 \"hello\" word x: \n ";
 
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut mem = init_memory(&mut buf, 256, 1024)?;
         let mut ctx = EvalContext::new(&mut mem);
         let mut parser = Parser::new(input, &mut ctx);
         parser.parse()?;

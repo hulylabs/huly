@@ -2,13 +2,35 @@
 
 use super::{Offset, Word};
 use crate::hash::hash_u32x8;
-use std::slice::ChunksExact;
+use std::{array::TryFromSliceError, slice::ChunksExact};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum RebelError {
+    #[error("memory error")]
+    MemoryError,
+    #[error("function not found")]
+    FunctionNotFound,
+    #[error("internal error")]
+    InternalError,
+    #[error("string too long")]
+    StringTooLong,
+    #[error("out of memory")]
+    OutOfMemory,
+    #[error("stack overflow")]
+    StackOverflow,
+    #[error("stack underflow")]
+    StackUnderflow,
+    #[error("symbol table full")]
+    SymbolTableFull,
+    #[error("type error")]
+    TypeError,
     #[error(transparent)]
-    AnyError(#[from] anyhow::Error),
+    SliceError(#[from] TryFromSliceError),
+    #[error(transparent)]
+    OtherError(#[from] anyhow::Error),
+    #[error(transparent)]
+    ParseError(#[from] crate::parse::ParseError),
 }
 
 // T A G
@@ -70,7 +92,7 @@ impl Value {
         Self { tag, value }
     }
 
-    pub fn as_str<H, Y, S>(&self, memory: &Memory<H, Y, S>) -> Option<&str>
+    pub fn as_str<H, Y, S>(&self, memory: &Memory<H, Y, S>) -> Result<&str, RebelError>
     where
         H: AsRef<[Word]>,
     {
@@ -81,8 +103,9 @@ impl Value {
                 let len = buf[0] as usize;
                 buf.get(1..len + 1)
                     .map(|buf| unsafe { std::str::from_utf8_unchecked(buf) })
+                    .ok_or(RebelError::MemoryError)
             }
-            _ => Some("<not a string>"),
+            _ => Err(RebelError::TypeError),
         }
     }
 
@@ -113,16 +136,23 @@ where
         data.get(start..start + len).map(Block)
     }
 
-    fn peek<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
-        self.0.as_ref().split_first().and_then(|(len, data)| {
-            let begin = addr as usize;
-            let end = begin + N;
-            if end > *len as usize {
-                None
-            } else {
-                data.get(begin..end).and_then(|block| block.try_into().ok())
-            }
-        })
+    fn peek<const N: usize>(&self, addr: Offset) -> Result<&[u32; N], RebelError> {
+        let (len, data) = self
+            .0
+            .as_ref()
+            .split_first()
+            .ok_or(RebelError::MemoryError)?;
+
+        let begin = addr as usize;
+        let end = begin + N;
+        if end > *len as usize {
+            Err(RebelError::StackUnderflow)
+        } else {
+            data.get(begin..end)
+                .map(|block| block.try_into())
+                .transpose()?
+                .ok_or(RebelError::MemoryError)
+        }
     }
 }
 
@@ -130,8 +160,12 @@ impl<T> Block<T>
 where
     T: AsMut<[Word]>,
 {
-    fn init(&mut self, size: u32) -> Option<()> {
-        self.0.as_mut().first_mut().map(|slot| *slot = size)
+    fn init(&mut self, size: u32) -> Result<(), RebelError> {
+        self.0
+            .as_mut()
+            .first_mut()
+            .map(|slot| *slot = size)
+            .ok_or(RebelError::MemoryError)
     }
 
     fn poke<const N: usize>(&mut self, addr: Offset, words: [u32; N]) -> Option<()> {
@@ -151,19 +185,24 @@ where
         }
     }
 
-    fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
-        let (len, data) = self.0.as_mut().split_first_mut()?;
-        let addr = *len as usize;
-        data.get_mut(addr..addr + N).map(|block| {
-            block
-                .iter_mut()
-                .zip(words.iter())
-                .for_each(|(slot, value)| {
-                    *slot = *value;
-                });
-            *len += N as u32;
-            addr as Offset
-        })
+    fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, RebelError> {
+        self.0
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                let addr = *len as usize;
+                data.get_mut(addr..addr + N).map(|block| {
+                    block
+                        .iter_mut()
+                        .zip(words.iter())
+                        .for_each(|(slot, value)| {
+                            *slot = *value;
+                        });
+                    *len += N as u32;
+                    addr as Offset
+                })
+            })
+            .ok_or(RebelError::OutOfMemory)
     }
 
     fn reserve(&mut self, words: u32) -> Option<(Offset, &mut [Word])> {
@@ -173,16 +212,18 @@ where
             .inspect(|_| *len += words)
     }
 
-    fn alloc_empty(&mut self, len: Offset) -> Option<(Offset, &mut [Word])> {
-        self.reserve(len + 1).and_then(|(addr, data)| {
-            data.split_first_mut().map(|(size, block)| {
-                *size = len;
-                (addr, block)
+    fn alloc_empty(&mut self, len: Offset) -> Result<(Offset, &mut [Word]), RebelError> {
+        self.reserve(len + 1)
+            .and_then(|(addr, data)| {
+                data.split_first_mut().map(|(size, block)| {
+                    *size = len;
+                    (addr, block)
+                })
             })
-        })
+            .ok_or(RebelError::OutOfMemory)
     }
 
-    fn alloc_block(&mut self, values: &[Word]) -> Option<Offset> {
+    fn alloc_block(&mut self, values: &[Word]) -> Result<Offset, RebelError> {
         self.alloc_empty(values.len() as u32).map(|(addr, data)| {
             data.iter_mut()
                 .zip(values.iter())
@@ -193,10 +234,19 @@ where
         })
     }
 
-    fn get_block_mut(&mut self, addr: Offset) -> Option<&mut [Word]> {
+    fn get_block_mut(&mut self, addr: Offset) -> Result<&mut [Word], RebelError> {
         let addr = addr as usize;
-        let len = self.0.as_mut().get(addr).copied()? as usize;
-        self.0.as_mut().get_mut(addr + 1..addr + 1 + len)
+        let len = self
+            .0
+            .as_mut()
+            .get(addr)
+            .copied()
+            .ok_or(RebelError::MemoryError)? as usize;
+
+        self.0
+            .as_mut()
+            .get_mut(addr + 1..addr + 1 + len)
+            .ok_or(RebelError::MemoryError)
     }
 }
 
@@ -208,8 +258,12 @@ impl<T> Stack<T>
 where
     T: AsRef<[Word]>,
 {
-    fn len(&self) -> Option<u32> {
-        self.0.as_ref().first().copied()
+    fn len(&self) -> Result<u32, RebelError> {
+        self.0
+            .as_ref()
+            .first()
+            .copied()
+            .ok_or(RebelError::MemoryError)
     }
 
     fn peek<const N: usize>(&self) -> Option<&[Word]> {
@@ -225,70 +279,93 @@ impl<T> Stack<T>
 where
     T: AsMut<[Word]>,
 {
-    fn init(&mut self) -> Option<()> {
-        self.0.as_mut().first_mut().map(|slot| *slot = 0)
+    fn init(&mut self) -> Result<(), RebelError> {
+        self.0
+            .as_mut()
+            .first_mut()
+            .map(|slot| *slot = 0)
+            .ok_or(RebelError::MemoryError)
     }
 
-    fn push_offset<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
-        let (len, data) = self.0.as_mut().split_first_mut()?;
-        let addr = *len as usize;
-        data.get_mut(addr..addr + N).map(|block| {
-            block
-                .iter_mut()
-                .zip(words.iter())
-                .for_each(|(slot, value)| {
-                    *slot = *value;
-                });
-            *len += N as u32;
-            addr as Offset
-        })
+    fn push_offset<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, RebelError> {
+        self.0
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                let addr = *len as usize;
+                data.get_mut(addr..addr + N).map(|block| {
+                    block
+                        .iter_mut()
+                        .zip(words.iter())
+                        .for_each(|(slot, value)| {
+                            *slot = *value;
+                        });
+                    *len += N as u32;
+                    addr as Offset
+                })
+            })
+            .ok_or(RebelError::StackOverflow)
     }
 
-    fn push<const N: usize>(&mut self, words: [u32; N]) -> Option<()> {
+    fn push<const N: usize>(&mut self, words: [u32; N]) -> Result<(), RebelError> {
         self.push_offset(words).map(|_| ())
     }
 
-    fn pop<const N: usize>(&mut self) -> Option<[u32; N]> {
-        let (len, data) = self.0.as_mut().split_first_mut()?;
-        len.checked_sub(N as u32).and_then(|new_len| {
-            let addr = new_len as usize;
-            data.get(addr..addr + N).map(|block| {
-                let mut words = [0; N];
-                block
-                    .iter()
-                    .zip(words.iter_mut())
-                    .for_each(|(slot, value)| {
-                        *value = *slot;
-                    });
-                *len = new_len;
-                words
+    fn pop<const N: usize>(&mut self) -> Result<[u32; N], RebelError> {
+        let (len, data) = self
+            .0
+            .as_mut()
+            .split_first_mut()
+            .ok_or(RebelError::MemoryError)?;
+
+        len.checked_sub(N as u32)
+            .and_then(|new_len| {
+                let addr = new_len as usize;
+                data.get(addr..addr + N).map(|block| {
+                    let mut words = [0; N];
+                    block
+                        .iter()
+                        .zip(words.iter_mut())
+                        .for_each(|(slot, value)| {
+                            *value = *slot;
+                        });
+                    *len = new_len;
+                    words
+                })
             })
-        })
+            .ok_or(RebelError::StackUnderflow)
     }
 
-    fn pop_all(&mut self, offset: Offset) -> Option<&[Word]> {
-        let (len, data) = self.0.as_mut().split_first_mut()?;
-        len.checked_sub(offset).and_then(|size| {
-            let addr = offset as usize;
-            data.get(addr..addr + size as usize).inspect(|_| {
-                *len = offset;
+    fn pop_all(&mut self, offset: Offset) -> Result<&[Word], RebelError> {
+        let (len, data) = self
+            .0
+            .as_mut()
+            .split_first_mut()
+            .ok_or(RebelError::MemoryError)?;
+
+        len.checked_sub(offset)
+            .and_then(|size| {
+                let addr = offset as usize;
+                data.get(addr..addr + size as usize).inspect(|_| {
+                    *len = offset;
+                })
             })
-        })
+            .ok_or(RebelError::StackUnderflow)
     }
 }
 
 // S Y M B O L   T A B L E
 
-fn inline_string(string: &str) -> Option<[u32; 8]> {
+fn inline_string(string: &str) -> Result<[u32; 8], RebelError> {
     let bytes = string.as_bytes();
     let len = bytes.len();
     if len < 32 {
         let mut buf = [0; 32];
         buf[0] = len as u8;
         buf[1..len + 1].copy_from_slice(bytes);
-        Some(unsafe { std::mem::transmute(buf) })
+        Ok(unsafe { std::mem::transmute(buf) })
     } else {
-        None
+        Err(RebelError::StringTooLong)
     }
 }
 
@@ -300,37 +377,53 @@ impl<T> SymbolTable<T>
 where
     T: AsMut<[Word]>,
 {
-    fn init(&mut self) -> Option<()> {
-        self.0.as_mut().first_mut().map(|slot| *slot = 0)
+    fn init(&mut self) -> Result<(), RebelError> {
+        self.0
+            .as_mut()
+            .first_mut()
+            .map(|slot| *slot = 0)
+            .ok_or(RebelError::MemoryError)
     }
 
-    fn get_or_insert_symbol<H>(&mut self, str: [u32; 8], heap: &mut Block<H>) -> Option<Symbol>
+    fn get_or_insert_symbol<H>(
+        &mut self,
+        str: [u32; 8],
+        heap: &mut Block<H>,
+    ) -> Result<Symbol, RebelError>
     where
         H: AsRef<[Word]> + AsMut<[Word]>,
     {
-        self.0.as_mut().split_first_mut().and_then(|(count, data)| {
-            let table_len = data.len() as u32;
-            let h = hash_u32x8(&str);
-            let mut index = h.checked_rem(table_len)?;
+        let (count, data) = self
+            .0
+            .as_mut()
+            .split_first_mut()
+            .ok_or(RebelError::MemoryError)?;
 
-            for _probe in 0..table_len {
-                let offset = data.get_mut(index as usize)?;
-                let stored_offset = *offset;
+        let table_len = data.len() as u32;
+        let h = hash_u32x8(&str);
+        let mut index = h.checked_rem(table_len).ok_or(RebelError::InternalError)?;
 
-                if stored_offset == 0 {
-                    let address = heap.alloc(str)?;
-                    *offset = address;
-                    *count += 1;
-                    return Some(address);
-                }
+        for _probe in 0..table_len {
+            let offset = data
+                .get_mut(index as usize)
+                .ok_or(RebelError::MemoryError)?;
+            let stored_offset = *offset;
 
-                if &str == heap.peek(stored_offset)? {
-                    return Some(stored_offset);
-                }
-                index = (index + 1).checked_rem(table_len)?;
+            if stored_offset == 0 {
+                let address = heap.alloc(str)?;
+                *offset = address;
+                *count += 1;
+                return Ok(address);
             }
-            None
-        })
+
+            if &str == heap.peek(stored_offset)? {
+                return Ok(stored_offset);
+            }
+            index = (index + 1)
+                .checked_rem(table_len)
+                .ok_or(RebelError::InternalError)?;
+        }
+        Err(RebelError::SymbolTableFull)
     }
 }
 
@@ -373,8 +466,12 @@ impl<T> Context<T>
 where
     T: AsMut<[Word]>,
 {
-    fn init(&mut self) -> Option<()> {
-        self.0.as_mut().first_mut().map(|slot| *slot = 0)
+    fn init(&mut self) -> Result<(), RebelError> {
+        self.0
+            .as_mut()
+            .first_mut()
+            .map(|slot| *slot = 0)
+            .ok_or(RebelError::MemoryError)
     }
 
     fn put(&mut self, symbol: Symbol, value: [Word; 2]) -> Option<()> {
@@ -405,8 +502,8 @@ where
 
 // M E M O R Y
 
-pub struct NativeFn {
-    func: fn(stack: Stack<Box<[Word]>>, heap: Block<&mut [Word]>) -> Result<(), RebelError>,
+pub struct NativeFn<H> {
+    func: fn(stack: &[Word], heap: &Block<H>) -> Result<(), RebelError>,
     arity: u32,
 }
 
@@ -414,7 +511,7 @@ pub struct Memory<H, Y, S> {
     stack: Stack<S>,
     heap: Block<H>,
     symbols: SymbolTable<Y>,
-    natives: Vec<NativeFn>,
+    natives: Vec<NativeFn<H>>,
 }
 
 impl<H, Y, S> Memory<H, Y, S>
@@ -423,7 +520,7 @@ where
     Y: AsMut<[Word]>,
     S: AsMut<[Word]>,
 {
-    fn init(&mut self) -> Option<()> {
+    fn init(&mut self) -> Result<(), RebelError> {
         self.symbols.init()?;
         self.stack.init()?;
 
@@ -432,7 +529,7 @@ where
         Context(root_ctx_data).init()?;
         debug_assert_eq!(root_ctx, 0);
 
-        Some(())
+        Ok(())
     }
 }
 
@@ -442,9 +539,14 @@ pub fn init_memory(
     memory: &mut [Word],
     stack_size: usize,
     symbols_size: usize,
-) -> Option<SimpleLayout> {
-    let (rest, stack) = memory.split_at_mut_checked(memory.len() - stack_size)?;
-    let (symbols, heap) = rest.split_at_mut_checked(symbols_size)?;
+) -> Result<SimpleLayout, RebelError> {
+    let (rest, stack) = memory
+        .split_at_mut_checked(memory.len() - stack_size)
+        .ok_or(RebelError::MemoryError)?;
+
+    let (symbols, heap) = rest
+        .split_at_mut_checked(symbols_size)
+        .ok_or(RebelError::MemoryError)?;
 
     let mut mem = SimpleLayout {
         heap: Block(heap),
@@ -454,17 +556,17 @@ pub fn init_memory(
     };
 
     mem.init()?;
-    Some(mem)
+    Ok(mem)
 }
 
 // P A R S E  C O L L E C T O R
 
 pub trait Collector {
-    fn string(&mut self, string: &str) -> Option<()>;
-    fn word(&mut self, kind: WordKind, word: &str) -> Option<()>;
-    fn integer(&mut self, value: i32) -> Option<()>;
-    fn begin_block(&mut self) -> Option<()>;
-    fn end_block(&mut self) -> Option<()>;
+    fn string(&mut self, string: &str) -> Result<(), RebelError>;
+    fn word(&mut self, kind: WordKind, word: &str) -> Result<(), RebelError>;
+    fn integer(&mut self, value: i32) -> Result<(), RebelError>;
+    fn begin_block(&mut self) -> Result<(), RebelError>;
+    fn end_block(&mut self) -> Result<(), RebelError>;
 }
 
 // E V A L  C O N T E X T
@@ -488,24 +590,26 @@ where
         }
     }
 
-    pub fn pop_parse(&mut self) -> Option<ChunksExact<'_, Word>> {
+    pub fn pop_parse(&mut self) -> Result<ChunksExact<'_, Word>, RebelError> {
         self.parse.pop_all(0).map(|data| data.chunks_exact(2))
     }
 
-    pub fn pop_stack(&mut self) -> Option<ChunksExact<'_, Word>> {
+    pub fn pop_stack(&mut self) -> Result<ChunksExact<'_, Word>, RebelError> {
         self.memory
             .stack
             .pop_all(0)
             .map(|data| data.chunks_exact(2))
     }
 
-    pub fn eval_parsed(&mut self) -> Option<()> {
-        let mut root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
+    pub fn eval_parsed(&mut self) -> Result<(), RebelError> {
         let data = self.parse.pop_all(0)?;
 
         for chunk in data.chunks_exact(2) {
             let value = match chunk[0] {
-                TAG_WORD => root_ctx.get(chunk[1])?,
+                TAG_WORD => {
+                    let root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
+                    root_ctx.get(chunk[1]).ok_or(RebelError::MemoryError)?
+                }
                 _ => [chunk[0], chunk[1]],
             };
 
@@ -513,7 +617,11 @@ where
 
             match value[0] {
                 TAG_NATIVE_FN => {
-                    let native_fn = self.memory.natives.get(value[1] as usize)?;
+                    let native_fn = self
+                        .memory
+                        .natives
+                        .get(value[1] as usize)
+                        .ok_or(RebelError::FunctionNotFound)?;
                     self.ops.push([sp, native_fn.arity * 2])?;
                 }
                 TAG_SET_WORD => {
@@ -525,21 +633,34 @@ where
             if let Some([bp, arity]) = self.ops.peek::<2>() {
                 if sp == bp + arity {
                     let frame = self.memory.stack.pop_all(*bp)?;
-                    let op: [Word; 2] = frame.get(0..2).and_then(|op| op.try_into().ok())?;
+                    let op: Option<[Word; 2]> =
+                        frame.get(0..2).map(|op| op.try_into()).transpose()?;
                     match op {
-                        [TAG_SET_WORD, sym] => {
-                            let value: [Word; 2] =
-                                frame.get(2..4).and_then(|value| value.try_into().ok())?;
-                            root_ctx.put(sym, value)?;
+                        Some([TAG_SET_WORD, sym]) => {
+                            let mut root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
+                            let value: Option<[Word; 2]> =
+                                frame.get(2..4).map(|value| value.try_into()).transpose()?;
+                            value
+                                .map(|value| root_ctx.put(sym, value))
+                                .ok_or(RebelError::MemoryError)?;
+                        }
+                        Some([TAG_NATIVE_FN, func]) => {
+                            let native_fn = self
+                                .memory
+                                .natives
+                                .get(func as usize)
+                                .ok_or(RebelError::FunctionNotFound)?;
+                            let stack = frame.get(2..).ok_or(RebelError::MemoryError)?;
+                            (native_fn.func)(stack, &self.memory.heap)?;
                         }
                         _ => {
-                            return None;
+                            return Err(RebelError::InternalError);
                         }
                     }
                 }
             }
         }
-        Some(())
+        Ok(())
     }
 }
 
@@ -548,13 +669,13 @@ where
     H: AsMut<[Word]> + AsRef<[Word]>,
     Y: AsMut<[Word]>,
 {
-    fn string(&mut self, string: &str) -> Option<()> {
+    fn string(&mut self, string: &str) -> Result<(), RebelError> {
         println!("string: {:?}", string);
         let offset = self.memory.heap.alloc(inline_string(string)?)?;
         self.parse.push([Tag::InlineString.into(), offset])
     }
 
-    fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
+    fn word(&mut self, kind: WordKind, word: &str) -> Result<(), RebelError> {
         let offset = self
             .memory
             .symbols
@@ -566,16 +687,16 @@ where
         self.parse.push([tag.into(), offset])
     }
 
-    fn integer(&mut self, value: i32) -> Option<()> {
+    fn integer(&mut self, value: i32) -> Result<(), RebelError> {
         self.parse.push([Tag::Int.into(), value as u32])
     }
 
-    fn begin_block(&mut self) -> Option<()> {
+    fn begin_block(&mut self) -> Result<(), RebelError> {
         println!("begin_block");
         self.ops.push([self.parse.len()?])
     }
 
-    fn end_block(&mut self) -> Option<()> {
+    fn end_block(&mut self) -> Result<(), RebelError> {
         println!("end_block");
         let block_data = self.parse.pop_all(self.ops.pop::<1>()?[0])?;
         let offset = self.memory.heap.alloc_block(block_data)?;
@@ -593,9 +714,9 @@ mod tests {
     use crate::parse::{ParseError, Parser};
 
     #[test]
-    fn test_eval_1() -> Result<(), ParseError> {
+    fn test_eval_1() -> Result<(), RebelError> {
         let mut buf = vec![0; 0x10000].into_boxed_slice();
-        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+        let mut mem = init_memory(&mut buf, 256, 1024)?;
 
         let mut ctx = EvalContext::new(&mut mem);
         let mut parser = Parser::new("x: 5", &mut ctx);
