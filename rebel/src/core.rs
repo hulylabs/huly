@@ -25,6 +25,10 @@ pub enum RebelError {
     SymbolTableFull,
     #[error("type error")]
     TypeError,
+    #[error("bad arguments")]
+    BadArguments,
+    #[error("word not bound")]
+    WordNotBound,
     #[error(transparent)]
     SliceError(#[from] TryFromSliceError),
     #[error(transparent)]
@@ -122,7 +126,7 @@ impl From<Value> for [Word; 2] {
 
 // B L O C K
 
-struct Block<T>(T);
+pub struct Block<T>(T);
 
 impl<T> Block<T>
 where
@@ -442,23 +446,32 @@ impl<T> Context<T>
 where
     T: AsRef<[Word]>,
 {
-    fn get(&self, symbol: Symbol) -> Option<[u32; 2]> {
-        self.0.as_ref().split_first().and_then(|(_, data)| {
-            let table_len = (data.len() / 3) as u32;
-            let h = Self::hash_u32(symbol);
-            let mut index = h.checked_rem(table_len)?;
+    fn get(&self, symbol: Symbol) -> Result<[u32; 2], RebelError> {
+        let (_, data) = self
+            .0
+            .as_ref()
+            .split_first()
+            .ok_or(RebelError::MemoryError)?;
 
-            for _probe in 0..table_len {
-                let entry_offset = (index * 3) as usize;
-                let entry = data.get(entry_offset..entry_offset + 3)?;
-                if entry[0] == symbol {
-                    return Some([entry[1], entry[2]]);
-                }
+        let table_len = (data.len() / 3) as u32;
+        let h = Self::hash_u32(symbol);
+        let mut index = h.checked_rem(table_len).ok_or(RebelError::InternalError)?;
 
-                index = (index + 1).checked_rem(table_len)?;
+        for _probe in 0..table_len {
+            let entry_offset = (index * 3) as usize;
+            let entry = data
+                .get(entry_offset..entry_offset + 3)
+                .ok_or(RebelError::MemoryError)?;
+
+            if entry[0] == symbol {
+                return Ok([entry[1], entry[2]]);
             }
-            None
-        })
+
+            index = (index + 1)
+                .checked_rem(table_len)
+                .ok_or(RebelError::InternalError)?;
+        }
+        Err(RebelError::WordNotBound)
     }
 }
 
@@ -510,21 +523,23 @@ where
 
 // M E M O R Y
 
+type NativeFn = fn(stack: &[Word], heap: Block<&mut [Word]>) -> Result<[Word; 2], RebelError>;
+
 #[derive(Debug, Clone, Copy)]
-pub struct NativeFn {
-    func: fn(stack: &[Word], heap: Block<&mut [Word]>) -> Result<(), RebelError>,
+struct FuncDescriptor {
+    func: NativeFn,
     arity: u32,
 }
 
 pub struct Module {
-    pub procs: &'static [(&'static str, NativeFn)],
+    pub procs: &'static [(&'static str, NativeFn, u32)],
 }
 
 pub struct Memory<H, Y, S> {
     stack: Stack<S>,
     heap: Block<H>,
     symbols: SymbolTable<Y>,
-    natives: Vec<NativeFn>,
+    natives: Vec<FuncDescriptor>,
 }
 
 impl<H, Y, S> Memory<H, Y, S>
@@ -546,9 +561,12 @@ where
     }
 
     pub fn load_module(&mut self, module: &Module) -> Result<(), RebelError> {
-        for (symbol, proc) in module.procs {
+        for (symbol, proc, arity) in module.procs {
             let id = self.natives.len() as Word;
-            self.natives.push(*proc);
+            self.natives.push(FuncDescriptor {
+                func: *proc,
+                arity: *arity,
+            });
 
             let symbol = self
                 .symbols
@@ -630,13 +648,14 @@ where
     }
 
     pub fn eval_parsed(&mut self) -> Result<(), RebelError> {
+        self.memory.stack.init()?;
         let data = self.parse.pop_all(0)?;
 
         for chunk in data.chunks_exact(2) {
             let value = match chunk[0] {
                 TAG_WORD => {
                     let root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
-                    root_ctx.get(chunk[1]).ok_or(RebelError::MemoryError)?
+                    root_ctx.get(chunk[1])?
                 }
                 _ => [chunk[0], chunk[1]],
             };
@@ -669,6 +688,7 @@ where
                             let value: [Word; 2] =
                                 frame.get(2..4).ok_or(RebelError::MemoryError)?.try_into()?;
                             root_ctx.put(sym, value)?;
+                            self.memory.stack.push(value)?;
                         }
                         Some([TAG_NATIVE_FN, func]) => {
                             let native_fn = self
@@ -678,7 +698,8 @@ where
                                 .ok_or(RebelError::FunctionNotFound)?;
                             let stack = frame.get(2..).ok_or(RebelError::MemoryError)?;
                             let heap = self.memory.heap.0.as_mut();
-                            (native_fn.func)(stack, Block(heap))?;
+                            let result = (native_fn.func)(stack, Block(heap))?;
+                            self.memory.stack.push(result)?;
                         }
                         _ => {
                             return Err(RebelError::InternalError);
@@ -731,14 +752,17 @@ where
     }
 }
 
-// pub fn test(ctx: &mut EvalContext<&mut [Word], &mut [Word], &mut [Word]>) -> Option<()> {
+// pub fn test(
+//     ctx: &mut EvalContext<&mut [Word], &mut [Word], &mut [Word]>,
+// ) -> Result<(), RebelError> {
 //     ctx.eval_parsed()
 // }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::parse::{ParseError, Parser};
+    use crate::boot::CORE_MODULE;
+    use crate::parse::Parser;
 
     #[test]
     fn test_eval_1() -> Result<(), RebelError> {
@@ -748,12 +772,12 @@ mod tests {
         let mut ctx = EvalContext::new(&mut mem);
         let mut parser = Parser::new("x: 5", &mut ctx);
         parser.parse()?;
-        ctx.eval_parsed().unwrap();
+        ctx.eval_parsed()?;
 
         let mut ctx = EvalContext::new(&mut mem);
         let mut parser = Parser::new("x", &mut ctx);
         parser.parse()?;
-        ctx.eval_parsed().unwrap();
+        ctx.eval_parsed()?;
 
         let stack = ctx.pop_stack().unwrap().collect::<Vec<_>>();
 
@@ -761,6 +785,20 @@ mod tests {
 
         assert_eq!(stack[0][0], TAG_INT);
         assert_eq!(stack[0][1], 5);
+
+        mem.load_module(&CORE_MODULE)?;
+
+        let mut ctx = EvalContext::new(&mut mem);
+        let mut parser = Parser::new("add 7 8", &mut ctx);
+        parser.parse()?;
+        ctx.eval_parsed()?;
+
+        let stack = ctx.pop_stack().unwrap().collect::<Vec<_>>();
+
+        assert_eq!(stack.len(), 1);
+
+        assert_eq!(stack[0][0], TAG_INT);
+        assert_eq!(stack[0][1], 15);
 
         Ok(())
     }
