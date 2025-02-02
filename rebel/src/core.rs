@@ -110,7 +110,7 @@ where
         let addr = addr as usize;
         let len = data.get(addr).copied()? as usize;
         let start = addr + 1;
-        data.get(start..start + len).map(|block| Block(block))
+        data.get(start..start + len).map(Block)
     }
 
     fn peek<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
@@ -488,11 +488,11 @@ where
         }
     }
 
-    pub fn pop_parse<'b>(&'b mut self) -> Option<ChunksExact<'b, Word>> {
+    pub fn pop_parse(&mut self) -> Option<ChunksExact<'_, Word>> {
         self.parse.pop_all(0).map(|data| data.chunks_exact(2))
     }
 
-    pub fn pop_stack<'b>(&'b mut self) -> Option<ChunksExact<'b, Word>> {
+    pub fn pop_stack(&mut self) -> Option<ChunksExact<'_, Word>> {
         self.memory
             .stack
             .pop_all(0)
@@ -543,7 +543,7 @@ where
     }
 }
 
-impl<'a, H, Y, S> Collector for EvalContext<'a, H, Y, S>
+impl<H, Y, S> Collector for EvalContext<'_, H, Y, S>
 where
     H: AsMut<[Word]> + AsRef<[Word]>,
     Y: AsMut<[Word]>,
