@@ -63,7 +63,7 @@ impl From<Tag> for Word {
 
 const TAG_NONE: Word = Tag::None as Word;
 pub const TAG_INT: Word = Tag::Int as Word;
-const TAG_BLOCK: Word = Tag::Block as Word;
+pub const TAG_BLOCK: Word = Tag::Block as Word;
 const TAG_INLINE_STRING: Word = Tag::InlineString as Word;
 const TAG_WORD: Word = Tag::Word as Word;
 const TAG_SET_WORD: Word = Tag::SetWord as Word;
@@ -85,44 +85,44 @@ impl From<Word> for Tag {
 
 // V A L U E
 
-#[derive(Debug)]
-pub struct Value {
-    tag: Tag,
-    value: Word,
-}
+// #[derive(Debug)]
+// pub struct Value {
+//     tag: Tag,
+//     value: Word,
+// }
 
-impl Value {
-    fn new(tag: Tag, value: Word) -> Self {
-        Self { tag, value }
-    }
+// impl Value {
+//     fn new(tag: Tag, value: Word) -> Self {
+//         Self { tag, value }
+//     }
 
-    pub fn as_str<H, Y, S>(&self, memory: &Memory<H, Y, S>) -> Result<&str, RebelError>
-    where
-        H: AsRef<[Word]>,
-    {
-        match self.tag {
-            Tag::InlineString => {
-                let buf = memory.heap.peek::<8>(self.value)?;
-                let buf = unsafe { std::mem::transmute::<_, &[u8; 32]>(buf) };
-                let len = buf[0] as usize;
-                buf.get(1..len + 1)
-                    .map(|buf| unsafe { std::str::from_utf8_unchecked(buf) })
-                    .ok_or(RebelError::MemoryError)
-            }
-            _ => Err(RebelError::TypeError),
-        }
-    }
+//     pub fn as_str<H, Y, S>(&self, memory: &Memory<H, Y, S>) -> Result<&str, RebelError>
+//     where
+//         H: AsRef<[Word]>,
+//     {
+//         match self.tag {
+//             Tag::InlineString => {
+//                 let buf = memory.heap.peek::<8>(self.value)?;
+//                 let buf = unsafe { std::mem::transmute::<_, &[u8; 32]>(buf) };
+//                 let len = buf[0] as usize;
+//                 buf.get(1..len + 1)
+//                     .map(|buf| unsafe { std::str::from_utf8_unchecked(buf) })
+//                     .ok_or(RebelError::MemoryError)
+//             }
+//             _ => Err(RebelError::TypeError),
+//         }
+//     }
 
-    pub fn tag(&self) -> Tag {
-        self.tag
-    }
-}
+//     pub fn tag(&self) -> Tag {
+//         self.tag
+//     }
+// }
 
-impl From<Value> for [Word; 2] {
-    fn from(value: Value) -> Self {
-        [value.tag.into(), value.value]
-    }
-}
+// impl From<Value> for [Word; 2] {
+//     fn from(value: Value) -> Self {
+//         [value.tag.into(), value.value]
+//     }
+// }
 
 // B L O C K
 
@@ -651,6 +651,8 @@ where
         self.memory.stack.init()?;
         let data = self.parse.pop_all(0)?;
 
+        let mut cur: Option<[Word; 2]> = None;
+
         for chunk in data.chunks_exact(2) {
             let value = match chunk[0] {
                 TAG_WORD => {
@@ -669,17 +671,23 @@ where
                         .natives
                         .get(value[1] as usize)
                         .ok_or(RebelError::FunctionNotFound)?;
-                    self.ops.push([sp, native_fn.arity * 2])?;
+                    if let Some([bp, arity]) = cur {
+                        self.ops.push([bp, arity])?;
+                    }
+                    cur = Some([sp, native_fn.arity * 2]);
                 }
                 TAG_SET_WORD => {
-                    self.ops.push([sp, 2])?;
+                    if let Some([bp, arity]) = cur {
+                        self.ops.push([bp, arity])?;
+                    }
+                    cur = Some([sp, 2]);
                 }
                 _ => {}
             }
 
-            while let Some([bp, arity]) = self.ops.peek::<2>() {
+            while let Some([bp, arity]) = cur {
                 if sp == bp + arity {
-                    let frame = self.memory.stack.pop_all(*bp)?;
+                    let frame = self.memory.stack.pop_all(bp)?;
                     let op: [Word; 2] =
                         frame.get(0..2).ok_or(RebelError::MemoryError)?.try_into()?;
                     match op {
@@ -705,7 +713,7 @@ where
                             return Err(RebelError::InternalError);
                         }
                     }
-                    self.ops.pop::<2>()?;
+                    cur = self.ops.pop::<2>().ok();
                 } else {
                     break;
                 }
@@ -752,11 +760,11 @@ where
     }
 }
 
-// pub fn test(
-//     ctx: &mut EvalContext<&mut [Word], &mut [Word], &mut [Word]>,
-// ) -> Result<(), RebelError> {
-//     ctx.eval_parsed()
-// }
+pub fn test(
+    ctx: &mut EvalContext<&mut [Word], &mut [Word], &mut [Word]>,
+) -> Result<(), RebelError> {
+    ctx.eval_parsed()
+}
 
 #[cfg(test)]
 mod tests {
