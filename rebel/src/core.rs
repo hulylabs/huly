@@ -660,7 +660,7 @@ where
                 _ => [chunk[0], chunk[1]],
             };
 
-            let sp = self.memory.stack.push_offset(value)?;
+            let mut sp = self.memory.stack.push_offset(value)?;
 
             match value[0] {
                 TAG_NATIVE_FN => {
@@ -677,7 +677,7 @@ where
                 _ => {}
             }
 
-            if let Some([bp, arity]) = self.ops.peek::<2>() {
+            while let Some([bp, arity]) = self.ops.peek::<2>() {
                 if sp == bp + arity {
                     let frame = self.memory.stack.pop_all(*bp)?;
                     let op: [Word; 2] =
@@ -688,7 +688,7 @@ where
                             let value: [Word; 2] =
                                 frame.get(2..4).ok_or(RebelError::MemoryError)?.try_into()?;
                             root_ctx.put(sym, value)?;
-                            self.memory.stack.push(value)?;
+                            sp = self.memory.stack.push_offset(value)?;
                         }
                         [TAG_NATIVE_FN, func] => {
                             let native_fn = self
@@ -699,12 +699,15 @@ where
                             let stack = frame.get(2..).ok_or(RebelError::MemoryError)?;
                             let heap = self.memory.heap.0.as_mut();
                             let result = (native_fn.func)(stack, Block(heap))?;
-                            self.memory.stack.push(result)?;
+                            sp = self.memory.stack.push_offset(result)?;
                         }
                         _ => {
                             return Err(RebelError::InternalError);
                         }
                     }
+                    self.ops.pop::<2>()?;
+                } else {
+                    break;
                 }
             }
         }
