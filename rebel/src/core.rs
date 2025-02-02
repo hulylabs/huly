@@ -81,7 +81,7 @@ where
                 _ => [chunk[0], chunk[1]],
             };
 
-            let mut sp = stack.alloc(value).ok_or(MemoryError::StackOverflow)?;
+            let mut sp = stack.alloc(value)?;
 
             if let Some(arity) = match value[0] {
                 Value::TAG_NATIVE_FN => Some(self.get_func(value[1])?.arity * 2),
@@ -89,14 +89,14 @@ where
                 _ => None,
             } {
                 if let Some(c) = cur {
-                    ops.push(c).ok_or(MemoryError::StackOverflow)?;
+                    ops.push(c)?;
                 }
                 cur = Some([sp, arity]);
             }
 
             while let Some([bp, arity]) = cur {
                 if sp == bp + arity {
-                    let frame = stack.pop_all(bp).ok_or(MemoryError::StackUnderflow)?;
+                    let frame = stack.pop_all(bp)?;
                     match frame {
                         [Value::TAG_SET_WORD, sym, tag, val] => {
                             let mut root_ctx = self
@@ -105,25 +105,29 @@ where
                                 .map(Context::new)
                                 .ok_or(MemoryError::BoundsCheckFailed)?;
                             root_ctx.put(*sym, [*tag, *val])?;
-                            sp = stack.alloc(value).ok_or(MemoryError::StackOverflow)?;
+                            sp = stack.alloc(value)?;
                         }
                         [Value::TAG_NATIVE_FN, func, ..] => {
                             let native_fn = self.get_func(*func)?;
                             let stack_fn = frame.get(2..).ok_or(MemoryError::BoundsCheckFailed)?;
                             let result = (native_fn.func)(stack_fn, self)?;
-                            sp = stack.alloc(result).ok_or(MemoryError::StackOverflow)?;
+                            sp = stack.alloc(result)?;
                         }
                         _ => {
                             return Err(RebelError::InternalError);
                         }
                     }
-                    cur = ops.pop::<2>();
+                    cur = ops.pop();
                 } else {
                     break;
                 }
             }
         }
-        stack.pop().ok_or(MemoryError::StackUnderflow.into())
+        if let Some(value) = stack.pop() {
+            Ok(value)
+        } else {
+            Ok([Value::TAG_NONE, 0])
+        }
     }
 }
 

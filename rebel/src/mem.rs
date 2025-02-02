@@ -193,13 +193,13 @@ where
         self.0.init(0)
     }
 
-    pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
-        self.0.alloc(words)
+    pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, MemoryError> {
+        self.0.alloc(words).ok_or(MemoryError::StackOverflow)
     }
 
-    pub fn push<const N: usize>(&mut self, words: [u32; N]) -> Option<()> {
-        self.alloc(words)?;
-        Some(())
+    pub fn push<const N: usize>(&mut self, words: [u32; N]) -> Result<(), MemoryError> {
+        self.0.alloc(words).ok_or(MemoryError::StackOverflow)?;
+        Ok(())
     }
 
     pub fn pop<const N: usize>(&mut self) -> Option<[u32; N]> {
@@ -221,15 +221,18 @@ where
         })
     }
 
-    pub fn pop_all(&mut self, offset: Offset) -> Option<&[Word]> {
-        self.0.split_first_mut().and_then(|(len, data)| {
-            len.checked_sub(offset).and_then(|size| {
-                let addr = offset as usize;
-                data.get(addr..addr + size as usize).inspect(|_| {
-                    *len = offset;
+    pub fn pop_all(&mut self, offset: Offset) -> Result<&[Word], MemoryError> {
+        self.0
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                len.checked_sub(offset).and_then(|size| {
+                    let addr = offset as usize;
+                    data.get(addr..addr + size as usize).inspect(|_| {
+                        *len = offset;
+                    })
                 })
             })
-        })
+            .ok_or(MemoryError::StackUnderflow)
     }
 }
 
