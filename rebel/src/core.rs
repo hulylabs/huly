@@ -680,17 +680,17 @@ where
             if let Some([bp, arity]) = self.ops.peek::<2>() {
                 if sp == bp + arity {
                     let frame = self.memory.stack.pop_all(*bp)?;
-                    let op: Option<[Word; 2]> =
-                        frame.get(0..2).map(|op| op.try_into()).transpose()?;
+                    let op: [Word; 2] =
+                        frame.get(0..2).ok_or(RebelError::MemoryError)?.try_into()?;
                     match op {
-                        Some([TAG_SET_WORD, sym]) => {
+                        [TAG_SET_WORD, sym] => {
                             let mut root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
                             let value: [Word; 2] =
                                 frame.get(2..4).ok_or(RebelError::MemoryError)?.try_into()?;
                             root_ctx.put(sym, value)?;
                             self.memory.stack.push(value)?;
                         }
-                        Some([TAG_NATIVE_FN, func]) => {
+                        [TAG_NATIVE_FN, func] => {
                             let native_fn = self
                                 .memory
                                 .natives
