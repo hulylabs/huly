@@ -16,7 +16,10 @@ pub trait Collector {
     fn end_block(&mut self) -> Result<(), CoreError>;
 }
 
-pub struct Parser<'a, C: Collector> {
+pub struct Parser<'a, C>
+where
+    C: Collector,
+{
     input: &'a str,
     cursor: CharIndices<'a>,
     collector: &'a mut C,

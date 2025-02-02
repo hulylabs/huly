@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::mem::{Context, Heap, Stack, SymbolTable, Word};
-use crate::parse::{Collector, WordKind};
+use crate::parse::{Collector, Parser, WordKind};
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -135,7 +135,7 @@ where
             .ok_or(CoreError::BoundsCheckFailed)
     }
 
-    pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
+    fn eval_block(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
         let mut stack = Stack::new([0; 128]);
         let mut ops = Stack::new([0; 64]);
 
@@ -191,6 +191,14 @@ where
             Ok([Value::TAG_NONE, 0])
         }
     }
+
+    pub fn eval(&mut self, code: &str) -> Result<[Word; 2], CoreError> {
+        let mut collector = ParseCollector::new(self);
+        let mut parser = Parser::new(code, &mut collector);
+        parser.parse()?;
+        let block = collector.parse.pop_all(0)?;
+        self.eval_block(&block)
+    }
 }
 
 // P A R S E  C O L L E C T O R
@@ -199,6 +207,16 @@ struct ParseCollector<'a, T> {
     module: &'a mut Module<T>,
     parse: Stack<[Word; 64]>,
     ops: Stack<[Word; 32]>,
+}
+
+impl<'a, T> ParseCollector<'a, T> {
+    fn new(module: &'a mut Module<T>) -> Self {
+        Self {
+            module,
+            parse: Stack::new([0; 64]),
+            ops: Stack::new([0; 32]),
+        }
+    }
 }
 
 impl<T> Collector for ParseCollector<'_, T>
@@ -238,6 +256,6 @@ where
     }
 }
 
-pub fn eval(module: &mut Module<&mut [Word]>, block: &[Word]) -> Result<[Word; 2], CoreError> {
-    module.eval(block)
+pub fn eval(module: &mut Module<&mut [Word]>, str: &str) -> Result<[Word; 2], CoreError> {
+    module.eval(str)
 }
