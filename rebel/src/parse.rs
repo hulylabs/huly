@@ -147,7 +147,7 @@ where
             .ok_or(ParseError::MemoryError)
     }
 
-    fn parse(&mut self) -> Result<(), ParseError> {
+    pub fn parse(&mut self) -> Result<(), ParseError> {
         while let Some((pos, char)) = self.skip_whitespace() {
             match char {
                 '[' => self
@@ -175,9 +175,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use crate::core::{init_memory, Tag};
-
     use super::*;
+    use crate::core::{init_memory, Tag};
+    use crate::Word;
 
     #[test]
     fn test_whitespace_1() -> Result<(), ParseError> {
@@ -215,11 +215,12 @@ mod tests {
         let mut parser = Parser::new(input, &mut ctx);
         parser.parse()?;
 
-        let stack: Vec<_> = ctx.pop_values().unwrap().collect();
+        let stack: Vec<_> = ctx.pop_parse().unwrap().collect();
 
         assert_eq!(stack.len(), 4);
 
-        assert_eq!(stack[0].tag(), Tag::Int);
+        assert_eq!(stack[0][0], crate::core::TAG_INT);
+        assert_eq!(stack[0][1], 42);
 
         // assert_eq!(stack[0], Tag::Int.into());
         // assert_eq!(stack[1], 42);

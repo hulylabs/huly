@@ -2,6 +2,7 @@
 
 use super::{Offset, Word};
 use crate::hash::hash_u32x8;
+use std::slice::ChunksExact;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -35,7 +36,7 @@ impl From<Tag> for Word {
 }
 
 const TAG_NONE: Word = Tag::None as Word;
-const TAG_INT: Word = Tag::Int as Word;
+pub const TAG_INT: Word = Tag::Int as Word;
 const TAG_BLOCK: Word = Tag::Block as Word;
 const TAG_INLINE_STRING: Word = Tag::InlineString as Word;
 const TAG_WORD: Word = Tag::Word as Word;
@@ -58,6 +59,7 @@ impl From<Word> for Tag {
 
 // V A L U E
 
+#[derive(Debug)]
 pub struct Value {
     tag: Tag,
     value: Word,
@@ -486,17 +488,18 @@ where
         }
     }
 
-    pub fn pop_values<'b>(&'b mut self) -> Option<impl Iterator<Item = Value> + 'b> {
-        let data = self.parse.pop_all(0)?;
-        let mut iter = data.iter();
-        Some(std::iter::from_fn(move || {
-            let tag = iter.next()?;
-            let value = iter.next()?;
-            Some(Value::new((*tag).into(), *value))
-        }))
+    pub fn pop_parse<'b>(&'b mut self) -> Option<ChunksExact<'b, Word>> {
+        self.parse.pop_all(0).map(|data| data.chunks_exact(2))
     }
 
-    fn read_parsed(&mut self) -> Option<()> {
+    pub fn pop_stack<'b>(&'b mut self) -> Option<ChunksExact<'b, Word>> {
+        self.memory
+            .stack
+            .pop_all(0)
+            .map(|data| data.chunks_exact(2))
+    }
+
+    pub fn eval_parsed(&mut self) -> Option<()> {
         let mut root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
         let data = self.parse.pop_all(0)?;
 
@@ -536,13 +539,6 @@ where
                 }
             }
         }
-
-        Some(())
-    }
-
-    pub fn eval_parsed(&mut self) -> Option<()> {
-        self.read_parsed()?;
-        // self.eval_stack()?;
         Some(())
     }
 }
@@ -584,5 +580,36 @@ where
         let block_data = self.parse.pop_all(self.ops.pop::<1>()?[0])?;
         let offset = self.memory.heap.alloc_block(block_data)?;
         self.parse.push([Tag::Block.into(), offset])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::parse::{ParseError, Parser};
+
+    #[test]
+    fn test_eval_1() -> Result<(), ParseError> {
+        let mut buf = vec![0; 0x10000].into_boxed_slice();
+        let mut mem = init_memory(&mut buf, 256, 1024).ok_or(ParseError::MemoryError)?;
+
+        let mut ctx = EvalContext::new(&mut mem);
+        let mut parser = Parser::new("x: 5", &mut ctx);
+        parser.parse()?;
+        ctx.eval_parsed().unwrap();
+
+        let mut ctx = EvalContext::new(&mut mem);
+        let mut parser = Parser::new("x", &mut ctx);
+        parser.parse()?;
+        ctx.eval_parsed().unwrap();
+
+        let stack = ctx.pop_stack().unwrap().collect::<Vec<_>>();
+
+        assert_eq!(stack.len(), 1);
+
+        assert_eq!(stack[0][0], TAG_INT);
+        assert_eq!(stack[0][1], 5);
+
+        Ok(())
     }
 }
