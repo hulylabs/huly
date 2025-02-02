@@ -43,6 +43,13 @@ where
         self.0.as_ref().split_first()
     }
 
+    fn get_block(&self, addr: Offset) -> Option<&[Word]> {
+        self.0.as_ref().get(addr as usize..).and_then(|data| {
+            data.split_first()
+                .and_then(|(len, block)| block.get(..*len as usize))
+        })
+    }
+
     // fn get_at<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
     //     self.0.as_ref().split_first().and_then(|(len, data)| {
     //         let begin = addr as usize;
@@ -53,14 +60,6 @@ where
     //             data.get(begin..end).and_then(|block| block.try_into().ok())
     //         }
     //     })
-    // }
-
-    // fn get_block(&self, addr: Offset) -> Option<Block<&[Word]>> {
-    //     let data = self.0.as_ref();
-    //     let addr = addr as usize;
-    //     let len = data.get(addr).copied()? as usize;
-    //     let start = addr + 1;
-    //     data.get(start..start + len).map(Block)
     // }
 }
 
@@ -419,9 +418,9 @@ impl<T> Heap<T>
 where
     T: AsRef<[Word]>,
 {
-    // fn len(&self) -> Option<Offset> {
-    //     self.0.len()
-    // }
+    pub fn get_block(&self, addr: Offset) -> Option<&[Word]> {
+        self.0.get_block(addr)
+    }
 }
 
 impl<T> Heap<T>

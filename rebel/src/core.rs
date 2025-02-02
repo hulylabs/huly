@@ -60,8 +60,27 @@ impl<T> Module<T> {
 
 impl<T> Module<T>
 where
+    T: AsRef<[Word]>,
+{
+    fn get_context(&self) -> Result<Context<&[Word]>, MemoryError> {
+        self.heap
+            .get_block(0)
+            .map(Context::new)
+            .ok_or(MemoryError::BoundsCheckFailed)
+    }
+}
+
+impl<T> Module<T>
+where
     T: AsMut<[Word]>,
 {
+    fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, MemoryError> {
+        self.heap
+            .get_block_mut(0)
+            .map(Context::new)
+            .ok_or(MemoryError::BoundsCheckFailed)
+    }
+
     pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], RebelError> {
         let mut stack = Stack::new([0; 64]);
         let mut ops = Stack::new([0; 64]);
@@ -70,14 +89,7 @@ where
 
         for chunk in block.chunks_exact(2) {
             let value = match chunk[0] {
-                Value::TAG_WORD => {
-                    let root_ctx = self
-                        .heap
-                        .get_block_mut(0)
-                        .map(Context::new)
-                        .ok_or(MemoryError::BoundsCheckFailed)?;
-                    root_ctx.get(chunk[1])?
-                }
+                Value::TAG_WORD => self.get_context_mut().and_then(|ctx| ctx.get(chunk[1]))?,
                 _ => [chunk[0], chunk[1]],
             };
 
@@ -99,12 +111,8 @@ where
                     let frame = stack.pop_all(bp)?;
                     match frame {
                         [Value::TAG_SET_WORD, sym, tag, val] => {
-                            let mut root_ctx = self
-                                .heap
-                                .get_block_mut(0)
-                                .map(Context::new)
-                                .ok_or(MemoryError::BoundsCheckFailed)?;
-                            root_ctx.put(*sym, [*tag, *val])?;
+                            self.get_context_mut()
+                                .and_then(|mut ctx| ctx.put(*sym, [*tag, *val]))?;
                             sp = stack.alloc(value)?;
                         }
                         [Value::TAG_NATIVE_FN, func, ..] => {
