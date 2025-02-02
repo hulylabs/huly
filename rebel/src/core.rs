@@ -474,49 +474,62 @@ where
             .ok_or(RebelError::MemoryError)
     }
 
-    fn put(&mut self, symbol: Symbol, value: [Word; 2]) -> Option<()> {
-        self.0.as_mut().split_first_mut().and_then(|(count, data)| {
-            let table_len = (data.len() / 3) as u32;
-            let h = Self::hash_u32(symbol);
-            let mut index = h.checked_rem(table_len)?;
+    fn put(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), RebelError> {
+        let (count, data) = self
+            .0
+            .as_mut()
+            .split_first_mut()
+            .ok_or(RebelError::MemoryError)?;
 
-            for _probe in 0..table_len {
-                let entry_offset = (index * 3) as usize;
-                let entry = data.get_mut(entry_offset..entry_offset + 3)?;
-                let stored_symbol = entry[0];
+        let table_len = (data.len() / 3) as u32;
+        let h = Self::hash_u32(symbol);
+        let mut index = h.checked_rem(table_len).ok_or(RebelError::InternalError)?;
 
-                if stored_symbol == 0 || stored_symbol == symbol {
-                    entry[0] = symbol;
-                    entry[1] = value[0];
-                    entry[2] = value[1];
-                    *count += 1;
-                    return Some(());
-                }
+        for _probe in 0..table_len {
+            let entry_offset = (index * 3) as usize;
+            let entry = data
+                .get_mut(entry_offset..entry_offset + 3)
+                .ok_or(RebelError::MemoryError)?;
 
-                index = (index + 1).checked_rem(table_len)?;
+            let stored_symbol = entry[0];
+            if stored_symbol == 0 || stored_symbol == symbol {
+                entry[0] = symbol;
+                entry[1] = value[0];
+                entry[2] = value[1];
+                *count += 1;
+                return Ok(());
             }
-            None
-        })
+
+            index = (index + 1)
+                .checked_rem(table_len)
+                .ok_or(RebelError::InternalError)?;
+        }
+        Err(RebelError::SymbolTableFull)
     }
 }
 
 // M E M O R Y
 
-pub struct NativeFn<H> {
-    func: fn(stack: &[Word], heap: &Block<H>) -> Result<(), RebelError>,
+#[derive(Debug, Clone, Copy)]
+pub struct NativeFn {
+    func: fn(stack: &[Word], heap: Block<&mut [Word]>) -> Result<(), RebelError>,
     arity: u32,
+}
+
+pub struct Module {
+    pub procs: &'static [(&'static str, NativeFn)],
 }
 
 pub struct Memory<H, Y, S> {
     stack: Stack<S>,
     heap: Block<H>,
     symbols: SymbolTable<Y>,
-    natives: Vec<NativeFn<H>>,
+    natives: Vec<NativeFn>,
 }
 
 impl<H, Y, S> Memory<H, Y, S>
 where
-    H: AsMut<[Word]>,
+    H: AsMut<[Word]> + AsRef<[Word]>,
     Y: AsMut<[Word]>,
     S: AsMut<[Word]>,
 {
@@ -529,6 +542,21 @@ where
         Context(root_ctx_data).init()?;
         debug_assert_eq!(root_ctx, 0);
 
+        Ok(())
+    }
+
+    pub fn load_module(&mut self, module: &Module) -> Result<(), RebelError> {
+        for (symbol, proc) in module.procs {
+            let id = self.natives.len() as Word;
+            self.natives.push(*proc);
+
+            let symbol = self
+                .symbols
+                .get_or_insert_symbol(inline_string(*symbol)?, &mut self.heap)?;
+
+            let mut root_ctx = self.heap.get_block_mut(0).map(Context)?;
+            root_ctx.put(symbol, [TAG_NATIVE_FN, id])?;
+        }
         Ok(())
     }
 }
@@ -638,11 +666,9 @@ where
                     match op {
                         Some([TAG_SET_WORD, sym]) => {
                             let mut root_ctx = self.memory.heap.get_block_mut(0).map(Context)?;
-                            let value: Option<[Word; 2]> =
-                                frame.get(2..4).map(|value| value.try_into()).transpose()?;
-                            value
-                                .map(|value| root_ctx.put(sym, value))
-                                .ok_or(RebelError::MemoryError)?;
+                            let value: [Word; 2] =
+                                frame.get(2..4).ok_or(RebelError::MemoryError)?.try_into()?;
+                            root_ctx.put(sym, value)?;
                         }
                         Some([TAG_NATIVE_FN, func]) => {
                             let native_fn = self
@@ -651,7 +677,8 @@ where
                                 .get(func as usize)
                                 .ok_or(RebelError::FunctionNotFound)?;
                             let stack = frame.get(2..).ok_or(RebelError::MemoryError)?;
-                            (native_fn.func)(stack, &self.memory.heap)?;
+                            let heap = self.memory.heap.0.as_mut();
+                            (native_fn.func)(stack, Block(heap))?;
                         }
                         _ => {
                             return Err(RebelError::InternalError);
