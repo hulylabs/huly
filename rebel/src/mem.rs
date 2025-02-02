@@ -257,7 +257,7 @@ where
             .split_first_mut()
             .ok_or(CoreError::BoundsCheckFailed)?;
 
-        const ENTRY_SIZE: usize = 33;
+        const ENTRY_SIZE: usize = 9;
         let capacity = data.len() / ENTRY_SIZE;
 
         let h = hash_u32x8(&sym) as usize;
@@ -270,11 +270,9 @@ where
                     if *symbol == 0 {
                         *count += 1;
                         *symbol = *count;
-
                         value.iter_mut().zip(sym.iter()).for_each(|(dst, src)| {
                             *dst = *src;
                         });
-
                         Some(*symbol)
                     } else {
                         if value == &sym {

@@ -219,15 +219,13 @@ where
     }
 
     fn word(&mut self, kind: WordKind, word: &str) -> Result<(), CoreError> {
-        let offset = self
-            .module
-            .get_symbols_mut()?
-            .get_or_insert(inline_string(word)?)?;
+        let symbol = inline_string(word)?;
+        let id = self.module.get_symbols_mut()?.get_or_insert(symbol)?;
         let tag = match kind {
             WordKind::Word => Value::TAG_WORD,
             WordKind::SetWord => Value::TAG_SET_WORD,
         };
-        self.parse.push([tag, offset])
+        self.parse.push([tag, id])
     }
 
     fn integer(&mut self, value: i32) -> Result<(), CoreError> {
@@ -276,7 +274,7 @@ mod tests {
 
     #[test]
     fn test_word_1() -> Result<(), CoreError> {
-        let input = "x: 5 \n ";
+        let input = "42 \"world\" x: 5 x\n ";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let result = module.eval(input)?;
         assert_eq!([Value::TAG_INT, 5], result);

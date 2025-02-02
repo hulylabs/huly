@@ -3,6 +3,7 @@
 use crate::core::CoreError;
 use std::str::CharIndices;
 
+#[derive(Debug)]
 pub enum WordKind {
     Word,
     SetWord,
