@@ -9,6 +9,7 @@ pub type Symbol = Offset;
 
 // B L O C K
 
+#[derive(Debug)]
 struct Block<T>(T);
 
 impl<T> Block<T>
@@ -121,10 +122,13 @@ where
     }
 
     fn get_block_mut(&mut self, addr: Offset) -> Option<&mut [Word]> {
-        self.0.as_mut().get_mut(addr as usize..).and_then(|data| {
-            data.split_first_mut()
-                .and_then(|(len, block)| block.get_mut(..*len as usize))
-        })
+        self.0
+            .as_mut()
+            .get_mut(addr as usize + 1..)
+            .and_then(|data| {
+                data.split_first_mut()
+                    .and_then(|(len, block)| block.get_mut(..*len as usize))
+            })
     }
 
     fn put<const N: usize>(&mut self, addr: Offset, value: [Word; N]) -> Option<()> {
@@ -294,6 +298,7 @@ where
 
 // C O N T E X T
 
+#[derive(Debug)]
 pub struct Context<T>(Block<T>);
 
 impl<T> Context<T> {

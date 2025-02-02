@@ -86,17 +86,7 @@ impl<T> Module<T> {
     }
 }
 
-impl<T> Module<T>
-where
-    T: AsRef<[Word]>,
-{
-    fn get_context(&self) -> Result<Context<&[Word]>, CoreError> {
-        self.heap
-            .get_block(0)
-            .map(Context::new)
-            .ok_or(CoreError::BoundsCheckFailed)
-    }
-}
+impl<T> Module<T> where T: AsRef<[Word]> {}
 
 impl<T> Module<T>
 where
@@ -154,8 +144,8 @@ where
                 Value::TAG_SET_WORD => Some(2),
                 _ => None,
             } {
-                if let Some(c) = cur {
-                    ops.push(c)?;
+                if let Some(value) = cur {
+                    ops.push(value)?;
                 }
                 cur = Some([sp, arity]);
             }
@@ -256,6 +246,40 @@ where
     }
 }
 
+//
+
 pub fn eval(module: &mut Module<&mut [Word]>, str: &str) -> Result<[Word; 2], CoreError> {
     module.eval(str)
+}
+
+//
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_whitespace_1() -> Result<(), CoreError> {
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let result = module.eval("  \t\n  ")?;
+        assert_eq!([0, 0], result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_string_1() -> Result<(), CoreError> {
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let result = module.eval(" \"hello\"  ")?;
+        assert_eq!(Value::TAG_INLINE_STRING, result[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_word_1() -> Result<(), CoreError> {
+        let input = "x: 5 \n ";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let result = module.eval(input)?;
+        assert_eq!([Value::TAG_INT, 5], result);
+        Ok(())
+    }
 }
