@@ -583,6 +583,10 @@ where
     }
 }
 
+// pub fn test(ctx: &mut EvalContext<&mut [Word], &mut [Word], &mut [Word]>) -> Option<()> {
+//     ctx.eval_parsed()
+// }
+
 #[cfg(test)]
 mod tests {
     use super::*;
