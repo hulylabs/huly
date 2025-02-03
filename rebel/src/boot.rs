@@ -32,11 +32,22 @@ where
     }
 }
 
+fn context<T>(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    module.push_context(64)?;
+    func_do(stack, module)?;
+    let addr = module.pop_context()?;
+    Ok([Value::TAG_CONTEXT, addr])
+}
+
 pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
     module.add_native_fn("add", add, 2)?;
     module.add_native_fn("do", func_do, 1)?;
+    module.add_native_fn("context", context, 1)?;
     Ok(())
 }

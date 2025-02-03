@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::boot::core_package;
-use crate::mem::{Block, Context, ContextError, Heap, Offset, Stack, Symbol, SymbolTable, Word};
+use crate::mem::{Block, Context, Heap, Offset, Stack, Symbol, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use thiserror::Error;
 
@@ -44,10 +44,11 @@ impl Value {
     pub const TAG_NONE: Word = 0;
     pub const TAG_INT: Word = 1;
     pub const TAG_BLOCK: Word = 2;
-    const TAG_NATIVE_FN: Word = 3;
-    const TAG_INLINE_STRING: Word = 4;
-    const TAG_WORD: Word = 5;
-    const TAG_SET_WORD: Word = 6;
+    pub const TAG_CONTEXT: Word = 3;
+    const TAG_NATIVE_FN: Word = 4;
+    const TAG_INLINE_STRING: Word = 5;
+    const TAG_WORD: Word = 6;
+    const TAG_SET_WORD: Word = 7;
 }
 
 fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
@@ -77,13 +78,14 @@ struct FuncDesc<T> {
 
 pub struct Module<T> {
     heap: Heap<T>,
+    envs: Stack<[Offset; 16]>,
     functions: Vec<FuncDesc<T>>,
 }
 
 impl<T> Module<T> {
-    const NULL: Offset = 0;
+    // const NULL: Offset = 0;
     const SYMBOLS: Offset = 1;
-    const CONTEXT: Offset = 2;
+    // const CONTEXT: Offset = 2;
 
     fn get_func(&self, index: u32) -> Result<&FuncDesc<T>, CoreError> {
         self.functions
@@ -98,20 +100,19 @@ where
 {
     pub fn init(data: T) -> Result<Self, CoreError> {
         let mut heap = Heap::new(data);
-        heap.init(3)?;
-
-        let (symbols_addr, symbols_data) = heap.alloc_empty_block(1024)?;
-        SymbolTable::new(symbols_data).init()?;
-        let (context_addr, context_data) = heap.alloc_empty_block(1024)?;
-        Context::new(context_data).init(Self::NULL)?;
-
-        heap.put(0, [0xdeadbeef, symbols_addr, context_addr])?;
+        heap.init(2)?;
 
         let mut module = Self {
             heap,
             functions: Vec::new(),
+            envs: Stack::new([0; 16]),
         };
 
+        let (symbols_addr, symbols_data) = module.heap.alloc_empty_block(1024)?;
+        SymbolTable::new(symbols_data).init()?;
+
+        module.push_context(1024)?;
+        module.heap.put(0, [0xdeadbeef, symbols_addr])?;
         core_package(&mut module)?;
         Ok(module)
     }
@@ -138,7 +139,7 @@ where
 
         for chunk in block.chunks_exact(2) {
             let value = match chunk[0] {
-                Value::TAG_WORD => self.find_word_current(chunk[1])?,
+                Value::TAG_WORD => self.find_word(chunk[1])?,
                 _ => [chunk[0], chunk[1]],
             };
 
@@ -192,21 +193,18 @@ where
         self.heap.get_block(addr).map(Block::new)
     }
 
-    fn find_word_current(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-        let current = self.heap.get::<1>(Self::CONTEXT).map(|[addr]| *addr)?;
-        self.find_word(current, symbol)
-    }
+    fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
+        let envs = self.envs.peek_all(0)?;
 
-    fn find_word(&self, context_addr: Offset, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-        let mut addr = context_addr;
-        while addr != Self::NULL {
+        for &addr in envs.iter().rev() {
             let context = self.heap.get_block(addr).map(Context::new)?;
             match context.get(symbol) {
                 Ok(result) => return Ok(result),
-                Err(ContextError::WordNotFound(parent)) => addr = parent,
-                Err(ContextError::CoreError(err)) => return Err(err),
+                Err(CoreError::WordNotFound) => continue,
+                Err(err) => return Err(err),
             }
         }
+
         Err(CoreError::WordNotFound)
     }
 }
@@ -215,14 +213,30 @@ impl<T> Module<T>
 where
     T: AsMut<[Word]>,
 {
-    fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
-        let addr = self.heap.get_mut::<1>(Self::SYMBOLS).map(|[addr]| *addr)?;
-        self.heap.get_block_mut(addr).map(SymbolTable::new)
+    pub fn push_context(&mut self, size: u32) -> Result<(), CoreError> {
+        let (addr, data) = self.heap.alloc_empty_block(size)?;
+        Context::new(data).init()?;
+        self.envs.push([addr])
+    }
+
+    pub fn pop_context(&mut self) -> Result<Offset, CoreError> {
+        self.envs
+            .pop()
+            .map(|[addr]| addr)
+            .ok_or(CoreError::StackUnderflow)
     }
 
     fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, CoreError> {
-        let addr = self.heap.get_mut::<1>(Self::CONTEXT).map(|[addr]| *addr)?;
+        // let addr = self.heap.get_mut::<1>(Self::CONTEXT).map(|[addr]| *addr)?;
+        // self.heap.get_block_mut(addr).map(Context::new)
+
+        let [addr] = self.envs.peek()?;
         self.heap.get_block_mut(addr).map(Context::new)
+    }
+
+    fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
+        let addr = self.heap.get_mut::<1>(Self::SYMBOLS).map(|[addr]| *addr)?;
+        self.heap.get_block_mut(addr).map(SymbolTable::new)
     }
 
     pub fn parse(&mut self, code: &str) -> Result<Box<[Word]>, CoreError> {
@@ -303,7 +317,9 @@ mod tests {
 
     #[test]
     fn test_whitespace_1() -> Result<(), CoreError> {
+        println!("init");
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        println!("inited");
         let parsed = module.parse("  \t\n  ")?;
         let result = module.eval(&parsed)?;
         assert_eq!(result.len(), 0);
