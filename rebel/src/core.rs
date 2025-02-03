@@ -1,5 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
+use crate::boot::core_package;
 use crate::mem::{Context, Heap, Stack, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use thiserror::Error;
@@ -28,6 +29,8 @@ pub enum CoreError {
     EndOfInput,
     #[error("integer overflow")]
     IntegerOverflow,
+    #[error("bad arguments")]
+    BadArguments,
 }
 
 // V A L U E
@@ -39,7 +42,7 @@ pub enum Value {
 
 impl Value {
     const TAG_NONE: Word = 0;
-    const TAG_INT: Word = 1;
+    pub const TAG_INT: Word = 1;
     const TAG_WORD: Word = 2;
     const TAG_SET_WORD: Word = 3;
     const TAG_NATIVE_FN: Word = 4;
@@ -65,8 +68,7 @@ fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
 
 // M O D U L E
 
-type NativeFn<T> =
-    for<'a> fn(stack: &[Word], module: &'a mut Module<T>) -> Result<[Word; 2], CoreError>;
+type NativeFn<T> = fn(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>;
 
 struct FuncDesc<T> {
     func: NativeFn<T>,
@@ -103,10 +105,13 @@ where
 
         heap.put(0, [0xdeadbeef, symbols_addr, context_addr])?;
 
-        Ok(Self {
+        let mut module = Self {
             heap,
             functions: Vec::new(),
-        })
+        };
+
+        core_package(&mut module)?;
+        Ok(module)
     }
 
     fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
@@ -117,6 +122,20 @@ where
     fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, CoreError> {
         let addr = self.heap.get_mut::<1>(2).map(|[addr]| *addr)?;
         self.heap.get_block_mut(addr).map(Context::new)
+    }
+
+    pub fn add_native_fn(
+        &mut self,
+        name: &str,
+        func: NativeFn<T>,
+        arity: u32,
+    ) -> Result<(), CoreError> {
+        let index = self.functions.len() as u32;
+        self.functions.push(FuncDesc { func, arity });
+        let symbol = inline_string(name)?;
+        let id = self.get_symbols_mut()?.get_or_insert(symbol)?;
+        self.get_context_mut()?
+            .put(id, [Value::TAG_NATIVE_FN, index])
     }
 
     fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {
@@ -275,6 +294,36 @@ mod tests {
         assert_eq!(result.len(), 8);
         assert_eq!([Value::TAG_INT, 42], result[0..2]);
         assert_eq!([Value::TAG_INT, 5, Value::TAG_INT, 5], result[4..8]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_1() -> Result<(), CoreError> {
+        let input = "add 7 8";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!([Value::TAG_INT, 15], result[0..2]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_2() -> Result<(), CoreError> {
+        let input = "add 1 add 2 3";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!([Value::TAG_INT, 6], result[0..2]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_add_3() -> Result<(), CoreError> {
+        let input = "add add 3 4 5";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!([Value::TAG_INT, 12], result[0..2]);
         Ok(())
     }
 }

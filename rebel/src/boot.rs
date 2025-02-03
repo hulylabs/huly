@@ -1,17 +1,15 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use super::Word;
-use crate::core::{Block, Module, RebelError, TAG_BLOCK, TAG_INT};
+use crate::core::{CoreError, Module, Value};
+use crate::mem::Word;
 
-// fn(stack: &[Word], heap: Block<&mut [Word]>) -> Result<(), RebelError>
-
-fn add(stack: &[Word], _: Block<&mut [Word]>) -> Result<[Word; 2], RebelError> {
+fn add<T>(stack: &[Word], _: &mut Module<T>) -> Result<[Word; 2], CoreError> {
     match stack {
-        [TAG_INT, a, TAG_INT, b, ..] => {
+        [Value::TAG_INT, a, Value::TAG_INT, b] => {
             let result = *a as i32 + *b as i32;
-            Ok([TAG_INT, result as Word])
+            Ok([Value::TAG_INT, result as Word])
         }
-        _ => Err(RebelError::BadArguments),
+        _ => Err(CoreError::BadArguments),
     }
 }
 
@@ -26,6 +24,10 @@ fn add(stack: &[Word], _: Block<&mut [Word]>) -> Result<[Word; 2], RebelError> {
 //     }
 // }
 
-pub const CORE_MODULE: Module = Module {
-    procs: &[("add", add, 2)],
-};
+pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
+where
+    T: AsMut<[Word]>,
+{
+    module.add_native_fn("add", add, 2)?;
+    Ok(())
+}
