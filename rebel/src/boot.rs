@@ -34,8 +34,9 @@ where
 
 pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
 where
-    T: AsMut<[Word]>,
+    T: AsMut<[Word]> + AsRef<[Word]>,
 {
     module.add_native_fn("add", add, 2)?;
+    module.add_native_fn("do", func_do, 1)?;
     Ok(())
 }

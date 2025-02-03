@@ -187,11 +187,8 @@ where
         self.0.len()
     }
 
-    pub fn as_ref(&self) -> Result<&[Word], CoreError> {
-        self.0
-            .split_first()
-            .and_then(|(len, data)| data.get(..*len as usize))
-            .ok_or(CoreError::BoundsCheckFailed)
+    pub fn as_ref(&self) -> &[Word] {
+        self.0 .0.as_ref()
     }
 }
 

@@ -90,17 +90,7 @@ impl<T> Module<T> {
 
 impl<T> Module<T>
 where
-    T: AsRef<[Word]>,
-{
-    pub fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
-        let block = self.heap.get_block(addr).map(Block::new)?;
-        Ok(block.as_ref()?.into())
-    }
-}
-
-impl<T> Module<T>
-where
-    T: AsMut<[Word]>,
+    T: AsRef<[Word]> + AsMut<[Word]>,
 {
     pub fn init(data: T) -> Result<Self, CoreError> {
         let mut heap = Heap::new(data);
@@ -122,16 +112,6 @@ where
         Ok(module)
     }
 
-    fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
-        let addr = self.heap.get_mut::<1>(1).map(|[addr]| *addr)?;
-        self.heap.get_block_mut(addr).map(SymbolTable::new)
-    }
-
-    fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, CoreError> {
-        let addr = self.heap.get_mut::<1>(2).map(|[addr]| *addr)?;
-        self.heap.get_block_mut(addr).map(Context::new)
-    }
-
     pub fn add_native_fn(
         &mut self,
         name: &str,
@@ -144,6 +124,31 @@ where
         let id = self.get_symbols_mut()?.get_or_insert(symbol)?;
         self.get_context_mut()?
             .put(id, [Value::TAG_NATIVE_FN, index])
+    }
+}
+
+impl<T> Module<T>
+where
+    T: AsRef<[Word]>,
+{
+    pub fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
+        let block = self.heap.get_block(addr).map(Block::new)?;
+        Ok(block.as_ref().into())
+    }
+}
+
+impl<T> Module<T>
+where
+    T: AsMut<[Word]>,
+{
+    fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
+        let addr = self.heap.get_mut::<1>(1).map(|[addr]| *addr)?;
+        self.heap.get_block_mut(addr).map(SymbolTable::new)
+    }
+
+    fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, CoreError> {
+        let addr = self.heap.get_mut::<1>(2).map(|[addr]| *addr)?;
+        self.heap.get_block_mut(addr).map(Context::new)
     }
 
     pub fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {
