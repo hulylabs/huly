@@ -15,13 +15,18 @@ fn add<T>(stack: &[Word], _: &mut Module<T>) -> Result<[Word; 2], CoreError> {
 
 fn func_do<T>(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>
 where
-    T: AsRef<[Word]>,
+    T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match stack {
         [Value::TAG_BLOCK, b] => {
             let block = module.get_block(*b)?;
-
-            Ok([Value::TAG_INT, 0])
+            let result = module.eval(&block)?;
+            if result.is_empty() {
+                Ok([Value::TAG_NONE, 0])
+            } else {
+                let result = result.last_chunk::<2>().ok_or(CoreError::EndOfInput)?;
+                Ok(*result)
+            }
         }
         _ => Err(CoreError::BadArguments),
     }

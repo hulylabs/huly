@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::boot::core_package;
-use crate::mem::{Context, Heap, Offset, Stack, SymbolTable, Word};
+use crate::mem::{Block, Context, Heap, Offset, Stack, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use thiserror::Error;
 
@@ -41,13 +41,13 @@ pub enum Value {
 }
 
 impl Value {
-    const TAG_NONE: Word = 0;
+    pub const TAG_NONE: Word = 0;
     pub const TAG_INT: Word = 1;
-    const TAG_WORD: Word = 2;
-    const TAG_SET_WORD: Word = 3;
-    const TAG_NATIVE_FN: Word = 4;
-    const TAG_INLINE_STRING: Word = 5;
-    pub const TAG_BLOCK: Word = 6;
+    pub const TAG_BLOCK: Word = 2;
+    const TAG_NATIVE_FN: Word = 3;
+    const TAG_INLINE_STRING: Word = 4;
+    const TAG_WORD: Word = 5;
+    const TAG_SET_WORD: Word = 6;
 }
 
 fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
@@ -93,8 +93,8 @@ where
     T: AsRef<[Word]>,
 {
     pub fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
-        let block = self.heap.get_block(addr)?;
-        Ok(block.into())
+        let block = self.heap.get_block(addr).map(Block::new)?;
+        Ok(block.as_ref()?.into())
     }
 }
 

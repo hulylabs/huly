@@ -7,12 +7,12 @@ pub type Word = u32;
 pub type Offset = Word;
 pub type Symbol = Offset;
 
-// B L O C K
+// O P S
 
 #[derive(Debug)]
-struct Block<T>(T);
+struct Ops<T>(T);
 
-impl<T> Block<T>
+impl<T> Ops<T>
 where
     T: AsRef<[Word]>,
 {
@@ -52,7 +52,7 @@ where
     }
 }
 
-impl<T> Block<T>
+impl<T> Ops<T>
 where
     T: AsMut<[Word]>,
 {
@@ -168,13 +168,40 @@ where
     }
 }
 
+// B L O C K
+
+#[derive(Debug)]
+pub struct Block<T>(Ops<T>);
+
+impl<T> Block<T> {
+    pub fn new(data: T) -> Self {
+        Self(Ops(data))
+    }
+}
+
+impl<T> Block<T>
+where
+    T: AsRef<[Word]>,
+{
+    fn len(&self) -> Result<Offset, CoreError> {
+        self.0.len()
+    }
+
+    pub fn as_ref(&self) -> Result<&[Word], CoreError> {
+        self.0
+            .split_first()
+            .and_then(|(len, data)| data.get(..*len as usize))
+            .ok_or(CoreError::BoundsCheckFailed)
+    }
+}
+
 // S T A C K
 
-pub struct Stack<T>(Block<T>);
+pub struct Stack<T>(Ops<T>);
 
 impl<T> Stack<T> {
     pub fn new(data: T) -> Self {
-        Self(Block(data))
+        Self(Ops(data))
     }
 }
 
@@ -240,11 +267,11 @@ where
 
 // S Y M B O L   T A B L E
 
-pub struct SymbolTable<T>(Block<T>);
+pub struct SymbolTable<T>(Ops<T>);
 
 impl<T> SymbolTable<T> {
     pub fn new(data: T) -> Self {
-        Self(Block(data))
+        Self(Ops(data))
     }
 }
 
@@ -300,11 +327,11 @@ where
 // C O N T E X T
 
 #[derive(Debug)]
-pub struct Context<T>(Block<T>);
+pub struct Context<T>(Ops<T>);
 
 impl<T> Context<T> {
     pub fn new(data: T) -> Self {
-        Self(Block(data))
+        Self(Ops(data))
     }
 
     fn hash_u32(val: u32) -> u32 {
@@ -402,11 +429,11 @@ where
 
 // H E A P
 
-pub struct Heap<T>(Block<T>);
+pub struct Heap<T>(Ops<T>);
 
 impl<T> Heap<T> {
     pub fn new(data: T) -> Self {
-        Self(Block(data))
+        Self(Ops(data))
     }
 }
 
