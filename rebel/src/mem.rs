@@ -38,18 +38,6 @@ where
             })
             .ok_or(CoreError::BoundsCheckFailed)
     }
-
-    fn get<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
-        self.0.as_ref().split_first().and_then(|(len, data)| {
-            let begin = addr as usize;
-            let end = begin + N;
-            if end <= *len as usize {
-                data.get(begin..end).and_then(|block| block.try_into().ok())
-            } else {
-                None
-            }
-        })
-    }
 }
 
 impl<T> Ops<T>
@@ -183,10 +171,6 @@ impl<T> Block<T>
 where
     T: AsRef<[Word]>,
 {
-    fn len(&self) -> Result<Offset, CoreError> {
-        self.0.len()
-    }
-
     pub fn as_ref(&self) -> &[Word] {
         self.0 .0.as_ref()
     }
@@ -215,10 +199,6 @@ impl<T> Stack<T>
 where
     T: AsMut<[Word]>,
 {
-    fn init(&mut self) -> Result<(), CoreError> {
-        self.0.init(0)
-    }
-
     pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, CoreError> {
         self.0.alloc(words)
     }
@@ -440,10 +420,6 @@ where
 {
     pub fn get_block(&self, addr: Offset) -> Result<&[Word], CoreError> {
         self.0.get_block(addr)
-    }
-
-    pub fn get<const N: usize>(&self, addr: Offset) -> Result<&[u32; N], CoreError> {
-        self.0.get(addr).ok_or(CoreError::BoundsCheckFailed)
     }
 }
 
