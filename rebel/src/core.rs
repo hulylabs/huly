@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::boot::core_package;
-use crate::mem::{Context, Heap, Stack, SymbolTable, Word};
+use crate::mem::{Context, Heap, Offset, Stack, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use thiserror::Error;
 
@@ -47,7 +47,7 @@ impl Value {
     const TAG_SET_WORD: Word = 3;
     const TAG_NATIVE_FN: Word = 4;
     const TAG_INLINE_STRING: Word = 5;
-    const TAG_BLOCK: Word = 6;
+    pub const TAG_BLOCK: Word = 6;
 }
 
 fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
@@ -88,7 +88,15 @@ impl<T> Module<T> {
     }
 }
 
-impl<T> Module<T> where T: AsRef<[Word]> {}
+impl<T> Module<T>
+where
+    T: AsRef<[Word]>,
+{
+    pub fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
+        let block = self.heap.get_block(addr)?;
+        Ok(block.into())
+    }
+}
 
 impl<T> Module<T>
 where
@@ -253,13 +261,13 @@ where
 
 //
 
-pub fn parse(module: &mut Module<&mut [Word]>, str: &str) -> Result<Box<[Word]>, CoreError> {
-    module.parse(str)
-}
+// pub fn parse(module: &mut Module<&mut [Word]>, str: &str) -> Result<Box<[Word]>, CoreError> {
+//     module.parse(str)
+// }
 
-pub fn eval(module: &mut Module<&mut [Word]>, code: &[Word]) -> Result<Box<[Word]>, CoreError> {
-    module.eval(code)
-}
+// pub fn eval(module: &mut Module<&mut [Word]>, code: &[Word]) -> Result<Box<[Word]>, CoreError> {
+//     module.eval(code)
+// }
 
 //
 

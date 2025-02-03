@@ -28,11 +28,15 @@ where
         self.0.as_ref().split_first()
     }
 
-    fn get_block(&self, addr: Offset) -> Option<&[Word]> {
-        self.0.as_ref().get(addr as usize..).and_then(|data| {
-            data.split_first()
-                .and_then(|(len, block)| block.get(..*len as usize))
-        })
+    fn get_block(&self, addr: Offset) -> Result<&[Word], CoreError> {
+        self.0
+            .as_ref()
+            .get(addr as usize + 1..)
+            .and_then(|data| {
+                data.split_first()
+                    .and_then(|(len, block)| block.get(..*len as usize))
+            })
+            .ok_or(CoreError::BoundsCheckFailed)
     }
 
     fn get<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
@@ -410,7 +414,7 @@ impl<T> Heap<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get_block(&self, addr: Offset) -> Option<&[Word]> {
+    pub fn get_block(&self, addr: Offset) -> Result<&[Word], CoreError> {
         self.0.get_block(addr)
     }
 

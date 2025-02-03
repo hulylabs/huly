@@ -13,16 +13,19 @@ fn add<T>(stack: &[Word], _: &mut Module<T>) -> Result<[Word; 2], CoreError> {
     }
 }
 
-// fn func_do(stack: &[Word], _: Block<&mut [Word]>) -> Result<[Word; 2], RebelError> {
-//     match stack {
-//         [TAG_BLOCK, b, ..] => {
-//             let block = *b;
+fn func_do<T>(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>
+where
+    T: AsRef<[Word]>,
+{
+    match stack {
+        [Value::TAG_BLOCK, b] => {
+            let block = module.get_block(*b)?;
 
-//             Ok([TAG_INT, result as Word])
-//         }
-//         _ => Err(RebelError::BadArguments),
-//     }
-// }
+            Ok([Value::TAG_INT, 0])
+        }
+        _ => Err(CoreError::BadArguments),
+    }
+}
 
 pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
 where
