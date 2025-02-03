@@ -147,22 +147,22 @@ where
             while let Some([bp, arity]) = cur {
                 if sp == bp + arity {
                     let frame = stack.pop_all(bp)?;
-                    match frame {
+                    let result = match frame {
                         [Value::TAG_SET_WORD, sym, tag, val] => {
                             self.get_context_mut()
                                 .and_then(|mut ctx| ctx.put(*sym, [*tag, *val]))?;
-                            sp = stack.alloc(value)?;
+                            value
                         }
                         [Value::TAG_NATIVE_FN, func, ..] => {
                             let native_fn = self.get_func(*func)?;
                             let stack_fn = frame.get(2..).ok_or(CoreError::BoundsCheckFailed)?;
-                            let result = (native_fn.func)(stack_fn, self)?;
-                            sp = stack.alloc(result)?;
+                            (native_fn.func)(stack_fn, self)?
                         }
                         _ => {
                             return Err(CoreError::InternalError);
                         }
-                    }
+                    };
+                    sp = stack.alloc(result)?;
                     cur = ops.pop();
                 } else {
                     break;
