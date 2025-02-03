@@ -2,9 +2,7 @@
 
 use anyhow::Result;
 use colored::*;
-use rebel::boot::CORE_MODULE;
-use rebel::core::{init_memory, EvalContext};
-use rebel::parse::Parser;
+use rebel::core::Module;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 fn main() -> Result<()> {
@@ -15,10 +13,7 @@ fn main() -> Result<()> {
     );
     println!("Type {} or press Ctrl+D to exit\n", ":quit".red().bold());
 
-    let mut buf = vec![0; 0x10000].into_boxed_slice();
-    let mut mem = init_memory(&mut buf, 256, 1024)?;
-    mem.load_module(&CORE_MODULE)?;
-    let mut ctx = EvalContext::new(&mut mem);
+    let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
 
     let mut rl = DefaultEditor::new()?;
 
@@ -36,20 +31,19 @@ fn main() -> Result<()> {
                 if line.trim() == ":quit" {
                     break;
                 }
-                let mut parser = Parser::new(&line, &mut ctx);
-                match parser.parse() {
-                    Ok(_) => match ctx.eval_parsed() {
-                        Ok(_) => {
-                            let result = ctx.pop_stack()?.collect::<Vec<_>>();
+
+                match module.parse(line.as_str()) {
+                    Ok(parsed) => match module.eval(&parsed) {
+                        Ok(result) => {
                             if result.is_empty() {
                                 println!("{}: {:?}", "OK".green(), "None")
                             } else {
-                                println!("{}: {:?}", "OK".green(), result[0])
+                                println!("{}: {:?}", "OK".green(), result)
                             }
                         }
                         Err(err) => eprintln!("{}: {}", "ERR".red().bold(), err),
                     },
-                    Err(err) => eprintln!("{}: {}", "SYNTAX ERR".cyan().bold(), err),
+                    Err(err) => eprintln!("{}: {}", "PARSER ERR".cyan().bold(), err),
                 }
             }
             Err(ReadlineError::Interrupted) => {

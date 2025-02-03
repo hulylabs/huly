@@ -138,7 +138,7 @@ where
             .put(id, [Value::TAG_NATIVE_FN, index])
     }
 
-    fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {
+    pub fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {
         let mut stack = Stack::new([0; 128]);
         let mut ops = Stack::new([0; 64]);
 
