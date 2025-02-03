@@ -19,8 +19,8 @@ where
 {
     match stack {
         [Value::TAG_BLOCK, b] => {
-            let block = module.get_block(*b)?;
-            let result = module.eval(&block)?;
+            let block: Box<[Word]> = module.get_block(*b)?.as_ref().into();
+            let result = module.eval(block.as_ref())?;
             if result.is_empty() {
                 Ok([Value::TAG_NONE, 0])
             } else {

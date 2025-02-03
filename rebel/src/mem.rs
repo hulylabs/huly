@@ -24,8 +24,9 @@ where
             .ok_or(CoreError::BoundsCheckFailed)
     }
 
-    fn split_first(&self) -> Option<(&u32, &[Word])> {
-        self.0.as_ref().split_first()
+    fn split_at<const M: usize>(&self) -> Option<([Word; M], &[Word])> {
+        let (header, rest) = self.0.as_ref().split_at(M);
+        header.try_into().ok().map(|header| (header, rest))
     }
 
     fn get_block(&self, addr: Offset) -> Result<&[Word], CoreError> {
@@ -38,6 +39,18 @@ where
             })
             .ok_or(CoreError::BoundsCheckFailed)
     }
+
+    fn get<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
+        self.0.as_ref().split_first().and_then(|(len, data)| {
+            let begin = addr as usize;
+            let end = begin + N;
+            if end <= *len as usize {
+                data.get(begin..end).and_then(|block| block.try_into().ok())
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl<T> Ops<T>
@@ -48,11 +61,16 @@ where
         self.0.as_mut().split_first_mut()
     }
 
-    fn init(&mut self, reserve: u32) -> Result<(), CoreError> {
+    fn split_at_mut<const M: usize>(&mut self) -> Option<(&mut [Word; M], &mut [Word])> {
+        let (header, rest) = self.0.as_mut().split_at_mut(M);
+        header.try_into().ok().map(|header| (header, rest))
+    }
+
+    fn init<const N: usize>(&mut self, values: [Word; N]) -> Result<(), CoreError> {
         self.0
             .as_mut()
-            .first_mut()
-            .map(|slot| *slot = reserve)
+            .first_chunk_mut()
+            .map(|slot| *slot = values)
             .ok_or(CoreError::BoundsCheckFailed)
     }
 
@@ -257,7 +275,7 @@ where
     T: AsMut<[Word]>,
 {
     pub fn init(&mut self) -> Result<(), CoreError> {
-        self.0.init(0)
+        self.0.init([0])
     }
 
     pub fn get_or_insert(&mut self, sym: [u32; 8]) -> Result<Symbol, CoreError> {
@@ -303,6 +321,11 @@ where
 
 // C O N T E X T
 
+pub enum ContextError {
+    CoreError(CoreError),
+    WordNotFound(Offset),
+}
+
 #[derive(Debug)]
 pub struct Context<T>(Ops<T>);
 
@@ -321,14 +344,19 @@ impl<T> Context<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-        let (_, data) = self.0.split_first().ok_or(CoreError::BoundsCheckFailed)?;
+    pub fn get(&self, symbol: Symbol) -> Result<[Word; 2], ContextError> {
+        let ([parent, _], data) = self
+            .0
+            .split_at()
+            .ok_or(ContextError::CoreError(CoreError::BoundsCheckFailed))?;
 
         const ENTRY_SIZE: usize = 3;
         let capacity = data.len() / ENTRY_SIZE;
 
         let h = Self::hash_u32(symbol) as usize;
-        let mut index = h.checked_rem(capacity).ok_or(CoreError::InternalError)?;
+        let mut index = h
+            .checked_rem(capacity)
+            .ok_or(ContextError::CoreError(CoreError::InternalError))?;
 
         for _probe in 0..capacity {
             let offset = index * ENTRY_SIZE;
@@ -345,10 +373,10 @@ where
             }
             index = (index + 1)
                 .checked_rem(capacity)
-                .ok_or(CoreError::InternalError)?;
+                .ok_or(ContextError::CoreError(CoreError::InternalError))?;
         }
 
-        Err(CoreError::WordNotFound)
+        Err(ContextError::WordNotFound(parent))
     }
 }
 
@@ -356,15 +384,12 @@ impl<T> Context<T>
 where
     T: AsMut<[Word]>,
 {
-    pub fn init(&mut self) -> Result<(), CoreError> {
-        self.0.init(0)
+    pub fn init(&mut self, parent: Offset) -> Result<(), CoreError> {
+        self.0.init([parent, 0])
     }
 
     pub fn put(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
-        let (count, data) = self
-            .0
-            .split_first_mut()
-            .ok_or(CoreError::BoundsCheckFailed)?;
+        let ([_, count], data) = self.0.split_at_mut().ok_or(CoreError::BoundsCheckFailed)?;
 
         const ENTRY_SIZE: usize = 3;
         let capacity = data.len() / ENTRY_SIZE;
@@ -421,6 +446,10 @@ where
     pub fn get_block(&self, addr: Offset) -> Result<&[Word], CoreError> {
         self.0.get_block(addr)
     }
+
+    pub fn get<const N: usize>(&self, addr: Offset) -> Result<&[u32; N], CoreError> {
+        self.0.get(addr).ok_or(CoreError::BoundsCheckFailed)
+    }
 }
 
 impl<T> Heap<T>
@@ -428,7 +457,7 @@ where
     T: AsMut<[Word]>,
 {
     pub fn init(&mut self, reserve: u32) -> Result<(), CoreError> {
-        self.0.init(reserve)
+        self.0.init([reserve])
     }
 
     pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, CoreError> {
