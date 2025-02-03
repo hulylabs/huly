@@ -111,18 +111,12 @@ where
 
     fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
         let addr = self.heap.get_mut::<1>(1).map(|[addr]| *addr)?;
-        self.heap
-            .get_block_mut(addr)
-            .map(SymbolTable::new)
-            .ok_or(CoreError::BoundsCheckFailed)
+        self.heap.get_block_mut(addr).map(SymbolTable::new)
     }
 
     fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, CoreError> {
         let addr = self.heap.get_mut::<1>(2).map(|[addr]| *addr)?;
-        self.heap
-            .get_block_mut(addr)
-            .map(Context::new)
-            .ok_or(CoreError::BoundsCheckFailed)
+        self.heap.get_block_mut(addr).map(Context::new)
     }
 
     fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {

@@ -121,7 +121,7 @@ where
             })
     }
 
-    fn get_block_mut(&mut self, addr: Offset) -> Option<&mut [Word]> {
+    fn get_block_mut(&mut self, addr: Offset) -> Result<&mut [Word], CoreError> {
         self.0
             .as_mut()
             .get_mut(addr as usize + 1..)
@@ -129,6 +129,7 @@ where
                 data.split_first_mut()
                     .and_then(|(len, block)| block.get_mut(..*len as usize))
             })
+            .ok_or(CoreError::BoundsCheckFailed)
     }
 
     fn put<const N: usize>(&mut self, addr: Offset, value: [Word; N]) -> Option<()> {
@@ -440,7 +441,7 @@ where
         self.0.alloc_block(values).ok_or(CoreError::OutOfMemory)
     }
 
-    pub fn get_block_mut(&mut self, addr: Offset) -> Option<&mut [Word]> {
+    pub fn get_block_mut(&mut self, addr: Offset) -> Result<&mut [Word], CoreError> {
         self.0.get_block_mut(addr)
     }
 
