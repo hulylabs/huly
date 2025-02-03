@@ -56,9 +56,9 @@ fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
     if len < 32 {
         let mut buf = [0; 8];
         buf[0] = len as u32;
-        for i in 0..len {
+        for (i, byte) in bytes.iter().enumerate() {
             let j = i + 1;
-            buf[j / 4] |= (bytes[i] as u32) << ((j % 4) * 8);
+            buf[j / 4] |= (*byte as u32) << ((j % 4) * 8);
         }
         Ok(buf)
     } else {
