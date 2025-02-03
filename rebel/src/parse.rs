@@ -58,7 +58,7 @@ where
                 );
             }
         }
-        Err(CoreError::EndOfInput.into())
+        Err(CoreError::EndOfInput)
     }
 
     fn parse_word(&mut self, start_pos: usize) -> Result<bool, CoreError> {
@@ -83,7 +83,7 @@ where
                     )?;
                     return Ok(c == ']');
                 }
-                _ => return Err(CoreError::UnexpectedChar(char).into()),
+                _ => return Err(CoreError::UnexpectedChar(char)),
             }
         }
         self.collector.word(
@@ -108,7 +108,7 @@ where
                 value = c.to_digit(10).ok_or(CoreError::InternalError)? as i32;
                 has_digits = true;
             }
-            _ => return Err(CoreError::UnexpectedChar(char).into()),
+            _ => return Err(CoreError::UnexpectedChar(char)),
         }
 
         for (_, char) in self.cursor.by_ref() {
@@ -129,7 +129,7 @@ where
             }
         }
         if !has_digits {
-            return Err(CoreError::EndOfInput.into());
+            return Err(CoreError::EndOfInput);
         }
         if is_negative {
             value = value.checked_neg().ok_or(CoreError::IntegerOverflow)?;
@@ -153,7 +153,7 @@ where
                         self.collector.end_block()?;
                     }
                 }
-                _ => return Err(CoreError::UnexpectedChar(char).into()),
+                _ => return Err(CoreError::UnexpectedChar(char)),
             }
         }
         Ok(())

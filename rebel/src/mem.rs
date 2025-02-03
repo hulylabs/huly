@@ -275,12 +275,10 @@ where
                             *dst = *src;
                         });
                         Some(*symbol)
+                    } else if value == &sym {
+                        Some(*symbol)
                     } else {
-                        if value == &sym {
-                            Some(*symbol)
-                        } else {
-                            None
-                        }
+                        None
                     }
                 })
             }) {
