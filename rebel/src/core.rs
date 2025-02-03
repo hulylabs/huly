@@ -125,7 +125,7 @@ where
             .ok_or(CoreError::BoundsCheckFailed)
     }
 
-    fn eval_block(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
+    fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {
         let mut stack = Stack::new([0; 128]);
         let mut ops = Stack::new([0; 64]);
 
@@ -175,19 +175,13 @@ where
                 }
             }
         }
-        if let Some(value) = stack.pop() {
-            Ok(value)
-        } else {
-            Ok([Value::TAG_NONE, 0])
-        }
+        Ok(stack.pop_all(0)?.into())
     }
 
-    pub fn eval(&mut self, code: &str) -> Result<[Word; 2], CoreError> {
+    pub fn parse(&mut self, code: &str) -> Result<Box<[Word]>, CoreError> {
         let mut collector = ParseCollector::new(self);
-        let mut parser = Parser::new(code, &mut collector);
-        parser.parse()?;
-        let block = collector.parse.pop_all(0)?;
-        self.eval_block(&block)
+        Parser::new(code, &mut collector).parse()?;
+        Ok(collector.parse.pop_all(0)?.into())
     }
 }
 
@@ -246,8 +240,12 @@ where
 
 //
 
-pub fn eval(module: &mut Module<&mut [Word]>, str: &str) -> Result<[Word; 2], CoreError> {
-    module.eval(str)
+pub fn parse(module: &mut Module<&mut [Word]>, str: &str) -> Result<Box<[Word]>, CoreError> {
+    module.parse(str)
+}
+
+pub fn eval(module: &mut Module<&mut [Word]>, code: &[Word]) -> Result<Box<[Word]>, CoreError> {
+    module.eval(code)
 }
 
 //
@@ -259,15 +257,17 @@ mod tests {
     #[test]
     fn test_whitespace_1() -> Result<(), CoreError> {
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
-        let result = module.eval("  \t\n  ")?;
-        assert_eq!([0, 0], result);
+        let parsed = module.parse("  \t\n  ")?;
+        let result = module.eval(&parsed)?;
+        assert_eq!(result.len(), 0);
         Ok(())
     }
 
     #[test]
     fn test_string_1() -> Result<(), CoreError> {
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
-        let result = module.eval(" \"hello\"  ")?;
+        let parsed = module.parse(" \"hello\"  ")?;
+        let result = module.eval(&parsed)?;
         assert_eq!(Value::TAG_INLINE_STRING, result[0]);
         Ok(())
     }
@@ -276,8 +276,11 @@ mod tests {
     fn test_word_1() -> Result<(), CoreError> {
         let input = "42 \"world\" x: 5 x\n ";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
-        let result = module.eval(input)?;
-        assert_eq!([Value::TAG_INT, 5], result);
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!(result.len(), 8);
+        assert_eq!([Value::TAG_INT, 42], result[0..2]);
+        assert_eq!([Value::TAG_INT, 5, Value::TAG_INT, 5], result[4..8]);
         Ok(())
     }
 }
