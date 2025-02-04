@@ -4,5 +4,4 @@ mod boot;
 pub mod core;
 mod hash;
 mod mem;
-pub mod mem2;
 mod parse;
