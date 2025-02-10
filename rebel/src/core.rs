@@ -7,10 +7,10 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CoreError {
-    #[error("function not found")]
-    FunctionNotFound,
     #[error("internal error")]
     InternalError,
+    #[error("function not found")]
+    FunctionNotFound,
     #[error("string too long")]
     StringTooLong,
     #[error("bounds check failed")]

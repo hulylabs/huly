@@ -316,9 +316,12 @@ where
 
         const ENTRY_SIZE: usize = 9;
         let capacity = data.len() / ENTRY_SIZE;
+        if capacity == 0 {
+            return Err(CoreError::SymbolTableFull);
+        }
 
         let h = hash_u32x8(&sym) as usize;
-        let mut index = h.checked_rem(capacity).ok_or(CoreError::InternalError)?;
+        let mut index = h % capacity;
 
         for _probe in 0..capacity {
             let offset = index * ENTRY_SIZE;
@@ -340,9 +343,7 @@ where
             }) {
                 return Ok(symbol);
             }
-            index = (index + 1)
-                .checked_rem(capacity)
-                .ok_or(CoreError::InternalError)?;
+            index = (index + 1) % capacity;
         }
 
         Err(CoreError::SymbolTableFull)
@@ -374,9 +375,12 @@ where
 
         const ENTRY_SIZE: usize = 3;
         let capacity = data.len() / ENTRY_SIZE;
+        if capacity == 0 {
+            return Err(CoreError::WordNotFound);
+        }
 
         let h = Self::hash_u32(symbol) as usize;
-        let mut index = h.checked_rem(capacity).ok_or(CoreError::InternalError)?;
+        let mut index = h % capacity;
 
         for _probe in 0..capacity {
             let offset = index * ENTRY_SIZE;
@@ -391,9 +395,7 @@ where
             }) {
                 return Ok(found);
             }
-            index = (index + 1)
-                .checked_rem(capacity)
-                .ok_or(CoreError::InternalError)?;
+            index = (index + 1) % capacity;
         }
 
         Err(CoreError::WordNotFound)
@@ -416,9 +418,12 @@ where
 
         const ENTRY_SIZE: usize = 3;
         let capacity = data.len() / ENTRY_SIZE;
+        if capacity == 0 {
+            return Err(CoreError::SymbolTableFull);
+        }
 
         let h = Self::hash_u32(symbol) as usize;
-        let mut index = h.checked_rem(capacity).ok_or(CoreError::InternalError)?;
+        let mut index = h % capacity;
 
         for _probe in 0..capacity {
             let offset = index * ENTRY_SIZE;
@@ -443,9 +448,7 @@ where
             {
                 return Ok(());
             }
-            index = (index + 1)
-                .checked_rem(capacity)
-                .ok_or(CoreError::InternalError)?;
+            index = (index + 1) % capacity;
         }
 
         Err(CoreError::SymbolTableFull)
