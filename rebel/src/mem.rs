@@ -10,9 +10,9 @@ pub type Symbol = Offset;
 // O P S
 
 #[derive(Debug)]
-struct Ops<T>(T);
+struct Memory<T>(T);
 
-impl<T> Ops<T>
+impl<T> Memory<T>
 where
     T: AsRef<[Word]>,
 {
@@ -57,7 +57,7 @@ where
     // }
 }
 
-impl<T> Ops<T>
+impl<T> Memory<T>
 where
     T: AsMut<[Word]>,
 {
@@ -182,11 +182,11 @@ where
 // B L O C K
 
 #[derive(Debug)]
-pub struct Block<T>(Ops<T>);
+pub struct Block<T>(Memory<T>);
 
 impl<T> Block<T> {
     pub fn new(data: T) -> Self {
-        Self(Ops(data))
+        Self(Memory(data))
     }
 }
 
@@ -201,11 +201,11 @@ where
 
 // S T A C K
 
-pub struct Stack<T>(Ops<T>);
+pub struct Stack<T>(Memory<T>);
 
 impl<T> Stack<T> {
     pub fn new(data: T) -> Self {
-        Self(Ops(data))
+        Self(Memory(data))
     }
 }
 
@@ -292,11 +292,11 @@ where
 
 // S Y M B O L   T A B L E
 
-pub struct SymbolTable<T>(Ops<T>);
+pub struct SymbolTable<T>(Memory<T>);
 
 impl<T> SymbolTable<T> {
     pub fn new(data: T) -> Self {
-        Self(Ops(data))
+        Self(Memory(data))
     }
 }
 
@@ -352,11 +352,11 @@ where
 // C O N T E X T
 
 #[derive(Debug)]
-pub struct Context<T>(Ops<T>);
+pub struct Context<T>(Memory<T>);
 
 impl<T> Context<T> {
     pub fn new(data: T) -> Self {
-        Self(Ops(data))
+        Self(Memory(data))
     }
 
     fn hash_u32(val: u32) -> u32 {
@@ -454,11 +454,11 @@ where
 
 // H E A P
 
-pub struct Heap<T>(Ops<T>);
+pub struct Heap<T>(Memory<T>);
 
 impl<T> Heap<T> {
     pub fn new(data: T) -> Self {
-        Self(Ops(data))
+        Self(Memory(data))
     }
 }
 
