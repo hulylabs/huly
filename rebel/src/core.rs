@@ -158,7 +158,7 @@ where
 
             while let Some([bp, arity]) = cur {
                 if sp == bp + arity {
-                    let frame = stack.pop_all(bp)?;
+                    let frame = stack.peek_all(bp)?;
                     let result = match frame {
                         [Value::TAG_SET_WORD, sym, tag, val] => {
                             self.get_context_mut()
@@ -174,6 +174,7 @@ where
                             return Err(CoreError::InternalError);
                         }
                     };
+                    stack.set_len(bp)?;
                     sp = stack.alloc(result)?;
                     cur = ops.pop();
                 } else {

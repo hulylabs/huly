@@ -62,11 +62,11 @@ where
     T: AsMut<[Word]>,
 {
     /// Set memory from allocation start to provided values
-    fn init<const N: usize>(&mut self, values: [Word; N]) -> Result<(), CoreError> {
+    fn init(&mut self, value: Word) -> Result<(), CoreError> {
         self.0
             .as_mut()
-            .first_chunk_mut()
-            .map(|slot| *slot = values)
+            .first_mut()
+            .map(|slot| *slot = value)
             .ok_or(CoreError::BoundsCheckFailed)
     }
 
@@ -247,6 +247,10 @@ impl<T> Stack<T>
 where
     T: AsMut<[Word]>,
 {
+    pub fn set_len(&mut self, len: Word) -> Result<(), CoreError> {
+        self.0.init(len)
+    }
+
     pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, CoreError> {
         self.0.alloc(words)
     }
@@ -305,7 +309,7 @@ where
     T: AsMut<[Word]>,
 {
     pub fn init(&mut self) -> Result<(), CoreError> {
-        self.0.init([0])
+        self.0.init(0)
     }
 
     pub fn get_or_insert(&mut self, sym: [u32; 8]) -> Result<Symbol, CoreError> {
@@ -407,7 +411,7 @@ where
     T: AsMut<[Word]>,
 {
     pub fn init(&mut self) -> Result<(), CoreError> {
-        self.0.init([0])
+        self.0.init(0)
     }
 
     pub fn put(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
@@ -483,7 +487,7 @@ where
     T: AsMut<[Word]>,
 {
     pub fn init(&mut self, reserve: u32) -> Result<(), CoreError> {
-        self.0.init([reserve])
+        self.0.init(reserve)
     }
 
     pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, CoreError> {
