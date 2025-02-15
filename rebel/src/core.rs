@@ -179,22 +179,22 @@ where
 pub struct Exec<'a, T> {
     module: &'a mut Module<T>,
     cur: Option<[Word; 2]>,
-    stack: Stack<[Offset; 128]>,
-    ops: Stack<[Offset; 64]>,
-    base: Stack<[Offset; 64]>,
-    envs: Stack<[Offset; 16]>,
+    stack: Stack<[Offset; 1024]>,
+    ops: Stack<[Offset; 256]>,
+    base: Stack<[Offset; 256]>,
+    envs: Stack<[Offset; 256]>,
 }
 
 impl<'a, T> Exec<'a, T> {
     fn new(module: &'a mut Module<T>) -> Result<Self, CoreError> {
-        let mut envs = Stack::new([0; 16]);
+        let mut envs = Stack::new([0; 256]);
         envs.push([module.system_words])?;
         Ok(Self {
             module,
             envs,
-            stack: Stack::new([0; 128]),
-            ops: Stack::new([0; 64]),
-            base: Stack::new([0; 64]),
+            stack: Stack::new([0; 1024]),
+            ops: Stack::new([0; 256]),
+            base: Stack::new([0; 256]),
             cur: None,
         })
     }
@@ -265,7 +265,6 @@ where
                         if let Some([bp]) = self.base.peek() {
                             self.stack.get(bp + 2 + result[1] * 2)?
                         } else {
-                            println!("HERE!");
                             return Err(CoreError::InternalError);
                         }
                     } else {
@@ -484,11 +483,21 @@ mod tests {
 
     #[test]
     fn test_func_3() -> Result<(), CoreError> {
-        let input = "f: func [n] [either lt n 2 [n] [add 1 f add n -1]] f 7";
+        let input = "f: func [n] [either lt n 2 [n] [add 1 f add n -1]] f 20";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
         let result = module.eval(&parsed)?;
-        assert_eq!([Value::TAG_INT, 7], result);
+        assert_eq!([Value::TAG_INT, 20], result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_func_fib() -> Result<(), CoreError> {
+        let input = "fib: func [n] [either lt n 2 [n] [add fib add n -1 fib add n -2]] fib 10";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!([Value::TAG_INT, 55], result);
         Ok(())
     }
 }

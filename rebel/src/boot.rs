@@ -103,5 +103,3 @@ where
     module.add_native_fn("either", either, 3)?;
     Ok(())
 }
-
-// fib: func [n] [either lt n 2 [n] [add fib add n -1 fib add n -2]]
