@@ -141,18 +141,16 @@ where
         self.do_eval(block, None)
     }
 
-    fn do_eval(
-        &mut self,
-        block: &[Word],
-        mut cur: Option<[Word; 2]>,
-    ) -> Result<[Word; 2], CoreError> {
+    fn do_eval(&mut self, block: &[Word], base: Option<[Word; 2]>) -> Result<[Word; 2], CoreError> {
+        let mut cur = base;
+
         for chunk in block.chunks_exact(2) {
             let value = match chunk[0] {
                 Value::TAG_WORD => {
                     let result = self.find_word(chunk[1])?;
                     if result[0] == Value::TAG_STACK_VALUE {
-                        if let Some([bp, _]) = cur {
-                            self.stack.get(bp - result[1] * 2)?
+                        if let Some([bp, _]) = base {
+                            self.stack.get(bp + 2 + result[1] * 2)?
                         } else {
                             return Err(CoreError::InternalError);
                         }
@@ -423,7 +421,17 @@ mod tests {
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
         let result = module.eval(&parsed)?;
-        assert_eq!([Value::TAG_INT, 3], result[0..2]);
+        assert_eq!([Value::TAG_INT, 3], result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_func_2() -> Result<(), CoreError> {
+        let input = "f: func [a b] [add a add b b] f 1 2";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!([Value::TAG_INT, 5], result);
         Ok(())
     }
 }

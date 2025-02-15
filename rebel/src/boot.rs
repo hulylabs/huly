@@ -57,8 +57,9 @@ where
             module.new_context(arity)?;
             for (i, param) in args.as_ref().chunks_exact(2).enumerate() {
                 match param {
-                    [Value::TAG_WORD, symbol] => module
-                        .put_context(*symbol, [Value::TAG_STACK_VALUE, arity - (i as Offset)])?,
+                    [Value::TAG_WORD, symbol] => {
+                        module.put_context(*symbol, [Value::TAG_STACK_VALUE, i as Offset])?
+                    }
                     _ => return Err(CoreError::BadArguments),
                 }
             }
