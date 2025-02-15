@@ -28,11 +28,6 @@ where
         self.0.as_ref().split_first()
     }
 
-    // fn split_at<const M: usize>(&self) -> Option<([Word; M], &[Word])> {
-    //     let (header, rest) = self.0.as_ref().split_at(M);
-    //     header.try_into().ok().map(|header| (header, rest))
-    // }
-
     fn get_block(&self, addr: Offset) -> Result<&[Word], CoreError> {
         self.0
             .as_ref()
@@ -44,17 +39,17 @@ where
             .ok_or(CoreError::BoundsCheckFailed)
     }
 
-    // fn get<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
-    //     self.0.as_ref().split_first().and_then(|(len, data)| {
-    //         let begin = addr as usize;
-    //         let end = begin + N;
-    //         if end <= *len as usize {
-    //             data.get(begin..end).and_then(|block| block.try_into().ok())
-    //         } else {
-    //             None
-    //         }
-    //     })
-    // }
+    fn get<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
+        self.0.as_ref().split_first().and_then(|(len, data)| {
+            let begin = addr as usize;
+            let end = begin + N;
+            if end <= *len as usize {
+                data.get(begin..end).and_then(|block| block.try_into().ok())
+            } else {
+                None
+            }
+        })
+    }
 }
 
 impl<T> Memory<T>
@@ -181,23 +176,23 @@ where
 
 // B L O C K
 
-#[derive(Debug)]
-pub struct Block<T>(Memory<T>);
+// #[derive(Debug)]
+// pub struct Block<T>(Memory<T>);
 
-impl<T> Block<T> {
-    pub fn new(data: T) -> Self {
-        Self(Memory(data))
-    }
-}
+// impl<T> Block<T> {
+//     pub fn new(data: T) -> Self {
+//         Self(Memory(data))
+//     }
+// }
 
-impl<T> Block<T>
-where
-    T: AsRef<[Word]>,
-{
-    pub fn as_ref(&self) -> &[Word] {
-        self.0 .0.as_ref()
-    }
-}
+// impl<T> Block<T>
+// where
+//     T: AsRef<[Word]>,
+// {
+//     pub fn as_ref(&self) -> &[Word] {
+//         self.0 .0.as_ref()
+//     }
+// }
 
 // S T A C K
 
@@ -360,6 +355,8 @@ where
 pub struct Context<T>(Memory<T>);
 
 impl<T> Context<T> {
+    const ENTRY_SIZE: usize = 3;
+
     pub fn new(data: T) -> Self {
         Self(Memory(data))
     }
@@ -377,8 +374,7 @@ where
     pub fn get(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
         let (_, data) = self.0.split_first().ok_or(CoreError::BoundsCheckFailed)?;
 
-        const ENTRY_SIZE: usize = 3;
-        let capacity = data.len() / ENTRY_SIZE;
+        let capacity = data.len() / Self::ENTRY_SIZE;
         if capacity == 0 {
             return Err(CoreError::WordNotFound);
         }
@@ -387,16 +383,19 @@ where
         let mut index = h % capacity;
 
         for _probe in 0..capacity {
-            let offset = index * ENTRY_SIZE;
-            if let Some(found) = data.get(offset..offset + ENTRY_SIZE).and_then(|entry| {
-                entry.split_first().and_then(|(cur, val)| {
-                    if *cur == symbol {
-                        Some([val[0], val[1]])
-                    } else {
-                        None
-                    }
+            let offset = index * Self::ENTRY_SIZE;
+            if let Some(found) = data
+                .get(offset..offset + Self::ENTRY_SIZE)
+                .and_then(|entry| {
+                    entry.split_first().and_then(|(cur, val)| {
+                        if *cur == symbol {
+                            Some([val[0], val[1]])
+                        } else {
+                            None
+                        }
+                    })
                 })
-            }) {
+            {
                 return Ok(found);
             }
             index = (index + 1) % capacity;
@@ -410,7 +409,7 @@ impl<T> Context<T>
 where
     T: AsMut<[Word]>,
 {
-    pub fn init(&mut self) -> Result<(), CoreError> {
+    fn init(&mut self) -> Result<(), CoreError> {
         self.0.init(0)
     }
 
@@ -420,8 +419,7 @@ where
             .split_first_mut()
             .ok_or(CoreError::BoundsCheckFailed)?;
 
-        const ENTRY_SIZE: usize = 3;
-        let capacity = data.len() / ENTRY_SIZE;
+        let capacity = data.len() / Self::ENTRY_SIZE;
         if capacity == 0 {
             return Err(CoreError::SymbolTableFull);
         }
@@ -430,9 +428,9 @@ where
         let mut index = h % capacity;
 
         for _probe in 0..capacity {
-            let offset = index * ENTRY_SIZE;
+            let offset = index * Self::ENTRY_SIZE;
             if data
-                .get_mut(offset..offset + ENTRY_SIZE)
+                .get_mut(offset..offset + Self::ENTRY_SIZE)
                 .and_then(|entry| {
                     entry.split_first_mut().and_then(|(cur, val)| {
                         if *cur == 0 {
@@ -477,9 +475,9 @@ where
         self.0.get_block(addr)
     }
 
-    // pub fn get<const N: usize>(&self, addr: Offset) -> Result<&[u32; N], CoreError> {
-    //     self.0.get(addr).ok_or(CoreError::BoundsCheckFailed)
-    // }
+    pub fn get<const N: usize>(&self, addr: Offset) -> Result<&[u32; N], CoreError> {
+        self.0.get(addr).ok_or(CoreError::BoundsCheckFailed)
+    }
 }
 
 impl<T> Heap<T>
@@ -512,6 +510,15 @@ where
 
     pub fn get_mut<const N: usize>(&mut self, addr: Offset) -> Result<&mut [u32; N], CoreError> {
         self.0.get_mut(addr).ok_or(CoreError::BoundsCheckFailed)
+    }
+
+    //
+
+    pub fn alloc_context(&mut self, size: Offset) -> Result<Offset, CoreError> {
+        let (addr, data) =
+            self.alloc_empty_block(size * (Context::<T>::ENTRY_SIZE as Offset) + 1)?;
+        Context::new(data).init()?;
+        Ok(addr)
     }
 }
 

@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::core::{CoreError, Module, Value};
-use crate::mem::Word;
+use crate::mem::{Offset, Word};
 
 fn add<T>(stack: &[Word], _: &mut Module<T>) -> Result<[Word; 2], CoreError> {
     match stack {
@@ -19,7 +19,7 @@ where
 {
     match stack {
         [Value::TAG_BLOCK, b] => {
-            let block: Box<[Word]> = module.get_block(*b)?.as_ref().into();
+            let block = module.get_block(*b)?;
             let result = module.eval(block.as_ref())?;
             if result.is_empty() {
                 Ok([Value::TAG_NONE, 0])
@@ -42,6 +42,31 @@ where
     Ok([Value::TAG_CONTEXT, addr])
 }
 
+fn func<T>(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match stack {
+        [Value::TAG_BLOCK, params, Value::TAG_BLOCK, _body] => {
+            let args = module.get_block(*params)?;
+            let arg_values = args.len() as Offset / 2;
+            module.push_context(arg_values)?;
+            for (i, param) in args.as_ref().chunks_exact(2).enumerate() {
+                match param {
+                    [Value::TAG_WORD, symbol] => {
+                        module.put_context(*symbol, [Value::TAG_STACK_VALUE, i as Offset])?
+                    }
+                    _ => return Err(CoreError::BadArguments),
+                }
+            }
+            let ctx = module.pop_context()?;
+            let func = module.alloc([arg_values, ctx])?;
+            Ok([Value::TAG_FUNC, func])
+        }
+        _ => Err(CoreError::BadArguments),
+    }
+}
+
 pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
@@ -49,5 +74,6 @@ where
     module.add_native_fn("add", add, 2)?;
     module.add_native_fn("do", func_do, 1)?;
     module.add_native_fn("context", context, 1)?;
+    module.add_native_fn("func", func, 2)?;
     Ok(())
 }

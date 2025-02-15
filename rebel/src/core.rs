@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::boot::core_package;
-use crate::mem::{Block, Context, Heap, Offset, Stack, Symbol, SymbolTable, Word};
+use crate::mem::{Context, Heap, Offset, Stack, Symbol, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use thiserror::Error;
 
@@ -45,10 +45,12 @@ impl Value {
     pub const TAG_INT: Word = 1;
     pub const TAG_BLOCK: Word = 2;
     pub const TAG_CONTEXT: Word = 3;
-    const TAG_NATIVE_FN: Word = 4;
-    const TAG_INLINE_STRING: Word = 5;
-    const TAG_WORD: Word = 6;
-    const TAG_SET_WORD: Word = 7;
+    pub const TAG_NATIVE_FN: Word = 4;
+    pub const TAG_INLINE_STRING: Word = 5;
+    pub const TAG_WORD: Word = 6;
+    pub const TAG_SET_WORD: Word = 7;
+    pub const TAG_STACK_VALUE: Word = 8;
+    pub const TAG_FUNC: Word = 9;
 }
 
 fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
@@ -139,15 +141,27 @@ where
 
         for chunk in block.chunks_exact(2) {
             let value = match chunk[0] {
-                Value::TAG_WORD => self.find_word(chunk[1])?,
+                Value::TAG_WORD => {
+                    let result = self.find_word(chunk[1])?;
+                    // if result[0] == Value::TAG_STACK_VALUE {
+                    //     if let Some([bp, arity]) = cur {
+                    //     } else {
+                    //         return Err(CoreError::InternalError);
+                    //     }
+                    // } else {
+                    //     result
+                    // }
+                    result
+                }
                 _ => [chunk[0], chunk[1]],
             };
 
             let mut sp = stack.alloc(value)?;
 
             if let Some(arity) = match value[0] {
-                Value::TAG_NATIVE_FN => Some(self.get_func(value[1])?.arity * 2),
+                Value::TAG_NATIVE_FN => Some(self.get_func(value[1])?.arity * 2), // remove * 2?
                 Value::TAG_SET_WORD => Some(2),
+                Value::TAG_FUNC => Some(self.get_array::<2>(value[1])?[0] * 2),
                 _ => None,
             } {
                 if let Some(value) = cur {
@@ -170,6 +184,10 @@ where
                             let stack_fn = frame.get(2..).ok_or(CoreError::BoundsCheckFailed)?;
                             (native_fn.func)(stack_fn, self)?
                         }
+                        // [Value::TAG_FUNC, func, ..] => {
+                        //     let [arity, ctx, blk] = self.get_array(*func)?;
+                        //     let stack_fn = frame.get(2..).ok_or(CoreError::BoundsCheckFailed)?;
+                        // }
                         _ => {
                             return Err(CoreError::InternalError);
                         }
@@ -190,8 +208,12 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get_block(&self, addr: Offset) -> Result<Block<&[Word]>, CoreError> {
-        self.heap.get_block(addr).map(Block::new)
+    fn get_array<const N: usize>(&self, addr: Offset) -> Result<&[Word; N], CoreError> {
+        self.heap.get(addr)
+    }
+
+    pub fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
+        self.heap.get_block(addr).map(|block| block.into())
     }
 
     fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
@@ -214,10 +236,12 @@ impl<T> Module<T>
 where
     T: AsMut<[Word]>,
 {
+    pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Result<Offset, CoreError> {
+        self.heap.alloc(values)
+    }
+
     pub fn push_context(&mut self, size: u32) -> Result<(), CoreError> {
-        let (addr, data) = self.heap.alloc_empty_block(size)?;
-        Context::new(data).init()?;
-        self.envs.push([addr])
+        self.envs.push([self.heap.alloc_context(size)?])
     }
 
     pub fn pop_context(&mut self) -> Result<Offset, CoreError> {
@@ -228,11 +252,13 @@ where
     }
 
     fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, CoreError> {
-        // let addr = self.heap.get_mut::<1>(Self::CONTEXT).map(|[addr]| *addr)?;
-        // self.heap.get_block_mut(addr).map(Context::new)
-
         let [addr] = self.envs.peek()?;
         self.heap.get_block_mut(addr).map(Context::new)
+    }
+
+    pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
+        self.get_context_mut()
+            .and_then(|mut ctx| ctx.put(symbol, value))
     }
 
     fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
