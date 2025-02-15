@@ -3,8 +3,11 @@
 use crate::core::{CoreError, Module, Value};
 use crate::mem::{Offset, Word};
 
-fn add<T>(stack: &[Word], _: &mut Module<T>) -> Result<[Word; 2], CoreError> {
-    match stack {
+fn add<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
+where
+    T: AsRef<[Word]>,
+{
+    match module.peek_all(bp)? {
         [Value::TAG_INT, a, Value::TAG_INT, b] => {
             let result = *a as i32 + *b as i32;
             Ok([Value::TAG_INT, result as Word])
@@ -13,11 +16,11 @@ fn add<T>(stack: &[Word], _: &mut Module<T>) -> Result<[Word; 2], CoreError> {
     }
 }
 
-fn func_do<T>(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>
+fn func_do<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    match stack {
+    match module.peek_all(bp)? {
         [Value::TAG_BLOCK, b] => {
             let block = module.get_block(*b)?;
             let result = module.eval(block.as_ref())?;
@@ -32,21 +35,21 @@ where
     }
 }
 
-fn context<T>(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>
+fn context<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     module.push_context(64)?;
-    func_do(stack, module)?;
+    func_do(module, bp)?;
     let addr = module.pop_context()?;
     Ok([Value::TAG_CONTEXT, addr])
 }
 
-fn func<T>(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>
+fn func<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    match stack {
+    match module.peek_all(bp)? {
         [Value::TAG_BLOCK, params, Value::TAG_BLOCK, _body] => {
             let args = module.get_block(*params)?;
             let arg_values = args.len() as Offset / 2;

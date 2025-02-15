@@ -39,7 +39,7 @@ where
             .ok_or(CoreError::BoundsCheckFailed)
     }
 
-    fn get<const N: usize>(&self, addr: Offset) -> Option<&[u32; N]> {
+    fn get<const N: usize>(&self, addr: Offset) -> Option<[u32; N]> {
         self.0.as_ref().split_first().and_then(|(len, data)| {
             let begin = addr as usize;
             let end = begin + N;
@@ -210,6 +210,10 @@ where
 {
     pub fn len(&self) -> Result<Offset, CoreError> {
         self.0.len()
+    }
+
+    pub fn get<const N: usize>(&self, offset: Offset) -> Result<[Word; N], CoreError> {
+        self.0.get(offset).ok_or(CoreError::BoundsCheckFailed)
     }
 
     pub fn peek_all(&self, offset: Offset) -> Result<&[Word], CoreError> {
@@ -475,7 +479,7 @@ where
         self.0.get_block(addr)
     }
 
-    pub fn get<const N: usize>(&self, addr: Offset) -> Result<&[u32; N], CoreError> {
+    pub fn get<const N: usize>(&self, addr: Offset) -> Result<[Word; N], CoreError> {
         self.0.get(addr).ok_or(CoreError::BoundsCheckFailed)
     }
 }

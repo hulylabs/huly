@@ -71,7 +71,7 @@ fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
 
 // M O D U L E
 
-type NativeFn<T> = fn(stack: &[Word], module: &mut Module<T>) -> Result<[Word; 2], CoreError>;
+type NativeFn<T> = fn(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>;
 
 struct FuncDesc<T> {
     func: NativeFn<T>,
@@ -80,6 +80,8 @@ struct FuncDesc<T> {
 
 pub struct Module<T> {
     heap: Heap<T>,
+    stack: Stack<[Offset; 128]>,
+    ops: Stack<[Offset; 64]>,
     envs: Stack<[Offset; 16]>,
     functions: Vec<FuncDesc<T>>,
 }
@@ -107,6 +109,8 @@ where
         let mut module = Self {
             heap,
             functions: Vec::new(),
+            stack: Stack::new([0; 128]),
+            ops: Stack::new([0; 64]),
             envs: Stack::new([0; 16]),
         };
 
@@ -134,9 +138,6 @@ where
     }
 
     pub fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {
-        let mut stack = Stack::new([0; 128]);
-        let mut ops = Stack::new([0; 64]);
-
         let mut cur: Option<[Word; 2]> = None;
 
         for chunk in block.chunks_exact(2) {
@@ -156,7 +157,7 @@ where
                 _ => [chunk[0], chunk[1]],
             };
 
-            let mut sp = stack.alloc(value)?;
+            let mut sp = self.stack.alloc(value)?;
 
             if let Some(arity) = match value[0] {
                 Value::TAG_NATIVE_FN => Some(self.get_func(value[1])?.arity * 2), // remove * 2?
@@ -165,24 +166,24 @@ where
                 _ => None,
             } {
                 if let Some(value) = cur {
-                    ops.push(value)?;
+                    self.ops.push(value)?;
                 }
                 cur = Some([sp, arity]);
             }
 
             while let Some([bp, arity]) = cur {
                 if sp == bp + arity {
-                    let frame = stack.peek_all(bp)?;
-                    let result = match frame {
-                        [Value::TAG_SET_WORD, sym, tag, val] => {
+                    let [tag, value] = self.stack.get(bp)?;
+                    let result = match tag {
+                        Value::TAG_SET_WORD => {
+                            let bp2 = self.stack.get(bp + 2)?;
                             self.get_context_mut()
-                                .and_then(|mut ctx| ctx.put(*sym, [*tag, *val]))?;
-                            value
+                                .and_then(|mut ctx| ctx.put(value, bp2))?;
+                            bp2
                         }
-                        [Value::TAG_NATIVE_FN, func, ..] => {
-                            let native_fn = self.get_func(*func)?;
-                            let stack_fn = frame.get(2..).ok_or(CoreError::BoundsCheckFailed)?;
-                            (native_fn.func)(stack_fn, self)?
+                        Value::TAG_NATIVE_FN => {
+                            let native_fn = self.get_func(value)?;
+                            (native_fn.func)(self, bp + 2)?
                         }
                         // [Value::TAG_FUNC, func, ..] => {
                         //     let [arity, ctx, blk] = self.get_array(*func)?;
@@ -192,15 +193,15 @@ where
                             return Err(CoreError::InternalError);
                         }
                     };
-                    stack.set_len(bp)?;
-                    sp = stack.alloc(result)?;
-                    cur = ops.pop();
+                    self.stack.set_len(bp)?;
+                    sp = self.stack.alloc(result)?;
+                    cur = self.ops.pop();
                 } else {
                     break;
                 }
             }
         }
-        Ok(stack.pop_all(0)?.into())
+        Ok(self.stack.pop_all(0)?.into())
     }
 }
 
@@ -208,7 +209,11 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-    fn get_array<const N: usize>(&self, addr: Offset) -> Result<&[Word; N], CoreError> {
+    pub fn peek_all(&self, bp: Offset) -> Result<&[Word], CoreError> {
+        self.stack.peek_all(bp)
+    }
+
+    fn get_array<const N: usize>(&self, addr: Offset) -> Result<[Word; N], CoreError> {
         self.heap.get(addr)
     }
 
