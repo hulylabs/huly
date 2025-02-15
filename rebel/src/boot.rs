@@ -7,9 +7,9 @@ fn add<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]>,
 {
-    match module.peek_all(bp)? {
+    match module.stack_get(bp)? {
         [Value::TAG_INT, a, Value::TAG_INT, b] => {
-            let result = *a as i32 + *b as i32;
+            let result = a as i32 + b as i32;
             Ok([Value::TAG_INT, result as Word])
         }
         _ => Err(CoreError::BadArguments),
@@ -20,9 +20,9 @@ fn func_do<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    match module.peek_all(bp)? {
+    match module.stack_get(bp)? {
         [Value::TAG_BLOCK, b] => {
-            let block = module.get_block(*b)?;
+            let block = module.get_block(b)?;
             let result = module.eval(block.as_ref())?;
             if result.is_empty() {
                 Ok([Value::TAG_NONE, 0])
@@ -39,7 +39,7 @@ fn context<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    module.push_context(64)?;
+    module.new_context(64)?;
     func_do(module, bp)?;
     let addr = module.pop_context()?;
     Ok([Value::TAG_CONTEXT, addr])
@@ -49,21 +49,21 @@ fn func<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    match module.peek_all(bp)? {
-        [Value::TAG_BLOCK, params, Value::TAG_BLOCK, _body] => {
-            let args = module.get_block(*params)?;
+    match module.stack_get(bp)? {
+        [Value::TAG_BLOCK, params, Value::TAG_BLOCK, body] => {
+            let args = module.get_block(params)?;
             let arg_values = args.len() as Offset / 2;
-            module.push_context(arg_values)?;
+            let arity = arg_values;
+            module.new_context(arity)?;
             for (i, param) in args.as_ref().chunks_exact(2).enumerate() {
                 match param {
-                    [Value::TAG_WORD, symbol] => {
-                        module.put_context(*symbol, [Value::TAG_STACK_VALUE, i as Offset])?
-                    }
+                    [Value::TAG_WORD, symbol] => module
+                        .put_context(*symbol, [Value::TAG_STACK_VALUE, arity - (i as Offset)])?,
                     _ => return Err(CoreError::BadArguments),
                 }
             }
             let ctx = module.pop_context()?;
-            let func = module.alloc([arg_values, ctx])?;
+            let func = module.alloc([arg_values, ctx, body])?;
             Ok([Value::TAG_FUNC, func])
         }
         _ => Err(CoreError::BadArguments),

@@ -117,7 +117,7 @@ where
         let (symbols_addr, symbols_data) = module.heap.alloc_empty_block(1024)?;
         SymbolTable::new(symbols_data).init()?;
 
-        module.push_context(1024)?;
+        module.new_context(1024)?;
         module.heap.put(0, [0xdeadbeef, symbols_addr])?;
         core_package(&mut module)?;
         Ok(module)
@@ -137,22 +137,28 @@ where
             .put(id, [Value::TAG_NATIVE_FN, index])
     }
 
-    pub fn eval(&mut self, block: &[Word]) -> Result<Box<[Word]>, CoreError> {
-        let mut cur: Option<[Word; 2]> = None;
+    pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
+        self.do_eval(block, None)
+    }
 
+    fn do_eval(
+        &mut self,
+        block: &[Word],
+        mut cur: Option<[Word; 2]>,
+    ) -> Result<[Word; 2], CoreError> {
         for chunk in block.chunks_exact(2) {
             let value = match chunk[0] {
                 Value::TAG_WORD => {
                     let result = self.find_word(chunk[1])?;
-                    // if result[0] == Value::TAG_STACK_VALUE {
-                    //     if let Some([bp, arity]) = cur {
-                    //     } else {
-                    //         return Err(CoreError::InternalError);
-                    //     }
-                    // } else {
-                    //     result
-                    // }
-                    result
+                    if result[0] == Value::TAG_STACK_VALUE {
+                        if let Some([bp, _]) = cur {
+                            self.stack.get(bp - result[1] * 2)?
+                        } else {
+                            return Err(CoreError::InternalError);
+                        }
+                    } else {
+                        result
+                    }
                 }
                 _ => [chunk[0], chunk[1]],
             };
@@ -162,7 +168,7 @@ where
             if let Some(arity) = match value[0] {
                 Value::TAG_NATIVE_FN => Some(self.get_func(value[1])?.arity * 2), // remove * 2?
                 Value::TAG_SET_WORD => Some(2),
-                Value::TAG_FUNC => Some(self.get_array::<2>(value[1])?[0] * 2),
+                Value::TAG_FUNC => Some(self.get_array::<1>(value[1])?[0] * 2),
                 _ => None,
             } {
                 if let Some(value) = cur {
@@ -177,18 +183,20 @@ where
                     let result = match tag {
                         Value::TAG_SET_WORD => {
                             let bp2 = self.stack.get(bp + 2)?;
-                            self.get_context_mut()
-                                .and_then(|mut ctx| ctx.put(value, bp2))?;
+                            self.put_context(value, bp2)?;
                             bp2
                         }
                         Value::TAG_NATIVE_FN => {
                             let native_fn = self.get_func(value)?;
                             (native_fn.func)(self, bp + 2)?
                         }
-                        // [Value::TAG_FUNC, func, ..] => {
-                        //     let [arity, ctx, blk] = self.get_array(*func)?;
-                        //     let stack_fn = frame.get(2..).ok_or(CoreError::BoundsCheckFailed)?;
-                        // }
+                        Value::TAG_FUNC => {
+                            let [ctx, blk] = self.get_array(value + 1)?; // value -> [arity, ctx, blk]
+                            self.envs.push([ctx])?;
+                            let result = self.do_eval(&self.get_block(blk)?, cur)?;
+                            self.pop_context()?;
+                            result
+                        }
                         _ => {
                             return Err(CoreError::InternalError);
                         }
@@ -201,7 +209,11 @@ where
                 }
             }
         }
-        Ok(self.stack.pop_all(0)?.into())
+        if let Some(result) = self.stack.pop::<2>() {
+            Ok(result)
+        } else {
+            Ok([Value::TAG_NONE, 0])
+        }
     }
 }
 
@@ -209,8 +221,8 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn peek_all(&self, bp: Offset) -> Result<&[Word], CoreError> {
-        self.stack.peek_all(bp)
+    pub fn stack_get<const N: usize>(&self, bp: Offset) -> Result<[Word; N], CoreError> {
+        self.stack.get(bp)
     }
 
     fn get_array<const N: usize>(&self, addr: Offset) -> Result<[Word; N], CoreError> {
@@ -245,7 +257,7 @@ where
         self.heap.alloc(values)
     }
 
-    pub fn push_context(&mut self, size: u32) -> Result<(), CoreError> {
+    pub fn new_context(&mut self, size: u32) -> Result<(), CoreError> {
         self.envs.push([self.heap.alloc_context(size)?])
     }
 
@@ -349,12 +361,10 @@ mod tests {
 
     #[test]
     fn test_whitespace_1() -> Result<(), CoreError> {
-        println!("init");
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
-        println!("inited");
         let parsed = module.parse("  \t\n  ")?;
         let result = module.eval(&parsed)?;
-        assert_eq!(result.len(), 0);
+        assert_eq!(Value::TAG_NONE, result[0]);
         Ok(())
     }
 
@@ -373,9 +383,7 @@ mod tests {
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
         let result = module.eval(&parsed)?;
-        assert_eq!(result.len(), 8);
-        assert_eq!([Value::TAG_INT, 42], result[0..2]);
-        assert_eq!([Value::TAG_INT, 5, Value::TAG_INT, 5], result[4..8]);
+        assert_eq!([Value::TAG_INT, 5], result);
         Ok(())
     }
 
@@ -385,7 +393,7 @@ mod tests {
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
         let result = module.eval(&parsed)?;
-        assert_eq!([Value::TAG_INT, 15], result[0..2]);
+        assert_eq!([Value::TAG_INT, 15], result);
         Ok(())
     }
 
@@ -406,6 +414,16 @@ mod tests {
         let parsed = module.parse(input)?;
         let result = module.eval(&parsed)?;
         assert_eq!([Value::TAG_INT, 12], result[0..2]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_func_1() -> Result<(), CoreError> {
+        let input = "f: func [a b] [add a b] f 1 2";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!([Value::TAG_INT, 3], result[0..2]);
         Ok(())
     }
 }
