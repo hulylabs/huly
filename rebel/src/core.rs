@@ -51,6 +51,7 @@ impl Value {
     pub const TAG_SET_WORD: Word = 7;
     pub const TAG_STACK_VALUE: Word = 8;
     pub const TAG_FUNC: Word = 9;
+    pub const TAG_BOOL: Word = 10;
 }
 
 fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
@@ -71,7 +72,7 @@ fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
 
 // M O D U L E
 
-type NativeFn<T> = fn(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>;
+type NativeFn<T> = fn(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>;
 
 struct FuncDesc<T> {
     func: NativeFn<T>,
@@ -80,9 +81,7 @@ struct FuncDesc<T> {
 
 pub struct Module<T> {
     heap: Heap<T>,
-    stack: Stack<[Offset; 128]>,
-    ops: Stack<[Offset; 64]>,
-    envs: Stack<[Offset; 16]>,
+    system_words: Offset,
     functions: Vec<FuncDesc<T>>,
 }
 
@@ -104,21 +103,22 @@ where
 {
     pub fn init(data: T) -> Result<Self, CoreError> {
         let mut heap = Heap::new(data);
-        heap.init(2)?;
+        heap.init(3)?;
+
+        let system_words = heap.alloc_context(1024)?;
 
         let mut module = Self {
             heap,
+            system_words,
             functions: Vec::new(),
-            stack: Stack::new([0; 128]),
-            ops: Stack::new([0; 64]),
-            envs: Stack::new([0; 16]),
         };
 
         let (symbols_addr, symbols_data) = module.heap.alloc_empty_block(1024)?;
         SymbolTable::new(symbols_data).init()?;
 
-        module.new_context(1024)?;
-        module.heap.put(0, [0xdeadbeef, symbols_addr])?;
+        module
+            .heap
+            .put(0, [0xdeadbeef, symbols_addr, system_words])?;
         core_package(&mut module)?;
         Ok(module)
     }
@@ -133,25 +133,139 @@ where
         self.functions.push(FuncDesc { func, arity });
         let symbol = inline_string(name)?;
         let id = self.get_symbols_mut()?.get_or_insert(symbol)?;
-        self.get_context_mut()?
-            .put(id, [Value::TAG_NATIVE_FN, index])
+        let mut words = self
+            .heap
+            .get_block_mut(self.system_words)
+            .map(Context::new)?;
+        words.put(id, [Value::TAG_NATIVE_FN, index])
     }
 
     pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
-        self.do_eval(block, None)
+        Exec::new(self)?.eval(block)
+    }
+}
+
+impl<T> Module<T>
+where
+    T: AsRef<[Word]>,
+{
+    fn get_array<const N: usize>(&self, addr: Offset) -> Result<[Word; N], CoreError> {
+        self.heap.get(addr)
     }
 
-    fn do_eval(&mut self, block: &[Word], base: Option<[Word; 2]>) -> Result<[Word; 2], CoreError> {
-        let mut cur = base;
+    fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
+        self.heap.get_block(addr).map(|block| block.into())
+    }
+}
 
+impl<T> Module<T>
+where
+    T: AsMut<[Word]>,
+{
+    fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
+        let addr = self.heap.get_mut::<1>(Self::SYMBOLS).map(|[addr]| *addr)?;
+        self.heap.get_block_mut(addr).map(SymbolTable::new)
+    }
+
+    pub fn parse(&mut self, code: &str) -> Result<Box<[Word]>, CoreError> {
+        let mut collector = ParseCollector::new(self);
+        Parser::new(code, &mut collector).parse()?;
+        Ok(collector.parse.pop_all(0)?.into())
+    }
+}
+
+// E X E C U T I O N  C O N T E X T
+
+pub struct Exec<'a, T> {
+    module: &'a mut Module<T>,
+    cur: Option<[Word; 2]>,
+    stack: Stack<[Offset; 128]>,
+    ops: Stack<[Offset; 64]>,
+    base: Stack<[Offset; 64]>,
+    envs: Stack<[Offset; 16]>,
+}
+
+impl<'a, T> Exec<'a, T> {
+    fn new(module: &'a mut Module<T>) -> Result<Self, CoreError> {
+        let mut envs = Stack::new([0; 16]);
+        envs.push([module.system_words])?;
+        Ok(Self {
+            module,
+            envs,
+            stack: Stack::new([0; 128]),
+            ops: Stack::new([0; 64]),
+            base: Stack::new([0; 64]),
+            cur: None,
+        })
+    }
+}
+
+impl<'a, T> Exec<'a, T>
+where
+    T: AsRef<[Word]>,
+{
+    pub fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
+        self.module.get_block(addr)
+    }
+
+    pub fn stack_get<const N: usize>(&self, bp: Offset) -> Result<[Word; N], CoreError> {
+        self.stack.get(bp)
+    }
+
+    fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
+        let envs = self.envs.peek_all(0)?;
+
+        for &addr in envs.iter().rev() {
+            let context = self.module.heap.get_block(addr).map(Context::new)?;
+            match context.get(symbol) {
+                Ok(result) => return Ok(result),
+                Err(CoreError::WordNotFound) => continue,
+                Err(err) => return Err(err),
+            }
+        }
+
+        Err(CoreError::WordNotFound)
+    }
+}
+
+impl<'a, T> Exec<'a, T>
+where
+    T: AsMut<[Word]> + AsRef<[Word]>,
+{
+    pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Result<Offset, CoreError> {
+        self.module.heap.alloc(values)
+    }
+
+    pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
+        let [addr] = self.envs.peek().ok_or(CoreError::InternalError)?;
+        self.module
+            .heap
+            .get_block_mut(addr)
+            .map(Context::new)
+            .and_then(|mut ctx| ctx.put(symbol, value))
+    }
+
+    pub fn new_context(&mut self, size: u32) -> Result<(), CoreError> {
+        self.envs.push([self.module.heap.alloc_context(size)?])
+    }
+
+    pub fn pop_context(&mut self) -> Result<Offset, CoreError> {
+        self.envs
+            .pop()
+            .map(|[addr]| addr)
+            .ok_or(CoreError::StackUnderflow)
+    }
+
+    pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
         for chunk in block.chunks_exact(2) {
             let value = match chunk[0] {
                 Value::TAG_WORD => {
                     let result = self.find_word(chunk[1])?;
                     if result[0] == Value::TAG_STACK_VALUE {
-                        if let Some([bp, _]) = base {
+                        if let Some([bp]) = self.base.peek() {
                             self.stack.get(bp + 2 + result[1] * 2)?
                         } else {
+                            println!("HERE!");
                             return Err(CoreError::InternalError);
                         }
                     } else {
@@ -164,18 +278,18 @@ where
             let mut sp = self.stack.alloc(value)?;
 
             if let Some(arity) = match value[0] {
-                Value::TAG_NATIVE_FN => Some(self.get_func(value[1])?.arity * 2), // remove * 2?
+                Value::TAG_NATIVE_FN => Some(self.module.get_func(value[1])?.arity * 2), // remove * 2?
                 Value::TAG_SET_WORD => Some(2),
-                Value::TAG_FUNC => Some(self.get_array::<1>(value[1])?[0] * 2),
+                Value::TAG_FUNC => Some(self.module.get_array::<1>(value[1])?[0] * 2),
                 _ => None,
             } {
-                if let Some(value) = cur {
+                if let Some(value) = self.cur {
                     self.ops.push(value)?;
                 }
-                cur = Some([sp, arity]);
+                self.cur = Some([sp, arity]);
             }
 
-            while let Some([bp, arity]) = cur {
+            while let Some([bp, arity]) = self.cur {
                 if sp == bp + arity {
                     let [tag, value] = self.stack.get(bp)?;
                     let result = match tag {
@@ -185,14 +299,20 @@ where
                             bp2
                         }
                         Value::TAG_NATIVE_FN => {
-                            let native_fn = self.get_func(value)?;
+                            let native_fn = self.module.get_func(value)?;
                             (native_fn.func)(self, bp + 2)?
                         }
                         Value::TAG_FUNC => {
-                            let [ctx, blk] = self.get_array(value + 1)?; // value -> [arity, ctx, blk]
+                            let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
                             self.envs.push([ctx])?;
-                            let result = self.do_eval(&self.get_block(blk)?, cur)?;
+                            if let Some([bp, _]) = self.cur {
+                                self.base.push([bp])?;
+                            } else {
+                                return Err(CoreError::InternalError);
+                            }
+                            let result = self.eval(&self.module.get_block(blk)?)?;
                             self.pop_context()?;
+                            self.base.pop::<1>().ok_or(CoreError::InternalError)?;
                             result
                         }
                         _ => {
@@ -201,7 +321,7 @@ where
                     };
                     self.stack.set_len(bp)?;
                     sp = self.stack.alloc(result)?;
-                    cur = self.ops.pop();
+                    self.cur = self.ops.pop();
                 } else {
                     break;
                 }
@@ -212,79 +332,6 @@ where
         } else {
             Ok([Value::TAG_NONE, 0])
         }
-    }
-}
-
-impl<T> Module<T>
-where
-    T: AsRef<[Word]>,
-{
-    pub fn stack_get<const N: usize>(&self, bp: Offset) -> Result<[Word; N], CoreError> {
-        self.stack.get(bp)
-    }
-
-    fn get_array<const N: usize>(&self, addr: Offset) -> Result<[Word; N], CoreError> {
-        self.heap.get(addr)
-    }
-
-    pub fn get_block(&self, addr: Offset) -> Result<Box<[Word]>, CoreError> {
-        self.heap.get_block(addr).map(|block| block.into())
-    }
-
-    fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-        let envs = self.envs.peek_all(0)?;
-
-        for &addr in envs.iter().rev() {
-            let context = self.heap.get_block(addr).map(Context::new)?;
-            match context.get(symbol) {
-                Ok(result) => return Ok(result),
-                Err(CoreError::WordNotFound) => continue,
-                Err(err) => return Err(err),
-            }
-        }
-
-        Err(CoreError::WordNotFound)
-    }
-}
-
-impl<T> Module<T>
-where
-    T: AsMut<[Word]>,
-{
-    pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Result<Offset, CoreError> {
-        self.heap.alloc(values)
-    }
-
-    pub fn new_context(&mut self, size: u32) -> Result<(), CoreError> {
-        self.envs.push([self.heap.alloc_context(size)?])
-    }
-
-    pub fn pop_context(&mut self) -> Result<Offset, CoreError> {
-        self.envs
-            .pop()
-            .map(|[addr]| addr)
-            .ok_or(CoreError::StackUnderflow)
-    }
-
-    fn get_context_mut(&mut self) -> Result<Context<&mut [Word]>, CoreError> {
-        let [addr] = self.envs.peek()?;
-        self.heap.get_block_mut(addr).map(Context::new)
-    }
-
-    pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
-        self.get_context_mut()
-            .and_then(|mut ctx| ctx.put(symbol, value))
-    }
-
-    fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, CoreError> {
-        let addr = self.heap.get_mut::<1>(Self::SYMBOLS).map(|[addr]| *addr)?;
-        self.heap.get_block_mut(addr).map(SymbolTable::new)
-    }
-
-    pub fn parse(&mut self, code: &str) -> Result<Box<[Word]>, CoreError> {
-        let mut collector = ParseCollector::new(self);
-        Parser::new(code, &mut collector).parse()?;
-        Ok(collector.parse.pop_all(0)?.into())
     }
 }
 
@@ -434,4 +481,16 @@ mod tests {
         assert_eq!([Value::TAG_INT, 5], result);
         Ok(())
     }
+
+    #[test]
+    fn test_func_3() -> Result<(), CoreError> {
+        let input = "f: func [n] [either lt n 2 [n] [add 1 f add n -1]] f 7";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(&parsed)?;
+        assert_eq!([Value::TAG_INT, 7], result);
+        Ok(())
+    }
 }
+
+//

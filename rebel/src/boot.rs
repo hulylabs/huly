@@ -1,41 +1,48 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{CoreError, Module, Value};
+use crate::core::{CoreError, Exec, Module, Value};
 use crate::mem::{Offset, Word};
 
-fn add<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
+fn add<T>(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]>,
 {
     match module.stack_get(bp)? {
         [Value::TAG_INT, a, Value::TAG_INT, b] => {
-            let result = a as i32 + b as i32;
+            let result = (a as i32) + (b as i32);
             Ok([Value::TAG_INT, result as Word])
         }
         _ => Err(CoreError::BadArguments),
     }
 }
 
-fn func_do<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
+fn lt<T>(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>
+where
+    T: AsRef<[Word]>,
+{
+    match module.stack_get(bp)? {
+        [Value::TAG_INT, a, Value::TAG_INT, b] => {
+            let result = (a as i32) < (b as i32);
+            Ok([Value::TAG_BOOL, if result { 1 } else { 0 }])
+        }
+        _ => Err(CoreError::BadArguments),
+    }
+}
+
+fn func_do<T>(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.stack_get(bp)? {
         [Value::TAG_BLOCK, b] => {
             let block = module.get_block(b)?;
-            let result = module.eval(block.as_ref())?;
-            if result.is_empty() {
-                Ok([Value::TAG_NONE, 0])
-            } else {
-                let result = result.last_chunk::<2>().ok_or(CoreError::EndOfInput)?;
-                Ok(*result)
-            }
+            module.eval(block.as_ref())
         }
         _ => Err(CoreError::BadArguments),
     }
 }
 
-fn context<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
+fn context<T>(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
@@ -45,7 +52,7 @@ where
     Ok([Value::TAG_CONTEXT, addr])
 }
 
-fn func<T>(module: &mut Module<T>, bp: Offset) -> Result<[Word; 2], CoreError>
+fn func<T>(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
@@ -71,13 +78,30 @@ where
     }
 }
 
+fn either<T>(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.stack_get(bp)? {
+        [Value::TAG_BOOL, cond, Value::TAG_BLOCK, if_true, Value::TAG_BLOCK, if_false] => {
+            let block = if cond != 0 { if_true } else { if_false };
+            module.eval(module.get_block(block)?.as_ref())
+        }
+        _ => Err(CoreError::BadArguments),
+    }
+}
+
 pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
     module.add_native_fn("add", add, 2)?;
+    module.add_native_fn("lt", lt, 2)?;
     module.add_native_fn("do", func_do, 1)?;
     module.add_native_fn("context", context, 1)?;
     module.add_native_fn("func", func, 2)?;
+    module.add_native_fn("either", either, 3)?;
     Ok(())
 }
+
+// fib: func [n] [either lt n 2 [n] [add fib add n -1 fib add n -2]]

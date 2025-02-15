@@ -228,17 +228,15 @@ where
             .ok_or(CoreError::StackUnderflow)
     }
 
-    pub fn peek<const N: usize>(&self) -> Result<[Word; N], CoreError> {
-        self.0
-            .split_first()
-            .and_then(|(len, data)| {
-                len.checked_sub(N as u32).and_then(|offset| {
-                    let addr = offset as usize;
-                    data.get(addr..addr + N)
-                        .and_then(|block| block.try_into().ok())
-                })
+    pub fn peek<const N: usize>(&self) -> Option<[Word; N]> {
+        self.0.split_first().and_then(|(len, data)| {
+            len.checked_sub(N as u32).and_then(|offset| {
+                let addr = offset as usize;
+                data.get(addr..addr + N)
+                    .and_then(|block| block.try_into().ok())
             })
-            .ok_or(CoreError::StackUnderflow)
+        })
+        // .ok_or(CoreError::StackUnderflow)
     }
 }
 
@@ -312,6 +310,8 @@ where
     }
 
     pub fn get_or_insert(&mut self, sym: [u32; 8]) -> Result<Symbol, CoreError> {
+        println!("[symbol table]: add {:?}", sym);
+
         let (count, data) = self
             .0
             .split_first_mut()
