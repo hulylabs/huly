@@ -33,7 +33,7 @@ fn main() -> Result<()> {
                 }
 
                 match module.parse(line.as_str()) {
-                    Ok(parsed) => match module.eval(&parsed) {
+                    Ok(block) => match module.eval(block) {
                         Ok(result) => {
                             if result.is_empty() {
                                 println!("{}: {:?}", "OK".green(), "None")
