@@ -252,8 +252,7 @@ where
     }
 
     fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-        // let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
-        let [ctx] = self.env.peek().expect("find_word");
+        let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
         let context = self.module.heap.get_block(ctx).map(Context::new)?;
         let result = context.get(symbol);
         match result {
@@ -316,8 +315,7 @@ where
     }
 
     pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
-        // let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
-        let [ctx] = self.env.peek().expect("put_context");
+        let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
         self.module
             .heap
             .get_block_mut(ctx)
