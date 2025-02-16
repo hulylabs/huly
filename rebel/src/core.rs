@@ -374,9 +374,7 @@ where
 
     pub fn eval(&mut self) -> Result<[Word; 2], CoreError> {
         loop {
-            let next_value = self.next_value();
-
-            if let Ok(value) = next_value {
+            if let Ok(value) = self.next_value() {
                 self.stack.alloc(value)?;
             } else {
                 let stack_len = self.stack.len()?;
@@ -390,6 +388,12 @@ where
                         self.stack.set_len(self.base_ptr)?;
                         self.stack.push(result)?;
                     }
+                }
+                let [block, ip] = self.blocks.pop()?;
+                if block != 0 {
+                    self.ip = IP::new(block, ip);
+                } else {
+                    break;
                 }
             }
 
@@ -430,15 +434,6 @@ where
                             return Err(CoreError::InternalError);
                         }
                     };
-                } else {
-                    break;
-                }
-            }
-
-            if next_value.is_err() {
-                let [block, ip] = self.blocks.pop()?;
-                if block != 0 {
-                    self.ip = IP::new(block, ip);
                 } else {
                     break;
                 }
