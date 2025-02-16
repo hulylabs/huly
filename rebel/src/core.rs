@@ -178,7 +178,6 @@ where
 
 pub struct Exec<'a, T> {
     module: &'a mut Module<T>,
-    cur: Option<[Word; 2]>,
     stack: Stack<[Offset; 1024]>,
     ops: Stack<[Offset; 256]>,
     base: Stack<[Offset; 256]>,
@@ -195,7 +194,6 @@ impl<'a, T> Exec<'a, T> {
             stack: Stack::new([0; 1024]),
             ops: Stack::new([0; 256]),
             base: Stack::new([0; 256]),
-            cur: None,
         })
     }
 }
@@ -250,16 +248,12 @@ where
     }
 
     pub fn pop_context(&mut self) -> Result<Offset, CoreError> {
-        self.envs
-            .pop()
-            .map(|[addr]| addr)
-            .ok_or(CoreError::StackUnderflow)
+        self.envs.pop().map(|[addr]| addr)
     }
 
     pub fn eval<I>(&mut self, words: I) -> Result<[Word; 2], CoreError>
     where
         I: IntoIterator<Item = Word>,
-        I::IntoIter: Clone,
     {
         let mut iter = words.into_iter();
 
@@ -289,14 +283,12 @@ where
                 Value::TAG_FUNC => Some(self.module.get_array::<1>(value[1])?[0] * 2),
                 _ => None,
             } {
-                if let Some(value) = self.cur {
-                    self.ops.push(value)?;
-                }
-                self.cur = Some([sp, arity]);
+                self.ops.push([sp, arity])?;
             }
 
-            while let Some([bp, arity]) = self.cur {
+            while let Some([bp, arity]) = self.ops.peek() {
                 if sp == bp + arity {
+                    self.ops.pop::<2>()?;
                     let [tag, value] = self.stack.get(bp)?;
                     let result = match tag {
                         Value::TAG_SET_WORD => {
@@ -311,15 +303,11 @@ where
                         Value::TAG_FUNC => {
                             let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
                             self.envs.push([ctx])?;
-                            if let Some([bp, _]) = self.cur {
-                                self.base.push([bp])?;
-                            } else {
-                                return Err(CoreError::InternalError);
-                            }
+                            self.base.push([bp])?;
                             let block = self.module.get_block(blk)?;
                             let result = self.eval(block.iter().copied())?;
-                            self.pop_context()?;
-                            self.base.pop::<1>().ok_or(CoreError::InternalError)?;
+                            self.envs.pop::<1>()?;
+                            self.base.pop::<1>()?;
                             result
                         }
                         _ => {
@@ -328,17 +316,12 @@ where
                     };
                     self.stack.set_len(bp)?;
                     sp = self.stack.alloc(result)?;
-                    self.cur = self.ops.pop();
                 } else {
                     break;
                 }
             }
         }
-        if let Some(result) = self.stack.pop::<2>() {
-            Ok(result)
-        } else {
-            Ok([Value::TAG_NONE, 0])
-        }
+        self.stack.pop::<2>().or(Ok([Value::TAG_NONE, 0]))
     }
 }
 
@@ -388,7 +371,7 @@ where
     }
 
     fn end_block(&mut self) -> Result<(), CoreError> {
-        let [bp] = self.ops.pop().ok_or(CoreError::StackUnderflow)?;
+        let [bp] = self.ops.pop()?;
         let block_data = self.parse.pop_all(bp)?;
         let offset = self.module.heap.alloc_block(block_data)?;
         self.parse.push([Value::TAG_BLOCK, offset])

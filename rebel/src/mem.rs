@@ -257,23 +257,26 @@ where
         Ok(())
     }
 
-    pub fn pop<const N: usize>(&mut self) -> Option<[u32; N]> {
-        self.0.split_first_mut().and_then(|(len, data)| {
-            len.checked_sub(N as u32).and_then(|new_len| {
-                let addr = new_len as usize;
-                data.get(addr..addr + N).map(|block| {
-                    let mut words = [0; N];
-                    block
-                        .iter()
-                        .zip(words.iter_mut())
-                        .for_each(|(slot, value)| {
-                            *value = *slot;
-                        });
-                    *len = new_len;
-                    words
+    pub fn pop<const N: usize>(&mut self) -> Result<[u32; N], CoreError> {
+        self.0
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                len.checked_sub(N as u32).and_then(|new_len| {
+                    let addr = new_len as usize;
+                    data.get(addr..addr + N).map(|block| {
+                        let mut words = [0; N];
+                        block
+                            .iter()
+                            .zip(words.iter_mut())
+                            .for_each(|(slot, value)| {
+                                *value = *slot;
+                            });
+                        *len = new_len;
+                        words
+                    })
                 })
             })
-        })
+            .ok_or(CoreError::StackUnderflow)
     }
 
     pub fn pop_all(&mut self, offset: Offset) -> Result<&[Word], CoreError> {
