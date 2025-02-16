@@ -301,10 +301,6 @@ where
     }
 
     pub fn call(&mut self, block: Offset) -> Result<(), CoreError> {
-        println!("call {}", block);
-        println!("stack: {:?}", self.stack.peek_all(0)?);
-        println!("arity: {:?}", self.arity.peek_all(0)?);
-
         self.base_ptr = self.stack.len()?;
         let ret = [self.ip.block, self.ip.ip];
         self.ip = IP::new(block, 0);
@@ -345,8 +341,7 @@ where
                 if let Some([bp]) = self.base.peek() {
                     self.stack.get(bp + result[1] * 2)
                 } else {
-                    panic!("get_value");
-                    // Err(CoreError::InternalError)
+                    Err(CoreError::InternalError)
                 }
             } else {
                 Ok(result)
@@ -379,21 +374,12 @@ where
 
     pub fn eval(&mut self) -> Result<[Word; 2], CoreError> {
         loop {
-            println!("block start: {:?}", self.ip);
-            println!("stack: {:?}", self.stack.peek_all(0)?);
-            println!("arity: {:?}", self.arity.peek_all(0)?);
-
             let next_value = self.next_value();
 
             if let Ok(value) = next_value {
                 self.stack.alloc(value)?;
             } else {
-                println!("block end");
-                println!("stack: {:?}", self.stack.peek_all(0)?);
-                println!("arity: {:?}", self.arity.peek_all(0)?);
-
                 let stack_len = self.stack.len()?;
-                println!("stack_len: {}, base: {}", stack_len, self.base_ptr);
                 match stack_len - self.base_ptr {
                     2 => {}
                     0 => {
@@ -405,27 +391,12 @@ where
                         self.stack.push(result)?;
                     }
                 }
-                // if stack_len >  {
-                // } else {
-                //     debug_assert_eq!(stack_len, self.ip.bp);
-                //     self.stack.push([Value::TAG_NONE, 0])?;
-                // }
-                println!("block result: {:?}", self.stack.peek::<2>().unwrap());
-                println!("stack {:?}", self.stack.peek_all(0)?);
-                println!("arity {:?}", self.arity.peek_all(0)?);
             }
 
             while let Some([bp, arity]) = self.arity.peek() {
                 let sp = self.stack.len()?;
-
-                println!("block loop: ");
-                println!("stack {:?}", self.stack.peek_all(0)?);
-                println!("arity {:?}", self.arity.peek_all(0)?);
-
-                println!(" - sp: {}, bp: {}, arity: {}", sp, bp, arity);
                 if sp == bp + arity {
                     let [op, value, _, _] = self.arity.pop()?;
-                    println!(" -- op: {}, value: {}", op, value);
                     match op {
                         Op::SET_WORD => {
                             let result = self.stack.pop()?;
@@ -450,21 +421,13 @@ where
                             self.stack.set_len(stack)?;
                             self.stack.push(result)?;
                             self.base_ptr = stack;
-                            println!("LEAVE: ");
-                            println!("stack: {:?}", self.stack.peek_all(0)?);
-                            println!("arity: {:?}", self.arity.peek_all(0)?);
                         }
                         Op::CONTEXT => {
-                            println!("context: ");
-                            println!("stack: {:?}", self.stack.peek_all(0)?);
-                            println!("arity: {:?}", self.arity.peek_all(0)?);
-
                             let ctx = self.pop_context()?;
                             self.stack.push([Value::TAG_CONTEXT, ctx])?;
                         }
                         _ => {
-                            panic!("unexpected op");
-                            // return Err(CoreError::InternalError);
+                            return Err(CoreError::InternalError);
                         }
                     };
                 } else {
