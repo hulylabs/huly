@@ -31,6 +31,8 @@ pub enum CoreError {
     IntegerOverflow,
     #[error("bad arguments")]
     BadArguments,
+    #[error(transparent)]
+    TryFromSliceError(#[from] std::array::TryFromSliceError),
 }
 
 // V A L U E
@@ -72,7 +74,7 @@ fn inline_string(string: &str) -> Result<[u32; 8], CoreError> {
 
 // M O D U L E
 
-type NativeFn<T> = fn(module: &mut Exec<T>, bp: Offset) -> Result<[Word; 2], CoreError>;
+type NativeFn<T> = fn(module: &mut Exec<T>) -> Result<(), CoreError>;
 
 struct FuncDesc<T> {
     func: NativeFn<T>,
@@ -140,8 +142,10 @@ where
         words.put(id, [Value::TAG_NATIVE_FN, index])
     }
 
-    pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
-        Exec::new(self)?.eval(block.iter().copied())
+    pub fn eval(&mut self, block: Offset) -> Result<[Word; 2], CoreError> {
+        let mut exec = Exec::new(self)?;
+        exec.call(block)?;
+        exec.eval()
     }
 }
 
@@ -167,21 +171,59 @@ where
         self.heap.get_block_mut(addr).map(SymbolTable::new)
     }
 
-    pub fn parse(&mut self, code: &str) -> Result<Box<[Word]>, CoreError> {
+    pub fn parse(&mut self, code: &str) -> Result<Offset, CoreError> {
         let mut collector = ParseCollector::new(self);
+        collector.begin_block()?;
         Parser::new(code, &mut collector).parse()?;
-        Ok(collector.parse.pop_all(0)?.into())
+        collector.end_block()?;
+        Ok(collector.parse.pop::<2>()?[1])
     }
 }
 
 // E X E C U T I O N  C O N T E X T
 
+pub struct Op;
+
+impl Op {
+    const SET_WORD: u32 = 0;
+    const CALL_NATIVE: u32 = 1;
+    const CALL_FUNC: u32 = 2;
+    const LEAVE: u32 = 3;
+    pub const CONTEXT: u32 = 4;
+}
+
+#[derive(Debug)]
+struct IP {
+    block: Offset,
+    ip: Offset,
+}
+
+impl IP {
+    fn new(block: Offset, ip: Offset) -> Self {
+        Self { block, ip }
+    }
+
+    fn next<T>(&mut self, module: &Module<T>) -> Option<[Word; 2]>
+    where
+        T: AsRef<[Word]>,
+    {
+        let block = module.get_block(self.block).ok()?;
+        let offset = self.ip as usize;
+        let value = block.get(offset..offset + 2)?;
+        self.ip += 2;
+        value.try_into().ok()
+    }
+}
+
 pub struct Exec<'a, T> {
+    ip: IP,
+    base_ptr: Offset,
     module: &'a mut Module<T>,
     stack: Stack<[Offset; 1024]>,
-    ops: Stack<[Offset; 256]>,
+    arity: Stack<[Offset; 256]>,
     base: Stack<[Offset; 256]>,
     env: Stack<[Offset; 256]>,
+    blocks: Stack<[Offset; 256]>,
 }
 
 impl<'a, T> Exec<'a, T> {
@@ -189,11 +231,14 @@ impl<'a, T> Exec<'a, T> {
         let mut env = Stack::new([0; 256]);
         env.push([module.system_words])?;
         Ok(Self {
+            ip: IP::new(0, 0),
+            base_ptr: 0,
             module,
-            env,
             stack: Stack::new([0; 1024]),
-            ops: Stack::new([0; 256]),
+            arity: Stack::new([0; 256]),
             base: Stack::new([0; 256]),
+            blocks: Stack::new([0; 256]),
+            env,
         })
     }
 }
@@ -206,12 +251,9 @@ where
         self.module.get_block(addr)
     }
 
-    pub fn stack_get<const N: usize>(&self, bp: Offset) -> Result<[Word; N], CoreError> {
-        self.stack.get(bp)
-    }
-
     fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-        let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
+        // let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
+        let [ctx] = self.env.peek().expect("find_word");
         let context = self.module.heap.get_block(ctx).map(Context::new)?;
         let result = context.get(symbol);
         match result {
@@ -250,12 +292,36 @@ impl<'a, T> Exec<'a, T>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
+    pub fn pop<const N: usize>(&mut self) -> Result<[Word; N], CoreError> {
+        self.stack.pop()
+    }
+
+    pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Result<(), CoreError> {
+        self.stack.push(value)
+    }
+
+    pub fn call(&mut self, block: Offset) -> Result<(), CoreError> {
+        println!("call {}", block);
+        println!("stack: {:?}", self.stack.peek_all(0)?);
+        println!("arity: {:?}", self.arity.peek_all(0)?);
+
+        self.base_ptr = self.stack.len()?;
+        let ret = [self.ip.block, self.ip.ip];
+        self.ip = IP::new(block, 0);
+        self.blocks.push(ret)
+    }
+
+    pub fn push_op(&mut self, op: Word, word: Word, arity: Word) -> Result<(), CoreError> {
+        self.arity.push([op, word, self.stack.len()?, arity])
+    }
+
     pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Result<Offset, CoreError> {
         self.module.heap.alloc(values)
     }
 
     pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
-        let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
+        // let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
+        let [ctx] = self.env.peek().expect("put_context");
         self.module
             .heap
             .get_block_mut(ctx)
@@ -271,76 +337,151 @@ where
         self.env.pop().map(|[addr]| addr)
     }
 
-    pub fn eval<I>(&mut self, words: I) -> Result<[Word; 2], CoreError>
-    where
-        I: IntoIterator<Item = Word>,
-    {
-        let mut iter = words.into_iter();
-
-        while let Some(tag) = iter.next() {
-            let value = match tag {
-                Value::TAG_WORD => {
-                    let symbol = iter.next().ok_or(CoreError::EndOfInput)?;
-                    let result = self.find_word(symbol)?;
-                    if result[0] == Value::TAG_STACK_VALUE {
-                        if let Some([bp]) = self.base.peek() {
-                            self.stack.get(bp + 2 + result[1] * 2)?
-                        } else {
-                            return Err(CoreError::InternalError);
-                        }
-                    } else {
-                        result
-                    }
+    fn get_value(&self, value: [Word; 2]) -> Result<[Word; 2], CoreError> {
+        let [tag, word] = value;
+        if tag == Value::TAG_WORD {
+            let result = self.find_word(word)?;
+            if result[0] == Value::TAG_STACK_VALUE {
+                if let Some([bp]) = self.base.peek() {
+                    self.stack.get(bp + result[1] * 2)
+                } else {
+                    panic!("get_value");
+                    // Err(CoreError::InternalError)
                 }
-                _ => [tag, iter.next().ok_or(CoreError::EndOfInput)?],
-            };
+            } else {
+                Ok(result)
+            }
+        } else {
+            Ok(value)
+        }
+    }
 
-            let mut sp = self.stack.alloc(value)?;
+    fn next_value(&mut self) -> Result<[Word; 2], CoreError> {
+        while let Some(cmd) = self.ip.next(self.module) {
+            let value = self.get_value(cmd)?;
 
-            if let Some(arity) = match value[0] {
-                Value::TAG_NATIVE_FN => Some(self.module.get_func(value[1])?.arity * 2), // remove * 2?
-                Value::TAG_SET_WORD => Some(2),
-                Value::TAG_FUNC => Some(self.module.get_array::<1>(value[1])?[0] * 2),
+            if let Some((op, arity)) = match value[0] {
+                Value::TAG_NATIVE_FN => {
+                    Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
+                }
+                Value::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
+                Value::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
                 _ => None,
             } {
-                self.ops.push([sp, arity])?;
+                let sp = self.stack.len()?;
+                self.arity.push([op, value[1], sp, arity * 2])?;
+            } else {
+                return Ok(value);
+            }
+        }
+        Err(CoreError::EndOfInput)
+    }
+
+    pub fn eval(&mut self) -> Result<[Word; 2], CoreError> {
+        loop {
+            println!("block start: {:?}", self.ip);
+            println!("stack: {:?}", self.stack.peek_all(0)?);
+            println!("arity: {:?}", self.arity.peek_all(0)?);
+
+            let next_value = self.next_value();
+
+            if let Ok(value) = next_value {
+                self.stack.alloc(value)?;
+            } else {
+                println!("block end");
+                println!("stack: {:?}", self.stack.peek_all(0)?);
+                println!("arity: {:?}", self.arity.peek_all(0)?);
+
+                let stack_len = self.stack.len()?;
+                println!("stack_len: {}, base: {}", stack_len, self.base_ptr);
+                match stack_len - self.base_ptr {
+                    2 => {}
+                    0 => {
+                        self.stack.push([Value::TAG_NONE, 0])?;
+                    }
+                    _ => {
+                        let result = self.stack.pop::<2>()?;
+                        self.stack.set_len(self.base_ptr)?;
+                        self.stack.push(result)?;
+                    }
+                }
+                // if stack_len >  {
+                // } else {
+                //     debug_assert_eq!(stack_len, self.ip.bp);
+                //     self.stack.push([Value::TAG_NONE, 0])?;
+                // }
+                println!("block result: {:?}", self.stack.peek::<2>().unwrap());
+                println!("stack {:?}", self.stack.peek_all(0)?);
+                println!("arity {:?}", self.arity.peek_all(0)?);
             }
 
-            while let Some([bp, arity]) = self.ops.peek() {
+            while let Some([bp, arity]) = self.arity.peek() {
+                let sp = self.stack.len()?;
+
+                println!("block loop: ");
+                println!("stack {:?}", self.stack.peek_all(0)?);
+                println!("arity {:?}", self.arity.peek_all(0)?);
+
+                println!(" - sp: {}, bp: {}, arity: {}", sp, bp, arity);
                 if sp == bp + arity {
-                    self.ops.pop::<2>()?;
-                    let [tag, value] = self.stack.get(bp)?;
-                    let result = match tag {
-                        Value::TAG_SET_WORD => {
-                            let bp2 = self.stack.get(bp + 2)?;
-                            self.put_context(value, bp2)?;
-                            bp2
+                    let [op, value, _, _] = self.arity.pop()?;
+                    println!(" -- op: {}, value: {}", op, value);
+                    match op {
+                        Op::SET_WORD => {
+                            let result = self.stack.pop()?;
+                            self.put_context(value, result)?;
                         }
-                        Value::TAG_NATIVE_FN => {
+                        Op::CALL_NATIVE => {
                             let native_fn = self.module.get_func(value)?;
-                            (native_fn.func)(self, bp + 2)?
+                            (native_fn.func)(self)?;
                         }
-                        Value::TAG_FUNC => {
+                        Op::CALL_FUNC => {
                             let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
                             self.env.push([ctx])?;
                             self.base.push([bp])?;
-                            let block = self.module.get_block(blk)?;
-                            let result = self.eval(block.iter().copied())?;
+                            self.arity.push([Op::LEAVE, 0, sp, 2])?;
+                            self.call(blk)?;
+                            break;
+                        }
+                        Op::LEAVE => {
                             self.env.pop::<1>()?;
-                            self.base.pop::<1>()?;
-                            result
+                            let [stack] = self.base.pop::<1>()?;
+                            let result = self.stack.pop::<2>()?;
+                            self.stack.set_len(stack)?;
+                            self.stack.push(result)?;
+                            self.base_ptr = stack;
+                            println!("LEAVE: ");
+                            println!("stack: {:?}", self.stack.peek_all(0)?);
+                            println!("arity: {:?}", self.arity.peek_all(0)?);
+                        }
+                        Op::CONTEXT => {
+                            println!("context: ");
+                            println!("stack: {:?}", self.stack.peek_all(0)?);
+                            println!("arity: {:?}", self.arity.peek_all(0)?);
+
+                            let ctx = self.pop_context()?;
+                            self.stack.push([Value::TAG_CONTEXT, ctx])?;
                         }
                         _ => {
-                            return Err(CoreError::InternalError);
+                            panic!("unexpected op");
+                            // return Err(CoreError::InternalError);
                         }
                     };
-                    self.stack.set_len(bp)?;
-                    sp = self.stack.alloc(result)?;
+                } else {
+                    break;
+                }
+            }
+
+            if next_value.is_err() {
+                let [block, ip] = self.blocks.pop()?;
+                if block != 0 {
+                    self.ip = IP::new(block, ip);
                 } else {
                     break;
                 }
             }
         }
+
         self.stack.pop::<2>().or(Ok([Value::TAG_NONE, 0]))
     }
 }
@@ -404,8 +545,8 @@ where
 //     module.parse(str)
 // }
 
-pub fn eval(module: &mut Exec<&mut [Word]>, code: &[Word]) -> Result<[Word; 2], CoreError> {
-    module.eval(code.iter().copied())
+pub fn eval(module: &mut Exec<&mut [Word]>) -> Result<[Word; 2], CoreError> {
+    module.eval()
 }
 
 //
@@ -418,7 +559,7 @@ mod tests {
     fn test_whitespace_1() -> Result<(), CoreError> {
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse("  \t\n  ")?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!(Value::TAG_NONE, result[0]);
         Ok(())
     }
@@ -426,8 +567,8 @@ mod tests {
     #[test]
     fn test_string_1() -> Result<(), CoreError> {
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
-        let parsed = module.parse(" \"hello\"  ")?;
-        let result = module.eval(&parsed)?;
+        let block = module.parse(" \"hello\"  ")?;
+        let result = module.eval(block)?;
         assert_eq!(Value::TAG_INLINE_STRING, result[0]);
         Ok(())
     }
@@ -437,7 +578,7 @@ mod tests {
         let input = "42 \"world\" x: 5 x\n ";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!([Value::TAG_INT, 5], result);
         Ok(())
     }
@@ -447,7 +588,7 @@ mod tests {
         let input = "add 7 8";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!([Value::TAG_INT, 15], result);
         Ok(())
     }
@@ -457,7 +598,7 @@ mod tests {
         let input = "add 1 add 2 3";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!([Value::TAG_INT, 6], result[0..2]);
         Ok(())
     }
@@ -467,18 +608,28 @@ mod tests {
         let input = "add add 3 4 5";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!([Value::TAG_INT, 12], result[0..2]);
         Ok(())
     }
 
     #[test]
-    fn test_func_1() -> Result<(), CoreError> {
-        let input = "f: func [a b] [add a b] f 1 2";
+    fn test_context_0() -> Result<(), CoreError> {
+        let input = "context [x: 8]";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
-        assert_eq!([Value::TAG_INT, 3], result);
+        let result = module.eval(parsed)?;
+        assert_eq!(Value::TAG_CONTEXT, result[0]);
+        Ok(())
+    }
+
+    #[test]
+    fn test_func_1() -> Result<(), CoreError> {
+        let input = "f: func [a b] [add a b] f 1 77";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(parsed)?;
+        assert_eq!([Value::TAG_INT, 78], result);
         Ok(())
     }
 
@@ -487,8 +638,38 @@ mod tests {
         let input = "f: func [a b] [add a add b b] f 1 2";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!([Value::TAG_INT, 5], result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_either_1() -> Result<(), CoreError> {
+        let input = "either lt 1 2 [1] [2]";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(parsed)?;
+        assert_eq!([Value::TAG_INT, 1], result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_either_2() -> Result<(), CoreError> {
+        let input = "either lt 2 1 [1] [2]";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(parsed)?;
+        assert_eq!([Value::TAG_INT, 2], result);
+        Ok(())
+    }
+
+    #[test]
+    fn test_do_1() -> Result<(), CoreError> {
+        let input = "do [add 1 2]";
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+        let parsed = module.parse(input)?;
+        let result = module.eval(parsed)?;
+        assert_eq!([Value::TAG_INT, 3], result);
         Ok(())
     }
 
@@ -497,7 +678,7 @@ mod tests {
         let input = "f: func [n] [either lt n 2 [n] [add 1 f add n -1]] f 20";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!([Value::TAG_INT, 20], result);
         Ok(())
     }
@@ -507,7 +688,7 @@ mod tests {
         let input = "fib: func [n] [either lt n 2 [n] [add fib add n -1 fib add n -2]] fib 10";
         let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
         let parsed = module.parse(input)?;
-        let result = module.eval(&parsed)?;
+        let result = module.eval(parsed)?;
         assert_eq!([Value::TAG_INT, 55], result);
         Ok(())
     }

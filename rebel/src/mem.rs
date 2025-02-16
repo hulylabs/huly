@@ -216,17 +216,17 @@ where
         self.0.get(offset).ok_or(CoreError::BoundsCheckFailed)
     }
 
-    // pub fn peek_all(&self, offset: Offset) -> Result<&[Word], CoreError> {
-    //     self.0
-    //         .split_first()
-    //         .and_then(|(len, data)| {
-    //             len.checked_sub(offset).and_then(|size| {
-    //                 let addr = offset as usize;
-    //                 data.get(addr..addr + size as usize)
-    //             })
-    //         })
-    //         .ok_or(CoreError::StackUnderflow)
-    // }
+    pub fn peek_all(&self, offset: Offset) -> Result<&[Word], CoreError> {
+        self.0
+            .split_first()
+            .and_then(|(len, data)| {
+                len.checked_sub(offset).and_then(|size| {
+                    let addr = offset as usize;
+                    data.get(addr..addr + size as usize)
+                })
+            })
+            .ok_or(CoreError::StackUnderflow)
+    }
 
     pub fn peek<const N: usize>(&self) -> Option<[Word; N]> {
         self.0.split_first().and_then(|(len, data)| {
@@ -256,6 +256,41 @@ where
         self.0.alloc(words)?;
         Ok(())
     }
+
+    // pub fn replace_or_add_at<const N: usize>(
+    //     &mut self,
+    //     offset: Offset,
+    //     words: [Word; N],
+    // ) -> Result<(), CoreError> {
+    //     self.0
+    //         .split_first_mut()
+    //         .and_then(|(len, data)| {
+    //             len.checked_sub(offset).and_then(|size| {
+    //                 let addr = *len as usize;
+    //                 if size as usize >= N {
+    //                     data.get_mut(addr - N..addr).map(|block| {
+    //                         block
+    //                             .iter_mut()
+    //                             .zip(words.iter())
+    //                             .for_each(|(slot, value)| {
+    //                                 *slot = *value;
+    //                             });
+    //                     })
+    //                 } else {
+    //                     data.get_mut(addr..addr + N).map(|block| {
+    //                         block
+    //                             .iter_mut()
+    //                             .zip(words.iter())
+    //                             .for_each(|(slot, value)| {
+    //                                 *slot = *value;
+    //                             });
+    //                         *len += N as u32;
+    //                     })
+    //                 }
+    //             })
+    //         })
+    //         .ok_or(CoreError::OutOfMemory)
+    // }
 
     pub fn pop<const N: usize>(&mut self) -> Result<[u32; N], CoreError> {
         self.0
@@ -313,7 +348,7 @@ where
     }
 
     pub fn get_or_insert(&mut self, sym: [u32; 8]) -> Result<Symbol, CoreError> {
-        println!("[symbol table]: add {:?}", sym);
+        // println!("[symbol table]: add {:?}", sym);
 
         let (count, data) = self
             .0
