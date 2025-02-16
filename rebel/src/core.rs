@@ -141,7 +141,7 @@ where
     }
 
     pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
-        Exec::new(self)?.eval(block)
+        Exec::new(self)?.eval(block.iter().copied())
     }
 }
 
@@ -256,11 +256,18 @@ where
             .ok_or(CoreError::StackUnderflow)
     }
 
-    pub fn eval(&mut self, block: &[Word]) -> Result<[Word; 2], CoreError> {
-        for chunk in block.chunks_exact(2) {
-            let value = match chunk[0] {
+    pub fn eval<I>(&mut self, words: I) -> Result<[Word; 2], CoreError>
+    where
+        I: IntoIterator<Item = Word>,
+        I::IntoIter: Clone,
+    {
+        let mut iter = words.into_iter();
+
+        while let Some(tag) = iter.next() {
+            let value = match tag {
                 Value::TAG_WORD => {
-                    let result = self.find_word(chunk[1])?;
+                    let symbol = iter.next().ok_or(CoreError::EndOfInput)?;
+                    let result = self.find_word(symbol)?;
                     if result[0] == Value::TAG_STACK_VALUE {
                         if let Some([bp]) = self.base.peek() {
                             self.stack.get(bp + 2 + result[1] * 2)?
@@ -271,7 +278,7 @@ where
                         result
                     }
                 }
-                _ => [chunk[0], chunk[1]],
+                _ => [tag, iter.next().ok_or(CoreError::EndOfInput)?],
             };
 
             let mut sp = self.stack.alloc(value)?;
@@ -309,7 +316,8 @@ where
                             } else {
                                 return Err(CoreError::InternalError);
                             }
-                            let result = self.eval(&self.module.get_block(blk)?)?;
+                            let block = self.module.get_block(blk)?;
+                            let result = self.eval(block.iter().copied())?;
                             self.pop_context()?;
                             self.base.pop::<1>().ok_or(CoreError::InternalError)?;
                             result
@@ -393,9 +401,9 @@ where
 //     module.parse(str)
 // }
 
-// pub fn eval(module: &mut Module<&mut [Word]>, code: &[Word]) -> Result<Box<[Word]>, CoreError> {
-//     module.eval(code)
-// }
+pub fn eval(module: &mut Exec<&mut [Word]>, code: &[Word]) -> Result<[Word; 2], CoreError> {
+    module.eval(code.iter().copied())
+}
 
 //
 

@@ -36,7 +36,7 @@ where
     match module.stack_get(bp)? {
         [Value::TAG_BLOCK, b] => {
             let block = module.get_block(b)?;
-            module.eval(block.as_ref())
+            module.eval(block.iter().copied())
         }
         _ => Err(CoreError::BadArguments),
     }
@@ -85,7 +85,7 @@ where
     match module.stack_get(bp)? {
         [Value::TAG_BOOL, cond, Value::TAG_BLOCK, if_true, Value::TAG_BLOCK, if_false] => {
             let block = if cond != 0 { if_true } else { if_false };
-            module.eval(module.get_block(block)?.as_ref())
+            module.eval(module.get_block(block)?.iter().copied())
         }
         _ => Err(CoreError::BadArguments),
     }
