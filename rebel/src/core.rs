@@ -181,16 +181,16 @@ pub struct Exec<'a, T> {
     stack: Stack<[Offset; 1024]>,
     ops: Stack<[Offset; 256]>,
     base: Stack<[Offset; 256]>,
-    envs: Stack<[Offset; 256]>,
+    env: Stack<[Offset; 256]>,
 }
 
 impl<'a, T> Exec<'a, T> {
     fn new(module: &'a mut Module<T>) -> Result<Self, CoreError> {
-        let mut envs = Stack::new([0; 256]);
-        envs.push([module.system_words])?;
+        let mut env = Stack::new([0; 256]);
+        env.push([module.system_words])?;
         Ok(Self {
             module,
-            envs,
+            env,
             stack: Stack::new([0; 1024]),
             ops: Stack::new([0; 256]),
             base: Stack::new([0; 256]),
@@ -211,19 +211,39 @@ where
     }
 
     fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-        let envs = self.envs.peek_all(0)?;
-
-        for &addr in envs.iter().rev() {
-            let context = self.module.heap.get_block(addr).map(Context::new)?;
-            match context.get(symbol) {
-                Ok(result) => return Ok(result),
-                Err(CoreError::WordNotFound) => continue,
-                Err(err) => return Err(err),
+        let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
+        let context = self.module.heap.get_block(ctx).map(Context::new)?;
+        let result = context.get(symbol);
+        match result {
+            Err(CoreError::WordNotFound) => {
+                if ctx != self.module.system_words {
+                    self.module
+                        .heap
+                        .get_block(self.module.system_words)
+                        .map(Context::new)
+                        .and_then(|ctx| ctx.get(symbol))
+                } else {
+                    result
+                }
             }
+            _ => result,
         }
-
-        Err(CoreError::WordNotFound)
     }
+
+    // fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
+    //     let envs = self.envs.peek_all(0)?;
+
+    //     for &addr in envs.iter().rev() {
+    //         let context = self.module.heap.get_block(addr).map(Context::new)?;
+    //         match context.get(symbol) {
+    //             Ok(result) => return Ok(result),
+    //             Err(CoreError::WordNotFound) => continue,
+    //             Err(err) => return Err(err),
+    //         }
+    //     }
+
+    //     Err(CoreError::WordNotFound)
+    // }
 }
 
 impl<'a, T> Exec<'a, T>
@@ -235,20 +255,20 @@ where
     }
 
     pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Result<(), CoreError> {
-        let [addr] = self.envs.peek().ok_or(CoreError::InternalError)?;
+        let [ctx] = self.env.peek().ok_or(CoreError::InternalError)?;
         self.module
             .heap
-            .get_block_mut(addr)
+            .get_block_mut(ctx)
             .map(Context::new)
             .and_then(|mut ctx| ctx.put(symbol, value))
     }
 
     pub fn new_context(&mut self, size: u32) -> Result<(), CoreError> {
-        self.envs.push([self.module.heap.alloc_context(size)?])
+        self.env.push([self.module.heap.alloc_context(size)?])
     }
 
     pub fn pop_context(&mut self) -> Result<Offset, CoreError> {
-        self.envs.pop().map(|[addr]| addr)
+        self.env.pop().map(|[addr]| addr)
     }
 
     pub fn eval<I>(&mut self, words: I) -> Result<[Word; 2], CoreError>
@@ -302,11 +322,11 @@ where
                         }
                         Value::TAG_FUNC => {
                             let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
-                            self.envs.push([ctx])?;
+                            self.env.push([ctx])?;
                             self.base.push([bp])?;
                             let block = self.module.get_block(blk)?;
                             let result = self.eval(block.iter().copied())?;
-                            self.envs.pop::<1>()?;
+                            self.env.pop::<1>()?;
                             self.base.pop::<1>()?;
                             result
                         }

@@ -216,17 +216,17 @@ where
         self.0.get(offset).ok_or(CoreError::BoundsCheckFailed)
     }
 
-    pub fn peek_all(&self, offset: Offset) -> Result<&[Word], CoreError> {
-        self.0
-            .split_first()
-            .and_then(|(len, data)| {
-                len.checked_sub(offset).and_then(|size| {
-                    let addr = offset as usize;
-                    data.get(addr..addr + size as usize)
-                })
-            })
-            .ok_or(CoreError::StackUnderflow)
-    }
+    // pub fn peek_all(&self, offset: Offset) -> Result<&[Word], CoreError> {
+    //     self.0
+    //         .split_first()
+    //         .and_then(|(len, data)| {
+    //             len.checked_sub(offset).and_then(|size| {
+    //                 let addr = offset as usize;
+    //                 data.get(addr..addr + size as usize)
+    //             })
+    //         })
+    //         .ok_or(CoreError::StackUnderflow)
+    // }
 
     pub fn peek<const N: usize>(&self) -> Option<[Word; N]> {
         self.0.split_first().and_then(|(len, data)| {
