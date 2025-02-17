@@ -1,3 +1,5 @@
+// RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+
 #[cfg(target_arch = "x86_64")]
 use std::arch::x86_64::{_mm_crc32_u32, _mm_crc32_u64};
 

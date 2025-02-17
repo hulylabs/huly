@@ -104,3 +104,7 @@ where
     module.add_native_fn("either", either, 3)?;
     Some(())
 }
+
+// pub fn test(module: &mut Exec<&mut [Word]>) -> Option<()> {
+//     either(module)
+// }
