@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use colored::*;
-use rebel::core::Module;
+use rebel::core::{CoreError, Module};
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 fn main() -> Result<()> {
@@ -13,7 +13,8 @@ fn main() -> Result<()> {
     );
     println!("Type {} or press Ctrl+D to exit\n", ":quit".red().bold());
 
-    let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+    let mut module =
+        Module::init(vec![0; 0x10000].into_boxed_slice()).ok_or(CoreError::OutOfMemory)?;
 
     let mut rl = DefaultEditor::new()?;
 
@@ -34,16 +35,12 @@ fn main() -> Result<()> {
 
                 match module.parse(line.as_str()) {
                     Ok(block) => match module.eval(block) {
-                        Ok(result) => {
-                            if result.is_empty() {
-                                println!("{}: {:?}", "OK".green(), "None")
-                            } else {
-                                println!("{}: {:?}", "OK".green(), result)
-                            }
+                        Some(result) => {
+                            println!("{}: {:?}", "OK".green(), result)
                         }
-                        Err(err) => eprintln!("{}: {}", "ERR".red().bold(), err),
+                        None => eprintln!("{}", "EVAL ERROR".red().bold()),
                     },
-                    Err(err) => eprintln!("{}: {}", "PARSER ERR".cyan().bold(), err),
+                    Err(err) => eprintln!("{}: {}", "PARSE ERROR".cyan().bold(), err),
                 }
             }
             Err(ReadlineError::Interrupted) => {

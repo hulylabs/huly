@@ -1,9 +1,9 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{CoreError, Exec, Module, Op, Value};
+use crate::core::{Exec, Module, Op, Value};
 use crate::mem::{Offset, Word};
 
-fn add<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+fn add<T>(module: &mut Exec<T>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
@@ -12,11 +12,11 @@ where
             let result = (a as i32) + (b as i32);
             module.push([Value::TAG_INT, result as Word])
         }
-        _ => Err(CoreError::BadArguments),
+        _ => None,
     }
 }
 
-fn lt<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+fn lt<T>(module: &mut Exec<T>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
@@ -25,21 +25,21 @@ where
             let result = if (a as i32) < (b as i32) { 1 } else { 0 };
             module.push([Value::TAG_BOOL, result])
         }
-        _ => Err(CoreError::BadArguments),
+        _ => None,
     }
 }
 
-fn func_do<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+fn func_do<T>(module: &mut Exec<T>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
         [Value::TAG_BLOCK, block] => module.call(block),
-        _ => Err(CoreError::BadArguments),
+        _ => None,
     }
 }
 
-fn context<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+fn context<T>(module: &mut Exec<T>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
@@ -49,37 +49,37 @@ where
             module.push_op(Op::CONTEXT, 0, 2)?;
             module.call(block)
         }
-        _ => Err(CoreError::BadArguments),
+        _ => None,
     }
 }
 
-fn func<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+fn func<T>(module: &mut Exec<T>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
         [Value::TAG_BLOCK, params, Value::TAG_BLOCK, body] => {
-            let args = module.get_block(params)?;
-            let arg_values = args.len() as Offset / 2;
-            let arity = arg_values;
+            let args = module.get_block_len(params)?;
+            let arity = args as Offset / 2;
             module.new_context(arity)?;
-            for (i, param) in args.as_ref().chunks_exact(2).enumerate() {
+            for i in 0..arity {
+                let param = module.get_block::<2>(params, i * 2)?;
                 match param {
                     [Value::TAG_WORD, symbol] => {
-                        module.put_context(*symbol, [Value::TAG_STACK_VALUE, i as Offset])?
+                        module.put_context(symbol, [Value::TAG_STACK_VALUE, i as Offset])?
                     }
-                    _ => return Err(CoreError::BadArguments),
+                    _ => return None,
                 }
             }
             let ctx = module.pop_context()?;
-            let func = module.alloc([arg_values, ctx, body])?;
+            let func = module.alloc([arity, ctx, body])?;
             module.push([Value::TAG_FUNC, func])
         }
-        _ => Err(CoreError::BadArguments),
+        _ => None,
     }
 }
 
-fn either<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+fn either<T>(module: &mut Exec<T>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
@@ -88,11 +88,11 @@ where
             let block = if cond != 0 { if_true } else { if_false };
             module.call(block)
         }
-        _ => Err(CoreError::BadArguments),
+        _ => None,
     }
 }
 
-pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
+pub fn core_package<T>(module: &mut Module<T>) -> Option<()>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
@@ -102,5 +102,5 @@ where
     module.add_native_fn("context", context, 1)?;
     module.add_native_fn("func", func, 2)?;
     module.add_native_fn("either", either, 3)?;
-    Ok(())
+    Some(())
 }
