@@ -334,7 +334,7 @@ where
             return None;
         }
 
-        let h = hash_u32x8(&sym) as usize;
+        let h = hash_u32x8(sym) as usize;
         let mut index = h % capacity;
 
         for _probe in 0..capacity {
