@@ -186,4 +186,48 @@ mod tests {
 
         assert_eq!(expected, actual, "Hashes should be stable across runs");
     }
+    #[test]
+    fn test_avalanche() {
+        let base = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        let base_hash = hash_u32x8(base);
+        for i in 0..8 {
+            let mut modified = base;
+            modified[i] ^= 1;
+            let modified_hash = hash_u32x8(modified);
+            assert_ne!(
+                base_hash, modified_hash,
+                "Bit flip did not change the hash at index {}",
+                i
+            );
+            let diff = (base_hash ^ modified_hash).count_ones();
+            assert!(
+                diff >= 10,
+                "Avalanche effect too weak at index {}: diff = {}",
+                i,
+                diff
+            );
+        }
+    }
+
+    #[test]
+    fn test_hash_edge_cases() {
+        let zeros = [0u32; 8];
+        let ones = [u32::MAX; 8];
+        assert_ne!(
+            hash_u32x8(zeros),
+            hash_u32x8(ones),
+            "Zeros and ones should yield different hash"
+        );
+    }
+
+    #[test]
+    fn test_hash_alternating() {
+        let alt1 = [0, u32::MAX, 0, u32::MAX, 0, u32::MAX, 0, u32::MAX];
+        let alt2 = [u32::MAX, 0, u32::MAX, 0, u32::MAX, 0, u32::MAX, 0];
+        assert_ne!(
+            hash_u32x8(alt1),
+            hash_u32x8(alt2),
+            "Alternating inputs yield same hash"
+        );
+    }
 }
