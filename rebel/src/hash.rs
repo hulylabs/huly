@@ -188,6 +188,7 @@ mod tests {
 
         assert_eq!(expected, actual, "Hashes should be stable across runs");
     }
+
     #[test]
     fn test_avalanche() {
         let base = [1u32, 2, 3, 4, 5, 6, 7, 8];
