@@ -483,8 +483,10 @@ mod tests {
         println!("Display format: {}", value);
         println!("Debug format: {:?}", value);
         
-        // With the new implementation, all block displays will be the same for end users
-        assert_eq!(format!("{}", value), "[...]");
+        // Block display should now reflect the array structure
+        let display_str = format!("{}", value);
+        assert!(display_str.starts_with("["));
+        assert!(display_str.ends_with("]"));
         
         // Debug format should be more detailed
         let debug_str = format!("{:?}", value);

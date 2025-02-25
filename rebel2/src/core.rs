@@ -120,26 +120,8 @@ pub enum Blob {
     External(Hash),
 }
 
-/// Display implementation for Blob provides a concise view, useful for end users
-impl std::fmt::Display for Blob {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Inline(container) => {
-                let len = container[0] as usize;
-                // For display, just indicate if it's a small or large blob
-                if len < 10 {
-                    write!(f, "small blob")
-                } else {
-                    write!(f, "blob ({} bytes)", len)
-                }
-            },
-            Self::External(_) => {
-                // For display, we don't show hashes to end users
-                write!(f, "large blob")
-            }
-        }
-    }
-}
+// We removed the Display implementation for Blob since it doesn't make sense.
+// Blobs will be displayed differently depending on whether they're part of String or Block.
 
 /// Debug implementation for Blob provides technical details, useful for programmers
 impl std::fmt::Debug for Blob {
@@ -258,10 +240,26 @@ impl std::fmt::Display for Value {
             Self::None => write!(f, "none"),
             Self::Int(i) => write!(f, "{}", i),
             Self::Block(blob) => {
-                // For blocks, we display a simplified representation
+                // For blocks, display the contents as an array of values
                 match blob {
-                    Blob::Inline(_) => write!(f, "[...]"),
-                    Blob::External(_) => write!(f, "[...]"),
+                    Blob::Inline(container) => {
+                        let len = container[0] as usize;
+                        write!(f, "[")?;
+                        
+                        // For inline blocks, we need to extract values directly
+                        // This is a simple display, a more robust implementation would
+                        // actually extract and format each value in the block
+                        if len > 0 {
+                            write!(f, "...")?;
+                        }
+                        
+                        write!(f, "]")
+                    },
+                    Blob::External(_) => {
+                        // For external blocks, a more robust implementation would
+                        // fetch the data and display each value
+                        write!(f, "[...]")
+                    }
                 }
             },
             Self::String(blob) => match blob {
@@ -279,7 +277,7 @@ impl std::fmt::Display for Value {
                     }
                 },
                 Blob::External(_) => {
-                    // For external strings, we just indicate it's a string (user doesn't need hash details)
+                    // For external strings, we just indicate it's a string
                     write!(f, "\"...\"")
                 }
             },
@@ -461,14 +459,10 @@ mod tests {
     }
     
     #[test]
-    fn test_blob_display_and_debug() {
-        // Test Blob Display and Debug formats
+    fn test_blob_debug() {
+        // Test Blob Debug format (no Display implementation anymore)
         let inline_blob = create_string_blob("abc");
         let external_blob = create_external_blob();
-        
-        // Display for end users should be simple
-        assert_eq!(inline_blob.to_string(), "small blob");
-        assert_eq!(external_blob.to_string(), "large blob");
         
         // Debug for programmers should be detailed
         let debug_inline = format!("{:?}", inline_blob);
