@@ -208,6 +208,7 @@ mod tests {
     use std::sync::Arc;
 
     /// A simple in-memory implementation of BlobStore for testing
+    #[derive(Clone)]
     struct MemoryBlobStore {
         blobs: HashMap<Hash, Vec<u8>>,
     }
@@ -276,7 +277,7 @@ mod tests {
                         println!("External blob with data length: {}", data.len());
                         // Try to get the number of items
                         let count = if data.len() >= 4 {
-                            let (size_bytes, rest) = data.split_at(4);
+                            let (size_bytes, _rest) = data.split_at(4);
                             let size = u32::from_le_bytes([size_bytes[0], size_bytes[1], size_bytes[2], size_bytes[3]]);
                             println!("Block data size: {}", size);
                             // Return dummy values
@@ -359,15 +360,22 @@ mod tests {
         
         let (value, store) = parse_to_value("\"hello world\"", store).unwrap();
         
+        // Display the value using the Display trait
+        println!("String display: {}", value);
+        
         // Strings are parsed and stored as blobs
         match value {
             Value::String(blob) => {
+                println!("String blob: {:?}", blob);
                 let bytes = match &blob {
                     Blob::Inline(container) => {
                         let len = container[0] as usize;
+                        println!("Inline string with length: {}", len);
                         &container[1..len+1]
                     },
                     Blob::External(hash) => {
+                        println!("External string with hash: {:02x}{:02x}..{:02x}{:02x}", 
+                            hash[0], hash[1], hash[hash.len()-2], hash[hash.len()-1]);
                         store.get(hash).unwrap()
                     }
                 };
@@ -429,24 +437,72 @@ mod tests {
             store
         ).unwrap();
         
-        match value {
+        match &value {
             Value::Block(blob) => {
-                let items = extract_block_values(&blob, &store);
+                let items = extract_block_values(blob, &store);
                 
                 // For now we're just testing that we can get a block
                 // The extraction of actual values will be tested in the future
                 assert!(items.len() > 0);
                 
                 // Check that the block has been stored correctly
-                match &blob {
+                match blob {
                     Blob::Inline(_) => println!("Block is stored inline"),
                     Blob::External(hash) => {
                         println!("Block is stored externally with hash: {:?}", hash);
                         assert!(store.blobs.contains_key(hash));
                     }
                 }
+                
+                // Test the Display trait
+                println!("Display format of the block: {}", value);
             },
             _ => panic!("Expected Block, got {:?}", value),
+        }
+    }
+    
+    #[test]
+    fn test_display_trait() {
+        let store = MemoryBlobStore::new();
+        
+        // Test display for different value types
+        let test_cases = vec![
+            ("42", "42"),
+            ("-123", "-123"),
+            ("hello", "hello"),
+            ("x:", "x:"),
+            ("\"test string\"", "\"test string\""),
+        ];
+        
+        for (input, expected) in test_cases {
+            let (value, _) = parse_to_value(input, store.clone()).unwrap();
+            
+            // Convert the value to a string using Display trait
+            let display_string = format!("{}", value);
+            
+            println!("Input: {}, Display: {}", input, display_string);
+            assert_eq!(display_string, expected);
+        }
+        
+        // Test display for blocks
+        let (block_value, _store) = parse_to_value("[1 2 3]", store).unwrap();
+        let block_display = format!("{}", block_value);
+        
+        // Check that the block display format is reasonable
+        println!("Block display: {}", block_display);
+        
+        match block_value {
+            Value::Block(Blob::Inline(_)) => {
+                assert_eq!(block_display, "[...]");
+            },
+            Value::Block(Blob::External(_)) => {
+                // Should start with "[Block@" and end with "]"
+                assert!(block_display.starts_with("[Block@"));
+                assert!(block_display.ends_with("]"));
+                // Should contain ".." to indicate hash abbreviation
+                assert!(block_display.contains(".."));
+            },
+            _ => panic!("Expected Block"),
         }
     }
 }

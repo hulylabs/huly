@@ -120,6 +120,23 @@ pub enum Blob {
     External(Hash),
 }
 
+impl std::fmt::Display for Blob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inline(container) => {
+                let len = container[0] as usize;
+                write!(f, "Inline({} bytes)", len)
+            },
+            Self::External(hash) => {
+                // Format the first few and last few bytes of the hash
+                write!(f, "External({:02x}{:02x}..{:02x}{:02x})", 
+                      hash[0], hash[1], 
+                      hash[hash.len()-2], hash[hash.len()-1])
+            }
+        }
+    }
+}
+
 impl Blob {
     const EXTERNAL: u8 = 0x10;
 
@@ -203,6 +220,47 @@ pub enum Value {
     String(Blob),
     Word(SmolStr),
     SetWord(SmolStr),
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Int(i) => write!(f, "{}", i),
+            Self::Block(blob) => match blob {
+                Blob::Inline(_) => write!(f, "[...]"),
+                Blob::External(hash) => {
+                    // Format the hash nicely with a prefix to indicate it's a block hash
+                    write!(f, "[Block@{:02x}{:02x}..{:02x}{:02x}]", 
+                        hash[0], hash[1], 
+                        hash[hash.len()-2], hash[hash.len()-1])
+                }
+            },
+            Self::String(blob) => match blob {
+                Blob::Inline(container) => {
+                    let len = container[0] as usize;
+                    if len == 0 {
+                        write!(f, "\"\"")
+                    } else {
+                        // Extract the string content from the inline container
+                        if let Ok(s) = std::str::from_utf8(&container[1..len+1]) {
+                            write!(f, "\"{}\"", s)
+                        } else {
+                            write!(f, "\"<invalid utf8>\"")
+                        }
+                    }
+                },
+                Blob::External(hash) => {
+                    // Format the hash nicely with a prefix to indicate it's a string hash
+                    write!(f, "\"String@{:02x}{:02x}..{:02x}{:02x}\"", 
+                        hash[0], hash[1], 
+                        hash[hash.len()-2], hash[hash.len()-1])
+                }
+            },
+            Self::Word(word) => write!(f, "{}", word),
+            Self::SetWord(word) => write!(f, "{}:", word),
+        }
+    }
 }
 
 impl Value {
