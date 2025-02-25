@@ -3,6 +3,13 @@
   <component name="LanguageServerSettingsState">
     <state>
       <map>
+        <entry key="5022e331-db9c-4626-8d54-16c4d93e7761">
+          <value>
+            <LanguageServerDefinitionSettings>
+              <option name="errorReportingKind" value="in_log" />
+            </LanguageServerDefinitionSettings>
+          </value>
+        </entry>
         <entry key="a70ca5d8-f003-4ffc-bd7b-ac4166824bb9">
           <value>
             <LanguageServerDefinitionSettings>

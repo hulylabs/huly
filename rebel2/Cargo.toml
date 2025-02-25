@@ -1,0 +1,9 @@
+[package]
+name = "rebel2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow.workspace = true
+smol_str = "0.3.2"
+thiserror.workspace = true
