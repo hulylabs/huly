@@ -154,3 +154,262 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::WordKind;
+    use std::cell::RefCell;
+
+    // A simple test collector that records parser events
+    struct TestCollector {
+        events: RefCell<Vec<ParseEvent>>,
+    }
+
+    #[derive(Clone, Debug)]
+    enum ParseEvent {
+        String(String),
+        Word(WordKind, String),
+        Integer(i32),
+        BeginBlock,
+        EndBlock,
+    }
+
+    impl TestCollector {
+        fn new() -> Self {
+            Self {
+                events: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn events(&self) -> Vec<ParseEvent> {
+            self.events.borrow().clone()
+        }
+    }
+
+    impl Collector for TestCollector {
+        fn string(&mut self, string: &str) -> Result<(), CoreError> {
+            self.events.borrow_mut().push(ParseEvent::String(string.to_string()));
+            Ok(())
+        }
+
+        fn word(&mut self, kind: WordKind, word: &str) {
+            self.events.borrow_mut().push(ParseEvent::Word(kind, word.to_string()));
+        }
+
+        fn integer(&mut self, value: i32) {
+            self.events.borrow_mut().push(ParseEvent::Integer(value));
+        }
+
+        fn begin_block(&mut self) {
+            self.events.borrow_mut().push(ParseEvent::BeginBlock);
+        }
+
+        fn end_block(&mut self) -> Result<(), CoreError> {
+            self.events.borrow_mut().push(ParseEvent::EndBlock);
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_parse_simple_word() {
+        let mut collector = TestCollector::new();
+        let mut parser = Parser::new("hello", &mut collector);
+        
+        parser.parse().unwrap();
+        
+        let events = collector.events();
+        assert_eq!(events.len(), 1);
+        
+        match &events[0] {
+            ParseEvent::Word(kind, word) => {
+                assert!(matches!(kind, WordKind::Word));
+                assert_eq!(word, "hello");
+            }
+            _ => panic!("Expected Word event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_set_word() {
+        let mut collector = TestCollector::new();
+        let mut parser = Parser::new("value:", &mut collector);
+        
+        parser.parse().unwrap();
+        
+        let events = collector.events();
+        assert_eq!(events.len(), 1);
+        
+        match &events[0] {
+            ParseEvent::Word(kind, word) => {
+                assert!(matches!(kind, WordKind::SetWord));
+                assert_eq!(word, "value");
+            }
+            _ => panic!("Expected SetWord event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_integer() {
+        let mut collector = TestCollector::new();
+        let mut parser = Parser::new("42", &mut collector);
+        
+        parser.parse().unwrap();
+        
+        let events = collector.events();
+        assert_eq!(events.len(), 1);
+        
+        match &events[0] {
+            ParseEvent::Integer(value) => {
+                assert_eq!(*value, 42);
+            }
+            _ => panic!("Expected Integer event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_negative_integer() {
+        let mut collector = TestCollector::new();
+        let mut parser = Parser::new("-123", &mut collector);
+        
+        parser.parse().unwrap();
+        
+        let events = collector.events();
+        assert_eq!(events.len(), 1);
+        
+        match &events[0] {
+            ParseEvent::Integer(value) => {
+                assert_eq!(*value, -123);
+            }
+            _ => panic!("Expected Integer event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_string() {
+        let mut collector = TestCollector::new();
+        let mut parser = Parser::new("\"hello world\"", &mut collector);
+        
+        parser.parse().unwrap();
+        
+        let events = collector.events();
+        assert_eq!(events.len(), 1);
+        
+        match &events[0] {
+            ParseEvent::String(content) => {
+                assert_eq!(content, "hello world");
+            }
+            _ => panic!("Expected String event"),
+        }
+    }
+
+    #[test]
+    fn test_parse_block() {
+        let mut collector = TestCollector::new();
+        let mut parser = Parser::new("[hello 42]", &mut collector);
+        
+        parser.parse().unwrap();
+        
+        let events = collector.events();
+        assert_eq!(events.len(), 4);
+        
+        assert!(matches!(events[0], ParseEvent::BeginBlock));
+        
+        match &events[1] {
+            ParseEvent::Word(kind, word) => {
+                assert!(matches!(kind, WordKind::Word));
+                assert_eq!(word, "hello");
+            }
+            _ => panic!("Expected Word event"),
+        }
+        
+        match &events[2] {
+            ParseEvent::Integer(value) => {
+                assert_eq!(*value, 42);
+            }
+            _ => panic!("Expected Integer event"),
+        }
+        
+        assert!(matches!(events[3], ParseEvent::EndBlock));
+    }
+
+    #[test]
+    fn test_parse_complex_expression() {
+        let mut collector = TestCollector::new();
+        let mut parser = Parser::new(
+            r#"[
+                x: 10
+                y: 20
+                "result"
+                [nested 30]
+            ]"#, 
+            &mut collector
+        );
+        
+        parser.parse().unwrap();
+        
+        let events = collector.events();
+        // Print the events for debugging
+        println!("Parsed events: {:?}", events);
+        assert_eq!(events.len(), 11); // Updated count: 11 events
+        
+        assert!(matches!(events[0], ParseEvent::BeginBlock));
+        
+        match &events[1] {
+            ParseEvent::Word(kind, word) => {
+                assert!(matches!(kind, WordKind::SetWord));
+                assert_eq!(word, "x");
+            }
+            _ => panic!("Expected SetWord event"),
+        }
+        
+        match &events[2] {
+            ParseEvent::Integer(value) => {
+                assert_eq!(*value, 10);
+            }
+            _ => panic!("Expected Integer event"),
+        }
+        
+        match &events[3] {
+            ParseEvent::Word(kind, word) => {
+                assert!(matches!(kind, WordKind::SetWord));
+                assert_eq!(word, "y");
+            }
+            _ => panic!("Expected SetWord event"),
+        }
+        
+        match &events[4] {
+            ParseEvent::Integer(value) => {
+                assert_eq!(*value, 20);
+            }
+            _ => panic!("Expected Integer event"),
+        }
+        
+        match &events[5] {
+            ParseEvent::String(content) => {
+                assert_eq!(content, "result");
+            }
+            _ => panic!("Expected String event"),
+        }
+        
+        assert!(matches!(events[6], ParseEvent::BeginBlock));
+        
+        match &events[7] {
+            ParseEvent::Word(kind, word) => {
+                assert!(matches!(kind, WordKind::Word));
+                assert_eq!(word, "nested");
+            }
+            _ => panic!("Expected Word event"),
+        }
+        
+        match &events[8] {
+            ParseEvent::Integer(value) => {
+                assert_eq!(*value, 30);
+            }
+            _ => panic!("Expected Integer event"),
+        }
+        
+        assert!(matches!(events[9], ParseEvent::EndBlock));
+        assert!(matches!(events[10], ParseEvent::EndBlock));
+    }
+}

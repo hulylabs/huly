@@ -76,7 +76,7 @@ where
 
 //
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum WordKind {
     Word,
     SetWord,
