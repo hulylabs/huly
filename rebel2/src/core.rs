@@ -111,7 +111,7 @@ impl WordKind {
 
 //
 
-const HASH_SIZE: usize = 32;
+pub const HASH_SIZE: usize = 32;
 pub type Hash = [u8; 32];
 
 #[derive(Debug, Clone)]
@@ -121,10 +121,10 @@ pub enum Blob {
 }
 
 impl Blob {
-    const OPTION_EXTERNAL: u8 = 0x10;
+    const EXTERNAL: u8 = 0x10;
 
     fn load(options: u8, data: &[u8]) -> Option<Blob> {
-        if options == Self::OPTION_EXTERNAL {
+        if options == Self::EXTERNAL {
             data.get(..32)?.try_into().ok().map(Blob::External)
         } else {
             data.split_first().and_then(|(len, data)| {
@@ -145,10 +145,8 @@ impl Blob {
                     .ok_or(CoreError::OutOfBounds)?;
                 write.write_vectored(&[IoSlice::new(&[tag]), IoSlice::new(slice)])?
             }
-            Blob::External(hash) => write.write_vectored(&[
-                IoSlice::new(&[tag | Self::OPTION_EXTERNAL]),
-                IoSlice::new(hash),
-            ])?,
+            Blob::External(hash) => write
+                .write_vectored(&[IoSlice::new(&[tag | Self::EXTERNAL]), IoSlice::new(hash)])?,
         };
         Ok(())
     }
@@ -175,6 +173,21 @@ pub trait BlobStore {
             Ok(Blob::Inline(inline))
         } else {
             self.put(data).map(Blob::External)
+        }
+    }
+
+    fn get_block_value(&self, blob: &Blob, index: usize) -> Option<Value> {
+        match blob {
+            Blob::Inline(container) => {
+                let data = container
+                    .split_first()
+                    .and_then(|(len, data)| data.get(..*len as usize))?;
+                Array::<&[u8], u8>::new(data).get(index)
+            }
+            Blob::External(hash) => {
+                let data = self.get(hash).ok()?;
+                Array::<&[u8], u32>::new(data).get(index)
+            }
         }
     }
 }

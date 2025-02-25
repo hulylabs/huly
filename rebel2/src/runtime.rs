@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Array, Blob, BlobStore, CoreError, Value, WordKind};
+use crate::core::{Array, Blob, BlobStore, CoreError, Value, WordKind, HASH_SIZE};
 use crate::parse::{Collector, Parser};
 use smol_str::SmolStr;
 use std::collections::HashMap;
@@ -38,27 +38,6 @@ where
     fn find_word(&self, symbol: &SmolStr) -> Option<Value> {
         self.system_words.get(symbol).cloned()
     }
-
-    fn create_blob(&mut self, data: &[u8]) -> Result<Blob, CoreError> {
-        self.blobs.create(data)
-    }
-
-    fn get_block_value(&self, blob: &Blob, index: usize) -> Option<Value> {
-        match blob {
-            Blob::Inline(container) => {
-                let data = container
-                    .split_first()
-                    .and_then(|(len, data)| data.get(..*len as usize))?;
-                let block: Array<&[u8], u8> = Array::new(data);
-                block.get(index)
-            }
-            Blob::External(hash) => {
-                let data = self.blobs.get(hash).ok()?;
-                let block: Array<&[u8], u32> = Array::new(data);
-                block.get(index)
-            }
-        }
-    }
 }
 
 //
@@ -93,7 +72,7 @@ where
     // }
 
     fn next(&mut self) -> Option<Value> {
-        let next = self.runtime.get_block_value(&self.block, self.ip)?;
+        let next = self.runtime.blobs.get_block_value(&self.block, self.ip)?;
         self.ip += 1;
         Some(next)
     }
@@ -158,7 +137,7 @@ where
     T: BlobStore,
 {
     fn string(&mut self, string: &str) -> Result<(), CoreError> {
-        self.module.create_blob(string.as_bytes()).map(|blob| {
+        self.module.blobs.create(string.as_bytes()).map(|blob| {
             self.parse.push(Value::Block(blob));
         })
     }
@@ -184,12 +163,40 @@ where
         let bp = self.ops.pop().ok_or(CoreError::ParseCollectorError)?;
         let block_items = self.parse.drain(bp..).collect::<Vec<Value>>();
 
+        let mut offsets = Vec::<usize>::new();
         let mut block_data = Vec::<u8>::new();
         for value in block_items.iter() {
+            offsets.push(block_data.len());
             value.write(&mut block_data)?;
         }
 
-        let block = Value::Block(self.module.create_blob(&block_data)?);
-        Ok(self.parse.push(block))
+        // check if block can be inlined inlined
+
+        let min_size = block_data.len() + block_items.len();
+        if min_size < HASH_SIZE {
+            let mut container = [0; HASH_SIZE];
+            container[0] = min_size as u8;
+            container[1..block_data.len() + 1].copy_from_slice(&block_data);
+            container
+                .iter_mut()
+                .skip(block_data.len() + 1)
+                .zip(offsets.iter().rev())
+                .for_each(|(i, offset)| {
+                    *i = *offset as u8;
+                });
+            self.parse.push(Value::Block(Blob::Inline(container)));
+        } else {
+            let size = 4 + block_data.len() + 4 * block_items.len();
+            let mut blob_data = Vec::with_capacity(size);
+            blob_data.extend_from_slice(&u32::to_le_bytes(size as u32));
+            blob_data.extend_from_slice(&block_data);
+            for offset in offsets.iter().rev() {
+                blob_data.extend_from_slice(&u32::to_le_bytes(*offset as u32));
+            }
+            let hash = self.module.blobs.put(&blob_data)?;
+            self.parse.push(Value::Block(Blob::External(hash)));
+        }
+
+        Ok(())
     }
 }
