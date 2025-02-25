@@ -64,51 +64,15 @@ where
 
     pub fn get(&self, index: usize) -> Option<Value> {
         let data = self.0.as_ref();
-        
-        // For external blobs, the first 4 bytes are the size, and we need to skip them
-        let start_offset = if Self::INDEX_SIZE == 4 { 4 } else { 0 };
-        
-        // Try to get the length of the array
-        let len_pos = if Self::INDEX_SIZE == 4 {
-            // For u32 indices, try to read the count from the first 4 bytes
-            let size = u32::from_le_bytes([
-                data.get(0).copied().unwrap_or(0),
-                data.get(1).copied().unwrap_or(0),
-                data.get(2).copied().unwrap_or(0),
-                data.get(3).copied().unwrap_or(0)
-            ]) as usize;
-            
-            // Estimate the count by dividing the remaining space by the index size
-            // This is an approximation, but should work for simple cases
-            let data_size = size - 4; // Subtract size field
-            let approx_count = data_size / (Self::INDEX_SIZE + 1); // +1 for avg value size
-            approx_count.min(100) // Limit to avoid huge arrays
+        let items = Self::get_index(data, 0)?;
+
+        if index < items {
+            let offset_pos = data.len() - (index + 1) * Self::INDEX_SIZE;
+            let offset = Self::get_index(data, offset_pos)?;
+            data.get(offset..).and_then(Value::load)
         } else {
-            // For inline blocks, the length is stored as the first byte
-            data.get(0).copied()? as usize
-        };
-        
-        if index >= len_pos {
-            return None;
+            None
         }
-        
-        // For safety, check if we're within bounds
-        if data.len() <= start_offset {
-            return None;
-        }
-        
-        // Try to get the offset for this index
-        let offset_pos = data.len() - (index + 1) * Self::INDEX_SIZE;
-        if offset_pos >= data.len() {
-            return None;
-        }
-        
-        let offset = Self::get_index(data, offset_pos)?;
-        if offset >= data.len() {
-            return None;
-        }
-        
-        Value::load(&data[offset..])
     }
 }
 
@@ -169,17 +133,22 @@ impl std::fmt::Debug for Blob {
                 let len = container[0] as usize;
                 // Show actual data bytes for small inline blobs
                 if len < 16 && len > 0 {
-                    let data = &container[1..len+1];
+                    let data = &container[1..len + 1];
                     write!(f, "Inline(size={}, data={:?})", len, data)
                 } else {
                     write!(f, "Inline(size={})", len)
                 }
-            },
+            }
             Self::External(hash) => {
                 // Format the hash with first few and last few bytes for programmers
-                write!(f, "External(hash={:02x}{:02x}..{:02x}{:02x})", 
-                      hash[0], hash[1], 
-                      hash[hash.len()-2], hash[hash.len()-1])
+                write!(
+                    f,
+                    "External(hash={:02x}{:02x}..{:02x}{:02x})",
+                    hash[0],
+                    hash[1],
+                    hash[hash.len() - 2],
+                    hash[hash.len() - 1]
+                )
             }
         }
     }
@@ -255,7 +224,7 @@ pub trait BlobStore {
             }
         }
     }
-    
+
     /// Get all the values in a block as a Vec
     fn get_block_values(&self, blob: &Blob) -> Vec<Value> {
         match blob {
@@ -264,18 +233,18 @@ pub trait BlobStore {
                 if len == 0 {
                     return Vec::new();
                 }
-                
+
                 let data = container
                     .split_first()
                     .and_then(|(_, data)| Some(data))
                     .unwrap_or(&[]);
-                
+
                 let array = Array::<&[u8], u8>::new(data);
-                
+
                 // Estimate the number of values based on the size
                 let estimated_count = len.max(1);
                 let mut values = Vec::with_capacity(estimated_count);
-                
+
                 // Extract all values from the array
                 for i in 0..estimated_count {
                     if let Some(value) = array.get(i) {
@@ -284,42 +253,46 @@ pub trait BlobStore {
                         break;
                     }
                 }
-                
+
                 values
-            },
+            }
             Blob::External(hash) => {
                 match self.get(hash) {
                     Ok(data) => {
                         let array = Array::<&[u8], u32>::new(data);
                         let mut values = Vec::new();
                         let mut i = 0;
-                        
+
                         // Extract all values
                         while let Some(value) = array.get(i) {
                             values.push(value);
                             i += 1;
-                            
+
                             // Safety limit to prevent infinite loops
                             if i > 1000 {
                                 break;
                             }
                         }
-                        
+
                         values
-                    },
-                    Err(_) => Vec::new()
+                    }
+                    Err(_) => Vec::new(),
                 }
             }
         }
     }
-    
+
     /// Format a block for display (user-friendly)
-    fn format_block_display(&self, f: &mut std::fmt::Formatter<'_>, blob: &Blob) -> std::fmt::Result {
+    fn format_block_display(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        blob: &Blob,
+    ) -> std::fmt::Result {
         write!(f, "[")?;
-        
+
         let values = self.get_block_values(blob);
         let mut first = true;
-        
+
         for value in values {
             if !first {
                 write!(f, " ")?;
@@ -327,20 +300,20 @@ pub trait BlobStore {
             write!(f, "{}", value)?;
             first = false;
         }
-        
+
         write!(f, "]")
     }
-    
+
     /// Format a block for debug (developer-oriented)
     fn format_block_debug(&self, f: &mut std::fmt::Formatter<'_>, blob: &Blob) -> std::fmt::Result {
         match blob {
             Blob::Inline(container) => {
                 let len = container[0] as usize;
                 write!(f, "Block::Inline(size={}, [", len)?;
-                
+
                 let values = self.get_block_values(blob);
                 let mut first = true;
-                
+
                 for value in values {
                     if !first {
                         write!(f, ", ")?;
@@ -348,17 +321,22 @@ pub trait BlobStore {
                     write!(f, "{:?}", value)?;
                     first = false;
                 }
-                
+
                 write!(f, "])")
-            },
+            }
             Blob::External(hash) => {
-                write!(f, "Block::External({:02x}{:02x}..{:02x}{:02x}, [", 
-                      hash[0], hash[1], 
-                      hash[hash.len()-2], hash[hash.len()-1])?;
-                
+                write!(
+                    f,
+                    "Block::External({:02x}{:02x}..{:02x}{:02x}, [",
+                    hash[0],
+                    hash[1],
+                    hash[hash.len() - 2],
+                    hash[hash.len() - 1]
+                )?;
+
                 let values = self.get_block_values(blob);
                 let mut first = true;
-                
+
                 for value in values {
                     if !first {
                         write!(f, ", ")?;
@@ -366,7 +344,7 @@ pub trait BlobStore {
                     write!(f, "{:?}", value)?;
                     first = false;
                 }
-                
+
                 write!(f, "])")
             }
         }
@@ -388,7 +366,7 @@ pub enum Value {
 
 /// Display format is designed for end users seeing the values in an interpreter.
 /// It is more concise and readable, more like what a user would expect to see.
-/// 
+///
 /// Note: This implementation can only display inner values for inline blocks.
 /// For full block display that works with both inline and external blocks,
 /// use a BlobStore implementation's format_block_display method.
@@ -400,7 +378,7 @@ impl std::fmt::Display for Value {
             Self::Block(blob) => {
                 // Basic display without access to BlobStore
                 write!(f, "[")?;
-                
+
                 match blob {
                     Blob::Inline(container) => {
                         let len = container[0] as usize;
@@ -410,15 +388,15 @@ impl std::fmt::Display for Value {
                             // Indicate there's content
                             write!(f, "...")?;
                         }
-                    },
+                    }
                     Blob::External(_) => {
                         // For external blocks, we need a BlobStore to get content
                         write!(f, "...")?;
                     }
                 }
-                
+
                 write!(f, "]")
-            },
+            }
             Self::String(blob) => match blob {
                 Blob::Inline(container) => {
                     let len = container[0] as usize;
@@ -426,13 +404,13 @@ impl std::fmt::Display for Value {
                         write!(f, "\"\"")
                     } else {
                         // Extract the string content from the inline container
-                        if let Ok(s) = std::str::from_utf8(&container[1..len+1]) {
+                        if let Ok(s) = std::str::from_utf8(&container[1..len + 1]) {
                             write!(f, "\"{}\"", s)
                         } else {
                             write!(f, "\"<binary data>\"")
                         }
                     }
-                },
+                }
                 Blob::External(_) => {
                     // For external strings, we just indicate it's a string
                     write!(f, "\"...\"")
@@ -445,7 +423,7 @@ impl std::fmt::Display for Value {
 }
 
 /// Debug format is designed for programmers and includes more technical details.
-/// 
+///
 /// Note: This implementation can only show inner values for inline blocks.
 /// For full block debug output that works with both inline and external blocks,
 /// use a BlobStore implementation's format_block_debug method.
@@ -458,12 +436,17 @@ impl std::fmt::Debug for Value {
                 Blob::Inline(container) => {
                     let len = container[0] as usize;
                     write!(f, "Block::Inline(size={})", len)
-                },
+                }
                 Blob::External(hash) => {
                     // Format the hash nicely with a prefix for debugging
-                    write!(f, "Block::External({:02x}{:02x}..{:02x}{:02x})", 
-                        hash[0], hash[1], 
-                        hash[hash.len()-2], hash[hash.len()-1])
+                    write!(
+                        f,
+                        "Block::External({:02x}{:02x}..{:02x}{:02x})",
+                        hash[0],
+                        hash[1],
+                        hash[hash.len() - 2],
+                        hash[hash.len() - 1]
+                    )
                 }
             },
             Self::String(blob) => match blob {
@@ -473,18 +456,23 @@ impl std::fmt::Debug for Value {
                         write!(f, "String::Inline(\"\")")
                     } else {
                         // Extract the string content from the inline container
-                        if let Ok(s) = std::str::from_utf8(&container[1..len+1]) {
+                        if let Ok(s) = std::str::from_utf8(&container[1..len + 1]) {
                             write!(f, "String::Inline(\"{}\")", s)
                         } else {
                             write!(f, "String::Inline(<binary data>, size={})", len)
                         }
                     }
-                },
+                }
                 Blob::External(hash) => {
                     // Format the hash nicely with a prefix for debugging
-                    write!(f, "String::External({:02x}{:02x}..{:02x}{:02x})", 
-                        hash[0], hash[1], 
-                        hash[hash.len()-2], hash[hash.len()-1])
+                    write!(
+                        f,
+                        "String::External({:02x}{:02x}..{:02x}{:02x})",
+                        hash[0],
+                        hash[1],
+                        hash[hash.len() - 2],
+                        hash[hash.len() - 1]
+                    )
                 }
             },
             Self::Word(word) => write!(f, "Word(\"{}\")", word),
@@ -559,14 +547,14 @@ mod tests {
         if len >= HASH_SIZE {
             panic!("String too long for inline blob test");
         }
-        
+
         let mut container = [0u8; HASH_SIZE];
         container[0] = len as u8;
-        container[1..len+1].copy_from_slice(bytes);
-        
+        container[1..len + 1].copy_from_slice(bytes);
+
         Blob::Inline(container)
     }
-    
+
     /// Helper to create an external blob with a mock hash
     fn create_external_blob() -> Blob {
         let mut hash = [0u8; HASH_SIZE];
@@ -576,7 +564,7 @@ mod tests {
         }
         Blob::External(hash)
     }
-    
+
     #[test]
     fn test_display_basic_values() {
         // Test display for basic values
@@ -585,67 +573,67 @@ mod tests {
         assert_eq!(Value::Word(SmolStr::new("hello")).to_string(), "hello");
         assert_eq!(Value::SetWord(SmolStr::new("x")).to_string(), "x:");
     }
-    
+
     #[test]
     fn test_display_string_values() {
         // Test display for string values
         let empty_string = Value::String(create_string_blob(""));
         let short_string = Value::String(create_string_blob("hello"));
         let external_string = Value::String(create_external_blob());
-        
+
         // Check Display format for end users
         assert_eq!(empty_string.to_string(), "\"\"");
         assert_eq!(short_string.to_string(), "\"hello\"");
         assert_eq!(external_string.to_string(), "\"...\"");
-        
+
         // Check Debug format for programmers
         assert_eq!(format!("{:?}", empty_string), "String::Inline(\"\")");
         assert_eq!(format!("{:?}", short_string), "String::Inline(\"hello\")");
         assert!(format!("{:?}", external_string).starts_with("String::External("));
     }
-    
+
     #[test]
     fn test_display_block_values() {
         // Create a valid inline block for testing
         // Properly create a small inline block by creating a container
         let mut container = [0u8; HASH_SIZE];
-        
+
         // Set the size (first byte) to 4 to indicate a small block
         container[0] = 4;
-        
+
         // Put the minimal components needed for a valid block
         // This is a simplification for testing - real blocks would have valid serialized data
         container[1] = 0; // First value tag
         container[2] = 0; // Second value offset
-        
+
         let inline_block = Value::Block(Blob::Inline(container));
         let external_block = Value::Block(create_external_blob());
-        
+
         // Check Display format for end users
         let inline_str = inline_block.to_string();
         let external_str = external_block.to_string();
-        
+
         // All blocks should at least have brackets
         assert!(inline_str.starts_with("["));
         assert!(inline_str.ends_with("]"));
         assert!(external_str.starts_with("["));
         assert!(external_str.ends_with("]"));
-        
+
         // Check Debug format for programmers
         assert!(format!("{:?}", inline_block).starts_with("Block::Inline"));
         assert!(format!("{:?}", external_block).starts_with("Block::External"));
     }
-    
+
     #[test]
     fn test_blob_debug() {
         // Test Blob Debug format (no Display implementation anymore)
         let inline_blob = create_string_blob("abc");
         let external_blob = create_external_blob();
-        
+
         // Debug for programmers should be detailed
         let debug_inline = format!("{:?}", inline_blob);
         let debug_external = format!("{:?}", external_blob);
-        
+
         assert!(debug_inline.contains("size=3"));
         assert!(debug_inline.contains("data="));
         assert!(debug_external.contains("External(hash="));
