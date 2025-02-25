@@ -114,22 +114,50 @@ impl WordKind {
 pub const HASH_SIZE: usize = 32;
 pub type Hash = [u8; 32];
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Blob {
     Inline(Hash),
     External(Hash),
 }
 
+/// Display implementation for Blob provides a concise view, useful for end users
 impl std::fmt::Display for Blob {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Inline(container) => {
                 let len = container[0] as usize;
-                write!(f, "Inline({} bytes)", len)
+                // For display, just indicate if it's a small or large blob
+                if len < 10 {
+                    write!(f, "small blob")
+                } else {
+                    write!(f, "blob ({} bytes)", len)
+                }
+            },
+            Self::External(_) => {
+                // For display, we don't show hashes to end users
+                write!(f, "large blob")
+            }
+        }
+    }
+}
+
+/// Debug implementation for Blob provides technical details, useful for programmers
+impl std::fmt::Debug for Blob {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Inline(container) => {
+                let len = container[0] as usize;
+                // Show actual data bytes for small inline blobs
+                if len < 16 && len > 0 {
+                    let data = &container[1..len+1];
+                    write!(f, "Inline(size={}, data={:?})", len, data)
+                } else {
+                    write!(f, "Inline(size={})", len)
+                }
             },
             Self::External(hash) => {
-                // Format the first few and last few bytes of the hash
-                write!(f, "External({:02x}{:02x}..{:02x}{:02x})", 
+                // Format the hash with first few and last few bytes for programmers
+                write!(f, "External(hash={:02x}{:02x}..{:02x}{:02x})", 
                       hash[0], hash[1], 
                       hash[hash.len()-2], hash[hash.len()-1])
             }
@@ -211,7 +239,7 @@ pub trait BlobStore {
 
 //
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum Value {
     None,
     Int(i64),
@@ -222,18 +250,18 @@ pub enum Value {
     SetWord(SmolStr),
 }
 
+/// Display format is designed for end users seeing the values in an interpreter.
+/// It is more concise and readable, more like what a user would expect to see.
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::None => write!(f, "none"),
             Self::Int(i) => write!(f, "{}", i),
-            Self::Block(blob) => match blob {
-                Blob::Inline(_) => write!(f, "[...]"),
-                Blob::External(hash) => {
-                    // Format the hash nicely with a prefix to indicate it's a block hash
-                    write!(f, "[Block@{:02x}{:02x}..{:02x}{:02x}]", 
-                        hash[0], hash[1], 
-                        hash[hash.len()-2], hash[hash.len()-1])
+            Self::Block(blob) => {
+                // For blocks, we display a simplified representation
+                match blob {
+                    Blob::Inline(_) => write!(f, "[...]"),
+                    Blob::External(_) => write!(f, "[...]"),
                 }
             },
             Self::String(blob) => match blob {
@@ -246,19 +274,62 @@ impl std::fmt::Display for Value {
                         if let Ok(s) = std::str::from_utf8(&container[1..len+1]) {
                             write!(f, "\"{}\"", s)
                         } else {
-                            write!(f, "\"<invalid utf8>\"")
+                            write!(f, "\"<binary data>\"")
                         }
                     }
                 },
-                Blob::External(hash) => {
-                    // Format the hash nicely with a prefix to indicate it's a string hash
-                    write!(f, "\"String@{:02x}{:02x}..{:02x}{:02x}\"", 
-                        hash[0], hash[1], 
-                        hash[hash.len()-2], hash[hash.len()-1])
+                Blob::External(_) => {
+                    // For external strings, we just indicate it's a string (user doesn't need hash details)
+                    write!(f, "\"...\"")
                 }
             },
             Self::Word(word) => write!(f, "{}", word),
             Self::SetWord(word) => write!(f, "{}:", word),
+        }
+    }
+}
+
+/// Debug format is designed for programmers and includes more technical details.
+impl std::fmt::Debug for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "None"),
+            Self::Int(i) => write!(f, "Int({})", i),
+            Self::Block(blob) => match blob {
+                Blob::Inline(container) => {
+                    let len = container[0] as usize;
+                    write!(f, "Block::Inline(size={})", len)
+                },
+                Blob::External(hash) => {
+                    // Format the hash nicely with a prefix for debugging
+                    write!(f, "Block::External({:02x}{:02x}..{:02x}{:02x})", 
+                        hash[0], hash[1], 
+                        hash[hash.len()-2], hash[hash.len()-1])
+                }
+            },
+            Self::String(blob) => match blob {
+                Blob::Inline(container) => {
+                    let len = container[0] as usize;
+                    if len == 0 {
+                        write!(f, "String::Inline(\"\")")
+                    } else {
+                        // Extract the string content from the inline container
+                        if let Ok(s) = std::str::from_utf8(&container[1..len+1]) {
+                            write!(f, "String::Inline(\"{}\")", s)
+                        } else {
+                            write!(f, "String::Inline(<binary data>, size={})", len)
+                        }
+                    }
+                },
+                Blob::External(hash) => {
+                    // Format the hash nicely with a prefix for debugging
+                    write!(f, "String::External({:02x}{:02x}..{:02x}{:02x})", 
+                        hash[0], hash[1], 
+                        hash[hash.len()-2], hash[hash.len()-1])
+                }
+            },
+            Self::Word(word) => write!(f, "Word(\"{}\")", word),
+            Self::SetWord(word) => write!(f, "SetWord(\"{}\")", word),
         }
     }
 }
@@ -316,4 +387,96 @@ impl Value {
 
 pub fn load_value(data: &[u8]) -> Option<Value> {
     Value::load(data)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Helper to create an inline blob containing a string
+    fn create_string_blob(s: &str) -> Blob {
+        let bytes = s.as_bytes();
+        let len = bytes.len();
+        if len >= HASH_SIZE {
+            panic!("String too long for inline blob test");
+        }
+        
+        let mut container = [0u8; HASH_SIZE];
+        container[0] = len as u8;
+        container[1..len+1].copy_from_slice(bytes);
+        
+        Blob::Inline(container)
+    }
+    
+    /// Helper to create an external blob with a mock hash
+    fn create_external_blob() -> Blob {
+        let mut hash = [0u8; HASH_SIZE];
+        // Create a recognizable pattern in the hash
+        for i in 0..HASH_SIZE {
+            hash[i] = (i as u8) % 255;
+        }
+        Blob::External(hash)
+    }
+    
+    #[test]
+    fn test_display_basic_values() {
+        // Test display for basic values
+        assert_eq!(Value::None.to_string(), "none");
+        assert_eq!(Value::Int(42).to_string(), "42");
+        assert_eq!(Value::Word(SmolStr::new("hello")).to_string(), "hello");
+        assert_eq!(Value::SetWord(SmolStr::new("x")).to_string(), "x:");
+    }
+    
+    #[test]
+    fn test_display_string_values() {
+        // Test display for string values
+        let empty_string = Value::String(create_string_blob(""));
+        let short_string = Value::String(create_string_blob("hello"));
+        let external_string = Value::String(create_external_blob());
+        
+        // Check Display format for end users
+        assert_eq!(empty_string.to_string(), "\"\"");
+        assert_eq!(short_string.to_string(), "\"hello\"");
+        assert_eq!(external_string.to_string(), "\"...\"");
+        
+        // Check Debug format for programmers
+        assert_eq!(format!("{:?}", empty_string), "String::Inline(\"\")");
+        assert_eq!(format!("{:?}", short_string), "String::Inline(\"hello\")");
+        assert!(format!("{:?}", external_string).starts_with("String::External("));
+    }
+    
+    #[test]
+    fn test_display_block_values() {
+        // Test display for block values
+        let inline_block = Value::Block(create_string_blob("test"));
+        let external_block = Value::Block(create_external_blob());
+        
+        // Check Display format for end users
+        assert_eq!(inline_block.to_string(), "[...]");
+        assert_eq!(external_block.to_string(), "[...]");
+        
+        // Check Debug format for programmers
+        assert!(format!("{:?}", inline_block).starts_with("Block::Inline"));
+        assert!(format!("{:?}", external_block).starts_with("Block::External"));
+    }
+    
+    #[test]
+    fn test_blob_display_and_debug() {
+        // Test Blob Display and Debug formats
+        let inline_blob = create_string_blob("abc");
+        let external_blob = create_external_blob();
+        
+        // Display for end users should be simple
+        assert_eq!(inline_blob.to_string(), "small blob");
+        assert_eq!(external_blob.to_string(), "large blob");
+        
+        // Debug for programmers should be detailed
+        let debug_inline = format!("{:?}", inline_blob);
+        let debug_external = format!("{:?}", external_blob);
+        
+        assert!(debug_inline.contains("size=3"));
+        assert!(debug_inline.contains("data="));
+        assert!(debug_external.contains("External(hash="));
+        assert!(debug_external.contains(".."));
+    }
 }

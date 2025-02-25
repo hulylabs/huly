@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Array, Blob, BlobStore, CoreError, Hash, Value, WordKind, HASH_SIZE};
+use crate::core::{Blob, BlobStore, CoreError, Hash, Value, WordKind, HASH_SIZE};
 use crate::parse::{Collector, Parser};
 use smol_str::SmolStr;
 use std::collections::HashMap;
@@ -205,7 +205,6 @@ where
 mod tests {
     use super::*;
     use std::collections::HashMap;
-    use std::sync::Arc;
 
     /// A simple in-memory implementation of BlobStore for testing
     #[derive(Clone)]
@@ -360,28 +359,34 @@ mod tests {
         
         let (value, store) = parse_to_value("\"hello world\"", store).unwrap();
         
-        // Display the value using the Display trait
+        // Display the value using the Display and Debug traits
         println!("String display: {}", value);
+        println!("String debug: {:?}", value);
         
         // Strings are parsed and stored as blobs
-        match value {
+        match &value {
             Value::String(blob) => {
-                println!("String blob: {:?}", blob);
-                let bytes = match &blob {
+                // Check content using internal access for test purposes
+                let bytes = match blob {
                     Blob::Inline(container) => {
                         let len = container[0] as usize;
-                        println!("Inline string with length: {}", len);
                         &container[1..len+1]
                     },
                     Blob::External(hash) => {
-                        println!("External string with hash: {:02x}{:02x}..{:02x}{:02x}", 
-                            hash[0], hash[1], hash[hash.len()-2], hash[hash.len()-1]);
                         store.get(hash).unwrap()
                     }
                 };
                 
                 let content = std::str::from_utf8(bytes).unwrap();
                 assert_eq!(content, "hello world");
+                
+                // Check that the display format matches the content
+                assert_eq!(value.to_string(), "\"hello world\"");
+                
+                // Debug format should include the type information
+                let debug_str = format!("{:?}", value);
+                assert!(debug_str.starts_with("String::"));
+                assert!(debug_str.contains("hello world"));
             },
             _ => panic!("Expected String blob, got {:?}", value),
         }
@@ -462,47 +467,27 @@ mod tests {
     }
     
     #[test]
-    fn test_display_trait() {
+    fn test_display_traits_with_parser() {
         let store = MemoryBlobStore::new();
         
-        // Test display for different value types
-        let test_cases = vec![
-            ("42", "42"),
-            ("-123", "-123"),
-            ("hello", "hello"),
-            ("x:", "x:"),
-            ("\"test string\"", "\"test string\""),
-        ];
+        // Test a complex structure parsed from input 
+        let input = r#"[
+            a: 10
+            b: "hello"
+            [1 2 3]
+        ]"#;
         
-        for (input, expected) in test_cases {
-            let (value, _) = parse_to_value(input, store.clone()).unwrap();
-            
-            // Convert the value to a string using Display trait
-            let display_string = format!("{}", value);
-            
-            println!("Input: {}, Display: {}", input, display_string);
-            assert_eq!(display_string, expected);
-        }
+        let (value, _store) = parse_to_value(input, store).unwrap();
         
-        // Test display for blocks
-        let (block_value, _store) = parse_to_value("[1 2 3]", store).unwrap();
-        let block_display = format!("{}", block_value);
+        // Test both Display and Debug formats
+        println!("Display format: {}", value);
+        println!("Debug format: {:?}", value);
         
-        // Check that the block display format is reasonable
-        println!("Block display: {}", block_display);
+        // With the new implementation, all block displays will be the same for end users
+        assert_eq!(format!("{}", value), "[...]");
         
-        match block_value {
-            Value::Block(Blob::Inline(_)) => {
-                assert_eq!(block_display, "[...]");
-            },
-            Value::Block(Blob::External(_)) => {
-                // Should start with "[Block@" and end with "]"
-                assert!(block_display.starts_with("[Block@"));
-                assert!(block_display.ends_with("]"));
-                // Should contain ".." to indicate hash abbreviation
-                assert!(block_display.contains(".."));
-            },
-            _ => panic!("Expected Block"),
-        }
+        // Debug format should be more detailed
+        let debug_str = format!("{:?}", value);
+        assert!(debug_str.starts_with("Block::"));
     }
 }
