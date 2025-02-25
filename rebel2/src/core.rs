@@ -255,6 +255,122 @@ pub trait BlobStore {
             }
         }
     }
+    
+    /// Get all the values in a block as a Vec
+    fn get_block_values(&self, blob: &Blob) -> Vec<Value> {
+        match blob {
+            Blob::Inline(container) => {
+                let len = container[0] as usize;
+                if len == 0 {
+                    return Vec::new();
+                }
+                
+                let data = container
+                    .split_first()
+                    .and_then(|(_, data)| Some(data))
+                    .unwrap_or(&[]);
+                
+                let array = Array::<&[u8], u8>::new(data);
+                
+                // Estimate the number of values based on the size
+                let estimated_count = len.max(1);
+                let mut values = Vec::with_capacity(estimated_count);
+                
+                // Extract all values from the array
+                for i in 0..estimated_count {
+                    if let Some(value) = array.get(i) {
+                        values.push(value);
+                    } else {
+                        break;
+                    }
+                }
+                
+                values
+            },
+            Blob::External(hash) => {
+                match self.get(hash) {
+                    Ok(data) => {
+                        let array = Array::<&[u8], u32>::new(data);
+                        let mut values = Vec::new();
+                        let mut i = 0;
+                        
+                        // Extract all values
+                        while let Some(value) = array.get(i) {
+                            values.push(value);
+                            i += 1;
+                            
+                            // Safety limit to prevent infinite loops
+                            if i > 1000 {
+                                break;
+                            }
+                        }
+                        
+                        values
+                    },
+                    Err(_) => Vec::new()
+                }
+            }
+        }
+    }
+    
+    /// Format a block for display (user-friendly)
+    fn format_block_display(&self, f: &mut std::fmt::Formatter<'_>, blob: &Blob) -> std::fmt::Result {
+        write!(f, "[")?;
+        
+        let values = self.get_block_values(blob);
+        let mut first = true;
+        
+        for value in values {
+            if !first {
+                write!(f, " ")?;
+            }
+            write!(f, "{}", value)?;
+            first = false;
+        }
+        
+        write!(f, "]")
+    }
+    
+    /// Format a block for debug (developer-oriented)
+    fn format_block_debug(&self, f: &mut std::fmt::Formatter<'_>, blob: &Blob) -> std::fmt::Result {
+        match blob {
+            Blob::Inline(container) => {
+                let len = container[0] as usize;
+                write!(f, "Block::Inline(size={}, [", len)?;
+                
+                let values = self.get_block_values(blob);
+                let mut first = true;
+                
+                for value in values {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", value)?;
+                    first = false;
+                }
+                
+                write!(f, "])")
+            },
+            Blob::External(hash) => {
+                write!(f, "Block::External({:02x}{:02x}..{:02x}{:02x}, [", 
+                      hash[0], hash[1], 
+                      hash[hash.len()-2], hash[hash.len()-1])?;
+                
+                let values = self.get_block_values(blob);
+                let mut first = true;
+                
+                for value in values {
+                    if !first {
+                        write!(f, ", ")?;
+                    }
+                    write!(f, "{:?}", value)?;
+                    first = false;
+                }
+                
+                write!(f, "])")
+            }
+        }
+    }
 }
 
 //
@@ -272,39 +388,31 @@ pub enum Value {
 
 /// Display format is designed for end users seeing the values in an interpreter.
 /// It is more concise and readable, more like what a user would expect to see.
+/// 
+/// Note: This implementation can only display inner values for inline blocks.
+/// For full block display that works with both inline and external blocks,
+/// use a BlobStore implementation's format_block_display method.
 impl std::fmt::Display for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::None => write!(f, "none"),
             Self::Int(i) => write!(f, "{}", i),
             Self::Block(blob) => {
+                // Basic display without access to BlobStore
                 write!(f, "[")?;
-                
-                // Extract and display block items
-                let mut first = true;
                 
                 match blob {
                     Blob::Inline(container) => {
-                        let data = container.split_first().and_then(|(len, data)| 
-                            data.get(..*len as usize));
-                        
-                        if let Some(block_data) = data {
-                            // Limit to first 5 items for display purposes
-                            for i in 0..5 {
-                                if let Some(value) = Array::<&[u8], u8>::new(block_data).get(i) {
-                                    if !first {
-                                        write!(f, " ")?;
-                                    }
-                                    write!(f, "{}", value)?;
-                                    first = false;
-                                } else {
-                                    break;
-                                }
-                            }
+                        let len = container[0] as usize;
+                        if len == 0 {
+                            // Empty block
+                        } else {
+                            // Indicate there's content
+                            write!(f, "...")?;
                         }
                     },
                     Blob::External(_) => {
-                        // Since we need BlobStore to get content, we output a simplified representation
+                        // For external blocks, we need a BlobStore to get content
                         write!(f, "...")?;
                     }
                 }
@@ -337,6 +445,10 @@ impl std::fmt::Display for Value {
 }
 
 /// Debug format is designed for programmers and includes more technical details.
+/// 
+/// Note: This implementation can only show inner values for inline blocks.
+/// For full block debug output that works with both inline and external blocks,
+/// use a BlobStore implementation's format_block_debug method.
 impl std::fmt::Debug for Value {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -345,32 +457,7 @@ impl std::fmt::Debug for Value {
             Self::Block(blob) => match blob {
                 Blob::Inline(container) => {
                     let len = container[0] as usize;
-                    
-                    // Show more detailed debug info including contents when possible
-                    let mut result = format!("Block::Inline(size={}, contents=[", len);
-                    
-                    // Try to extract and show values
-                    let data = container.split_first().and_then(|(len, data)| 
-                        data.get(..*len as usize));
-                    
-                    if let Some(block_data) = data {
-                        let mut first = true;
-                        // Limit to first 3 items for debug display
-                        for i in 0..3 {
-                            if let Some(value) = Array::<&[u8], u8>::new(block_data).get(i) {
-                                if !first {
-                                    result.push_str(", ");
-                                }
-                                result.push_str(&format!("{:?}", value));
-                                first = false;
-                            } else {
-                                break;
-                            }
-                        }
-                    }
-                    
-                    result.push_str("])");
-                    write!(f, "{}", result)
+                    write!(f, "Block::Inline(size={})", len)
                 },
                 Blob::External(hash) => {
                     // Format the hash nicely with a prefix for debugging
