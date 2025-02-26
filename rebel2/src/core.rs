@@ -145,7 +145,7 @@ pub type Hash = [u8; HASH_SIZE];
 pub const INLINE_MAX: usize = 34;
 
 #[derive(Clone, Debug)]
-struct Inline {
+pub struct Inline {
     size: u8,
     data: [u8; INLINE_MAX],
 }

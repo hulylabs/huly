@@ -77,41 +77,41 @@ where
             .inspect(|_| self.ip += 1)
     }
 
-    fn next_value(&mut self) -> Option<Value> {
-        while let Some(value) = self.next() {
-            // resolve value
-            let value = match value {
-                Value::Word(symbol) => self.runtime.find_word(&symbol)?,
-                _ => value.clone(),
-            };
+    // fn next_value(&mut self) -> Option<Value> {
+    //     while let Some(value) = self.next() {
+    //         // resolve value
+    //         let value = match value {
+    //             Value::Word(symbol) => self.runtime.find_word(&symbol)?,
+    //             _ => value.clone(),
+    //         };
 
-            return Some(value);
+    //         return Some(value);
 
-            // // translate into operation
-            // if let Some((op, arity)) = match value[0] {
-            //     Value::TAG_NATIVE_FN => {
-            //         Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
-            //     }
-            //     Value::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-            //     Value::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
-            //     _ => None,
-            // } {
-            //     let sp = self.stack.len()?;
-            //     self.arity.push([op, value[1], sp, arity * 2])?;
-            // } else {
-            //     return Some(value);
-            // }
-        }
-        None
-    }
+    //         // // translate into operation
+    //         // if let Some((op, arity)) = match value[0] {
+    //         //     Value::TAG_NATIVE_FN => {
+    //         //         Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
+    //         //     }
+    //         //     Value::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
+    //         //     Value::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
+    //         //     _ => None,
+    //         // } {
+    //         //     let sp = self.stack.len()?;
+    //         //     self.arity.push([op, value[1], sp, arity * 2])?;
+    //         // } else {
+    //         //     return Some(value);
+    //         // }
+    //     }
+    //     None
+    // }
 
-    fn eval(&mut self) -> Result<Value, CoreError> {
-        loop {
-            if let Some(value) = self.next_value() {
-                self.stack.push(value);
-            }
-        }
-    }
+    // fn eval(&mut self) -> Result<Value, CoreError> {
+    //     loop {
+    //         if let Some(value) = self.next_value() {
+    //             self.stack.push(value);
+    //         }
+    //     }
+    // }
 }
 
 // P A R S E  C O L L E C T O R
