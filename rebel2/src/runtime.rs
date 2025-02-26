@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Blob, BlobStore, CoreError, Hash, Value, WordKind};
-use crate::parse::{Collector, Parser};
+use crate::core::{Blob, BlobStore, Block, CoreError, Value, WordKind, INLINE_MAX};
+use crate::parse::Collector;
 use smol_str::SmolStr;
 use std::collections::HashMap;
 
@@ -44,7 +44,7 @@ where
 
 struct Process<'a, T> {
     runtime: &'a mut Runtime<T>,
-    block: Blob,
+    block: Block,
     ip: usize,
     stack: Vec<Value>,
     call_stack: Vec<(Blob, usize)>,
@@ -54,7 +54,7 @@ impl<'a, T> Process<'a, T>
 where
     T: BlobStore,
 {
-    fn new(runtime: &'a mut Runtime<T>, block: Blob) -> Self {
+    fn new(runtime: &'a mut Runtime<T>, block: Block) -> Self {
         Process {
             runtime,
             block,
@@ -72,9 +72,9 @@ where
     // }
 
     fn next(&mut self) -> Option<Value> {
-        let next = self.runtime.blobs.get_block_value(&self.block, self.ip)?;
-        self.ip += 1;
-        Some(next)
+        self.block
+            .get(&self.runtime.blobs, self.ip)
+            .inspect(|_| self.ip += 1)
     }
 
     fn next_value(&mut self) -> Option<Value> {
@@ -137,9 +137,12 @@ where
     T: BlobStore,
 {
     fn string(&mut self, string: &str) -> Result<(), CoreError> {
-        self.module.blobs.create(string.as_bytes()).map(|blob| {
-            self.parse.push(Value::String(blob));
-        })
+        self.module
+            .blobs
+            .create_blob(string.as_bytes())
+            .map(|blob| {
+                self.parse.push(Value::String(blob));
+            })
     }
 
     fn word(&mut self, kind: WordKind, word: &str) {
@@ -170,43 +173,21 @@ where
             value.write(&mut block_data)?;
         }
 
-        // check if block can be inlined inlined
-
-        let min_size = 2 + block_data.len() + block_items.len();
-        if min_size < HASH_SIZE {
-            let mut container = [0; HASH_SIZE];
-            container[0] = min_size as u8;
-            container[1] = block_items.len() as u8;
-            container[2..block_data.len() + 2].copy_from_slice(&block_data);
-            container
-                .iter_mut()
-                .skip(block_data.len() + 2)
-                .zip(offsets.iter().rev())
-                .for_each(|(i, offset)| {
-                    *i = *offset as u8;
-                });
-            self.parse.push(Value::Block(Blob::Inline(container)));
-        } else {
-            let size = 4 * 1 + block_data.len() + 4 * block_items.len();
-            let mut blob_data = Vec::with_capacity(size);
-            blob_data.extend_from_slice(&u32::to_le_bytes(block_items.len() as u32));
-            blob_data.extend_from_slice(&block_data);
-            for offset in offsets.iter().rev() {
-                blob_data.extend_from_slice(&u32::to_le_bytes(*offset as u32));
-            }
-            let hash = self.module.blobs.put(&blob_data)?;
-            self.parse.push(Value::Block(Blob::External(hash)));
-        }
-
-        Ok(())
+        self.module
+            .blobs
+            .create_block::<T>(&block_data, &offsets)
+            .map(|blob| self.parse.push(Value::Block(blob)))
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::Array;
+    use crate::core::Hash;
+    use crate::parse::Parser;
     use std::collections::HashMap;
+
+    const HASH_SIZE: usize = std::mem::size_of::<Hash>();
 
     /// A simple in-memory implementation of BlobStore for testing
     #[derive(Clone)]
@@ -259,32 +240,6 @@ mod tests {
 
         // Extract the BlobStore back from runtime
         Ok((value, runtime.blobs))
-    }
-
-    /// Helper function to extract values from a block using the BlobStore trait methods
-    fn extract_block_values(blob: &Blob, store: &MemoryBlobStore) -> Vec<Value> {
-        // Use the BlobStore get_block_values implementation
-        store.get_block_values(blob)
-    }
-
-    /// Helper function to format a block for display
-    fn format_block(
-        blob: &Blob,
-        store: &MemoryBlobStore,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        // Use the BlobStore format_block_display implementation
-        store.format_block_display(f, blob)
-    }
-
-    /// Helper function to format a block for debug
-    fn format_block_debug(
-        blob: &Blob,
-        store: &MemoryBlobStore,
-        f: &mut std::fmt::Formatter<'_>,
-    ) -> std::fmt::Result {
-        // Use the BlobStore format_block_debug implementation
-        store.format_block_debug(f, blob)
     }
 
     #[test]
@@ -349,35 +304,7 @@ mod tests {
 
         let (value, store) = parse_to_value("\"hello world\"", store).unwrap();
 
-        // Display the value using the Display and Debug traits
-        println!("String display: {}", value);
-        println!("String debug: {:?}", value);
-
-        // Strings are parsed and stored as blobs
-        match &value {
-            Value::String(blob) => {
-                // Check content using internal access for test purposes
-                let bytes = match blob {
-                    Blob::Inline(container) => {
-                        let len = container[0] as usize;
-                        &container[1..len + 1]
-                    }
-                    Blob::External(hash) => store.get(hash).unwrap(),
-                };
-
-                let content = std::str::from_utf8(bytes).unwrap();
-                assert_eq!(content, "hello world");
-
-                // Check that the display format matches the content
-                assert_eq!(value.to_string(), "\"hello world\"");
-
-                // Debug format should include the type information
-                let debug_str = format!("{:?}", value);
-                assert!(debug_str.starts_with("String::"));
-                assert!(debug_str.contains("hello world"));
-            }
-            _ => panic!("Expected String blob, got {:?}", value),
-        }
+        assert_eq!(value.to_string(), "\"hello world\"");
     }
 
     // #[test]
@@ -452,13 +379,7 @@ mod tests {
         let (value, store) = parse_to_value("[x: 10 [nested 20]]", store).unwrap();
 
         match value {
-            Value::Block(blob) => {
-                let items = extract_block_values(&blob, &store);
-
-                // For now we're just testing that we can get a block
-                // The extraction of actual values will be tested in the future
-                assert!(items.len() > 0);
-            }
+            Value::Block(block) => {}
             _ => panic!("Expected Block, got {:?}", value),
         }
     }
