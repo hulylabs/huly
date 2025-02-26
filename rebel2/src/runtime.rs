@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Blob, BlobStore, Block, CoreError, Value, WordKind};
+use crate::core::{Blob, BlobStore, Block, CoreError, Value, Values, WordKind};
 use crate::parse::Collector;
 use smol_str::SmolStr;
 use std::collections::HashMap;
@@ -35,41 +35,40 @@ where
         }
     }
 
-    fn find_word(&self, symbol: &SmolStr) -> Option<Value> {
-        self.system_words.get(symbol).cloned()
+    fn find_word(&self, symbol: &SmolStr) -> Result<&Value, CoreError> {
+        self.system_words.get(symbol).ok_or(CoreError::WordNotFound)
     }
 }
 
 //
+
+enum Op {
+    SetWord,
+    CallNative,
+    CallFunc,
+}
 
 struct Process<'a, T> {
     runtime: &'a mut Runtime<T>,
     block: Block,
     ip: usize,
     stack: Vec<Value>,
-    call_stack: Vec<(Blob, usize)>,
+    call_stack: Vec<(Block, usize)>,
 }
 
 impl<'a, T> Process<'a, T>
 where
     T: BlobStore,
 {
-    fn new(runtime: &'a mut Runtime<T>, block: Block) -> Self {
-        Process {
+    fn new(runtime: &'a mut Runtime<T>, block: Block) -> Result<Self, CoreError> {
+        Ok(Process {
             runtime,
             block,
             ip: 0,
             stack: Vec::new(),
             call_stack: Vec::new(),
-        }
+        })
     }
-
-    // fn get_blob_data(&'a self, blob: &'a Blob) -> Option<&'a [u8]> {
-    //     match blob {
-    //         Blob::Inline(size, data) => data.get(..*size as usize),
-    //         Blob::External(hash) => self.runtime.blobs.get(hash).ok(),
-    //     }
-    // }
 
     fn next(&mut self) -> Option<Value> {
         self.block
@@ -77,13 +76,21 @@ where
             .inspect(|_| self.ip += 1)
     }
 
-    // fn next_value(&mut self) -> Option<Value> {
+    // fn next_value(&mut self) -> Result<Value, CoreError> {
     //     while let Some(value) = self.next() {
     //         // resolve value
-    //         let value = match value {
-    //             Value::Word(symbol) => self.runtime.find_word(&symbol)?,
-    //             _ => value.clone(),
+    //         let resolved = match value {
+    //             Value::Word(symbol) => {
+    //                 let bound = self.runtime.find_word(&symbol)?;
+    //                 match bound {
+    //                     Value::Block(block) => Value::Block(block.clone()),
+    //                     _ => bound.clone(),
+    //                 }
+    //             }
+    //             _ => &value,
     //         };
+
+    //         // translate into operation
 
     //         return Some(value);
 
