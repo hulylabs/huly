@@ -2,7 +2,6 @@
 
 use smol_str::SmolStr;
 use std::array::TryFromSliceError;
-use std::io::IoSlice;
 use std::marker::PhantomData;
 use thiserror::Error;
 
@@ -114,28 +113,26 @@ pub enum WordKind {
 }
 
 impl WordKind {
-    fn write<W: std::io::Write>(
-        self,
-        write: &mut W,
-        tag: u8,
-        symbol: &SmolStr,
-    ) -> Result<(), CoreError> {
+    fn write(self, dst: &mut [u8], tag: u8, symbol: &SmolStr) -> Option<usize> {
         if symbol.len() > 0xff {
-            return Err(CoreError::SymbolTooLong);
+            None
+        } else {
+            dst.get_mut(0..2).map(|bytes| {
+                bytes[0] = tag | (self as u8) << 3;
+                bytes[1] = symbol.len() as u8;
+            })?;
+            dst.get_mut(2..2 + symbol.len())
+                .map(|bytes| bytes.copy_from_slice(symbol.as_bytes()))?;
+            Some(2 + symbol.len())
         }
-        let bytes = symbol.as_bytes();
-        write.write_vectored(&[
-            IoSlice::new(&[tag | self as u8, symbol.len() as u8]),
-            IoSlice::new(bytes),
-        ])?;
-        Ok(())
     }
 
     fn load(data: &[u8]) -> Option<SmolStr> {
         data.split_first().and_then(|(len, data)| {
             let len = *len as usize;
             let bytes = data.get(..len)?;
-            std::str::from_utf8(bytes).ok().map(SmolStr::from)
+            let str = unsafe { std::str::from_utf8_unchecked(bytes) };
+            Some(SmolStr::from(str))
         })
     }
 }
@@ -202,16 +199,26 @@ impl Blob {
         }
     }
 
-    fn write<W: std::io::Write>(&self, write: &mut W, tag: u8) -> Result<(), CoreError> {
-        let _ = match self {
-            Blob::Inline(inline) => write.write_vectored(&[
-                IoSlice::new(&[tag, inline.size]),
-                IoSlice::new(inline.as_slice()),
-            ])?,
-            Blob::External(hash) => write
-                .write_vectored(&[IoSlice::new(&[tag | Self::EXTERNAL]), IoSlice::new(hash)])?,
-        };
-        Ok(())
+    fn write(&self, dst: &mut [u8], tag: u8) -> Option<usize> {
+        match self {
+            Blob::Inline(inline) => {
+                let size = inline.size as usize;
+                dst.get_mut(0..2).map(|bytes| {
+                    bytes[0] = tag;
+                    bytes[1] = inline.size;
+                })?;
+                dst.get_mut(2..2 + size)
+                    .map(|bytes| bytes.copy_from_slice(inline.as_slice()))?;
+                Some(2 + size)
+            }
+            Blob::External(hash) => {
+                dst.get_mut(0..1)
+                    .map(|bytes| bytes[0] = tag | Self::EXTERNAL)?;
+                dst.get_mut(1..33)
+                    .map(|bytes| bytes.copy_from_slice(hash))?;
+                Some(33)
+            }
+        }
     }
 }
 
@@ -230,39 +237,6 @@ pub trait BlobStore {
             self.put(data).map(Blob::External)
         }
     }
-
-    fn create_block<T: BlobStore>(
-        &mut self,
-        data: &[u8],
-        offsets: &[usize],
-    ) -> Result<Block, CoreError> {
-        let min_size = 1 + data.len() + offsets.len();
-        if min_size <= INLINE_MAX {
-            let mut container = [0; INLINE_MAX];
-            container[0] = offsets.len() as u8;
-            container[1..data.len() + 1].copy_from_slice(data);
-            container
-                .iter_mut()
-                .skip(data.len() + 1)
-                .zip(offsets.iter().rev())
-                .for_each(|(i, offset)| {
-                    *i = *offset as u8;
-                });
-            Ok(Block(Blob::Inline(
-                Inline::new(min_size, &container).ok_or(CoreError::InternalError)?,
-            )))
-        } else {
-            let size = 4 * 1 + data.len() + 4 * offsets.len();
-            let mut blob_data = Vec::with_capacity(size);
-            blob_data.extend_from_slice(&u32::to_le_bytes(offsets.len() as u32));
-            blob_data.extend_from_slice(data);
-            for offset in offsets.iter().rev() {
-                blob_data.extend_from_slice(&u32::to_le_bytes(*offset as u32));
-            }
-            let hash = self.put(&blob_data)?;
-            Ok(Block(Blob::External(hash)))
-        }
-    }
 }
 
 //
@@ -277,6 +251,50 @@ impl Block {
             Blob::External(hash) => {
                 let data = store.get(hash).ok()?;
                 Array::<&[u8], u32>::new(data).get(index)
+            }
+        }
+    }
+
+    pub fn new_inline(values: &[Value]) -> Option<Self> {
+        let mut container = [0; INLINE_MAX];
+        container[0] = values.len() as u8;
+
+        let mut data_ptr = 1;
+        let mut offset_ptr = INLINE_MAX;
+
+        for item in values.iter() {
+            offset_ptr -= 1;
+            container[offset_ptr] = data_ptr as u8;
+            data_ptr += item.write(&mut container[data_ptr..])?;
+            if data_ptr > offset_ptr {
+                return None;
+            }
+        }
+
+        container.copy_within(offset_ptr..offset_ptr + values.len(), data_ptr);
+
+        Inline::new(data_ptr + values.len(), &container)
+            .map(Blob::Inline)
+            .map(Block)
+    }
+
+    pub fn new<T: BlobStore>(store: &mut T, values: &[Value]) -> Result<Self, CoreError> {
+        match Self::new_inline(values) {
+            Some(block) => Ok(block),
+            None => {
+                let mut buf = Box::new([0u8; 65536]);
+                let mut blob = Vec::new();
+                let mut offsets = Vec::new();
+                blob.extend_from_slice(&u32::to_le_bytes(values.len() as u32));
+                for value in values.iter() {
+                    offsets.push(blob.len());
+                    let len = value.write(&mut buf[..]).ok_or(CoreError::OutOfBounds)?;
+                    blob.extend_from_slice(&buf[..len]);
+                }
+                for offset in offsets.iter().rev() {
+                    blob.extend_from_slice(&u32::to_le_bytes(*offset as u32));
+                }
+                Ok(Block(Blob::External(store.put(&blob)?)))
             }
         }
     }
@@ -314,37 +332,6 @@ pub enum Value {
     SetWord(SmolStr),
 }
 
-/// Display format is designed for end users seeing the values in an interpreter.
-/// It is more concise and readable, more like what a user would expect to see.
-///
-/// Note: This implementation can only display inner values for inline blocks.
-/// For full block display that works with both inline and external blocks,
-/// use a BlobStore implementation's format_block_display method.
-impl std::fmt::Display for Value {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::None => write!(f, "none"),
-            Self::Int(i) => write!(f, "{}", i),
-            Self::Block(block) => write!(f, "{}", block),
-            Self::String(blob) => match blob {
-                Blob::Inline(inline) => {
-                    if let Ok(s) = std::str::from_utf8(inline.as_slice()) {
-                        write!(f, "\"{}\"", s)
-                    } else {
-                        write!(f, "\"<binary data>\"")
-                    }
-                }
-                Blob::External(_) => {
-                    // For external strings, we just indicate it's a string
-                    write!(f, "\"...\"")
-                }
-            },
-            Self::Word(word) => write!(f, "{}", word),
-            Self::SetWord(word) => write!(f, "{}:", word),
-        }
-    }
-}
-
 impl Value {
     const TAG_INT: u8 = 0;
     const TAG_BLOCK: u8 = 1;
@@ -377,21 +364,52 @@ impl Value {
         }
     }
 
-    pub fn write<W: std::io::Write>(&self, write: &mut W) -> Result<(), CoreError> {
+    pub fn write(&self, dst: &mut [u8]) -> Option<usize> {
         match self {
-            Self::None => write.write_all(&[Self::TAG_NONE]).map_err(Into::into),
-            Self::Int(value) => {
-                let mut buf = [0u8; 9];
-                buf[0] = Self::TAG_INT;
+            Self::None => dst.get_mut(0).map(|byte| {
+                *byte = Self::TAG_NONE;
+                1
+            }),
+            Self::Int(value) => dst.get_mut(0..9).map(|bytes| {
+                bytes[0] = Self::TAG_INT;
                 for i in 0..8 {
-                    buf[8 - i] = (value >> (i * 8)) as u8;
+                    bytes[8 - i] = (value >> (i * 8)) as u8;
                 }
-                write.write_all(&buf).map_err(Into::into)
-            }
-            Self::Block(block) => block.0.write(write, Self::TAG_BLOCK),
-            Self::String(blob) => blob.write(write, Self::TAG_STRING),
-            Self::Word(word) => WordKind::Word.write(write, Self::TAG_WORD, word),
-            Self::SetWord(word) => WordKind::SetWord.write(write, Self::TAG_WORD, word),
+                9
+            }),
+            Self::Block(block) => block.0.write(dst, Self::TAG_BLOCK),
+            Self::String(blob) => blob.write(dst, Self::TAG_STRING),
+            Self::Word(word) => WordKind::Word.write(dst, Self::TAG_WORD, word),
+            Self::SetWord(word) => WordKind::SetWord.write(dst, Self::TAG_WORD, word),
+        }
+    }
+
+    pub fn new_block<T: BlobStore>(store: &mut T, values: &[Value]) -> Result<Self, CoreError> {
+        Block::new(store, values).map(Self::Block)
+    }
+}
+
+impl std::fmt::Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::None => write!(f, "none"),
+            Self::Int(i) => write!(f, "{}", i),
+            Self::Block(block) => write!(f, "{}", block),
+            Self::String(blob) => match blob {
+                Blob::Inline(inline) => {
+                    if let Ok(s) = std::str::from_utf8(inline.as_slice()) {
+                        write!(f, "\"{}\"", s)
+                    } else {
+                        write!(f, "\"<binary data>\"")
+                    }
+                }
+                Blob::External(_) => {
+                    // For external strings, we just indicate it's a string
+                    write!(f, "\"...\"")
+                }
+            },
+            Self::Word(word) => write!(f, "{}", word),
+            Self::SetWord(word) => write!(f, "{}:", word),
         }
     }
 }
@@ -402,11 +420,12 @@ pub fn load_value(data: &[u8]) -> Option<Value> {
     Value::load(data)
 }
 
+//
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    /// Helper to create an inline blob containing a string
     fn create_string_blob(s: &str) -> Blob {
         let bytes = s.as_bytes();
         let len = bytes.len();
@@ -414,7 +433,6 @@ mod tests {
         Blob::Inline(inline)
     }
 
-    /// Helper to create an external blob with a mock hash
     fn create_external_blob() -> Blob {
         let mut hash = [0u8; HASH_SIZE];
         for i in 0..HASH_SIZE {
@@ -425,7 +443,6 @@ mod tests {
 
     #[test]
     fn test_display_basic_values() {
-        // Test display for basic values
         assert_eq!(Value::None.to_string(), "none");
         assert_eq!(Value::Int(42).to_string(), "42");
         assert_eq!(Value::Word(SmolStr::new("hello")).to_string(), "hello");
@@ -434,30 +451,20 @@ mod tests {
 
     #[test]
     fn test_display_string_values() {
-        // Test display for string values
         let empty_string = Value::String(create_string_blob(""));
         let short_string = Value::String(create_string_blob("hello"));
         let external_string = Value::String(create_external_blob());
 
-        // Check Display format for end users
         assert_eq!(empty_string.to_string(), "\"\"");
         assert_eq!(short_string.to_string(), "\"hello\"");
         assert_eq!(external_string.to_string(), "\"...\"");
     }
 
-    // #[test]
-    // fn test_display_block_values() {
-    //     let inline_block = Value::Block(Blob::Inline(Inline::new(0, &[]).unwrap()));
-    //     let external_block = Value::Block(create_external_blob());
+    #[test]
+    fn test_display_block_values() {
+        let block_items = vec![Value::Int(1), Value::Int(2), Value::Int(3)];
 
-    //     // Check Display format for end users
-    //     let inline_str = inline_block.to_string();
-    //     let external_str = external_block.to_string();
-
-    //     // All blocks should at least have brackets
-    //     assert!(inline_str.starts_with("["));
-    //     assert!(inline_str.ends_with("]"));
-    //     assert!(external_str.starts_with("["));
-    //     assert!(external_str.ends_with("]"));
-    // }
+        let block = Block::new_inline(&block_items).unwrap();
+        println!("block: {}", block);
+    }
 }
