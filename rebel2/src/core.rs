@@ -264,14 +264,23 @@ impl Block {
 
         for item in values.iter() {
             offset_ptr -= 1;
-            container[offset_ptr] = data_ptr as u8;
-            data_ptr += item.write(&mut container[data_ptr..])?;
+            container
+                .get_mut(offset_ptr)
+                .map(|offset_ptr| *offset_ptr = data_ptr as u8)?;
+            data_ptr += container
+                .get_mut(data_ptr..)
+                .and_then(|data| item.write(data))?;
             if data_ptr > offset_ptr {
                 return None;
             }
         }
 
-        container.copy_within(offset_ptr..offset_ptr + values.len(), data_ptr);
+        for i in 0..values.len() {
+            if data_ptr + i >= INLINE_MAX || offset_ptr + i >= INLINE_MAX {
+                return None;
+            }
+            container[data_ptr + i] = container[offset_ptr + i];
+        }
 
         Inline::new(data_ptr + values.len(), &container)
             .map(Blob::Inline)
@@ -418,6 +427,10 @@ impl std::fmt::Display for Value {
 
 pub fn load_value(data: &[u8]) -> Option<Value> {
     Value::load(data)
+}
+
+pub fn create_block(values: &[Value]) -> Option<Value> {
+    Block::new_inline(values).map(Value::Block)
 }
 
 //
