@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Blob, BlobStore, CoreError, Hash, Value, WordKind, HASH_SIZE};
+use crate::core::{Blob, BlobStore, CoreError, Hash, Value, WordKind};
 use crate::parse::{Collector, Parser};
 use smol_str::SmolStr;
 use std::collections::HashMap;
