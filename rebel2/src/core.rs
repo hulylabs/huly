@@ -42,7 +42,7 @@ struct ArrayIter<'a, T, I> {
     index: usize,
 }
 
-impl<'a, T, I> Iterator for ArrayIter<'a, T, I>
+impl<T, I> Iterator for ArrayIter<'_, T, I>
 where
     T: AsRef<[u8]>,
 {
@@ -351,7 +351,7 @@ impl Value {
     const OPTION_MASK: u8 = 0xf0;
 
     fn load(data: &[u8]) -> Option<Self> {
-        let header = data.get(0).copied()?;
+        let header = data.first().copied()?;
         let tag = header & 0b111;
         match tag {
             Self::TAG_NONE => Some(Self::None),

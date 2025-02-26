@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Blob, BlobStore, Block, CoreError, Value, WordKind, INLINE_MAX};
+use crate::core::{Blob, BlobStore, Block, CoreError, Value, WordKind};
 use crate::parse::Collector;
 use smol_str::SmolStr;
 use std::collections::HashMap;
@@ -166,7 +166,8 @@ where
         let block_start = self.ops.pop().ok_or(CoreError::InternalError)?;
         let block_items = self.parse.drain(block_start..).collect::<Vec<Value>>();
         let block = Value::new_block(&mut self.module.blobs, &block_items)?;
-        Ok(self.parse.push(block))
+        self.parse.push(block);
+        Ok(())
     }
 }
 
