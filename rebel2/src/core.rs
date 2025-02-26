@@ -104,6 +104,24 @@ where
     }
 }
 
+pub trait Values {
+    fn len(&self) -> Option<usize>;
+    fn get(&self, index: usize) -> Option<Value>;
+}
+
+impl<T, I> Values for Array<T, I>
+where
+    T: AsRef<[u8]>,
+{
+    fn len(&self) -> Option<usize> {
+        Array::len(self)
+    }
+
+    fn get(&self, index: usize) -> Option<Value> {
+        Array::get(self, index)
+    }
+}
+
 //
 
 #[derive(Debug, Clone)]
@@ -245,6 +263,16 @@ pub trait BlobStore {
 pub struct Block(Blob);
 
 impl Block {
+    pub fn values<'a, T: BlobStore>(
+        &'a self,
+        store: &'a T,
+    ) -> Result<Box<dyn Values + 'a>, CoreError> {
+        match &self.0 {
+            Blob::Inline(inline) => Ok(Box::new(Array::<&'a [u8], u8>::new(inline.as_slice()))),
+            Blob::External(hash) => Ok(Box::new(Array::<&'a [u8], u32>::new(store.get(hash)?))),
+        }
+    }
+
     pub fn get<T: BlobStore>(&self, store: &T, index: usize) -> Option<Value> {
         match &self.0 {
             Blob::Inline(inline) => Array::<&[u8], u8>::new(inline.as_slice()).get(index),
@@ -478,6 +506,6 @@ mod tests {
         let block_items = vec![Value::Int(1), Value::Int(2), Value::Int(3)];
 
         let block = Block::new_inline(&block_items).unwrap();
-        println!("block: {}", block);
+        assert_eq!(block.to_string(), "[1 2 3]");
     }
 }

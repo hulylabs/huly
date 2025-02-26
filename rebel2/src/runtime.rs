@@ -299,7 +299,7 @@ mod tests {
         let store = MemoryBlobStore::new();
 
         let (value, store) = parse_to_value("[hello 42]", store).unwrap();
-        println!("value: {}", value);
+        assert_eq!(value.to_string(), "[hello 42]");
     }
 
     #[test]
