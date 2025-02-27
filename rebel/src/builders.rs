@@ -78,8 +78,8 @@ where
         self.with_value(name, Value::None)
     }
     
-    /// Build the context and return its offset
-    pub fn build(self) -> Result<Offset, CoreError> {
+    /// Build the context and return a Value::Context
+    pub fn build(self) -> Result<Value, CoreError> {
         // Create the context
         let ctx_offset = self.heap.alloc_context(self.size).ok_or(CoreError::OutOfMemory)?;
         
@@ -109,7 +109,7 @@ where
             ctx.put(symbol, value).ok_or(CoreError::OutOfMemory)?;
         }
         
-        Ok(ctx_offset)
+        Ok(Value::Context(ctx_offset))
     }
 }
 
@@ -177,8 +177,8 @@ where
         self.with_value(Value::Word(word.to_string()))
     }
     
-    /// Build the block and return its offset
-    pub fn build(self) -> Result<Offset, CoreError> {
+    /// Build the block and return a Value::Block
+    pub fn build(self) -> Result<Value, CoreError> {
         // First, convert each value to its VM representation
         let mut vm_words = Vec::new();
         
@@ -191,7 +191,7 @@ where
         // Allocate a block of the right size and store all the values
         let block_offset = self.heap.alloc_block(&vm_words).ok_or(CoreError::OutOfMemory)?;
         
-        Ok(block_offset)
+        Ok(Value::Block(block_offset))
     }
 }
 
@@ -213,7 +213,7 @@ mod tests {
         let mut module = setup_module();
         
         // Create a context with the generic builder
-        let ctx_offset = {
+        let context_value = {
             let heap = module.get_heap_mut();
             ContextBuilder::new(heap, 10)
                 .with("age", 42)
@@ -222,6 +222,12 @@ mod tests {
                 .with("none", Value::None)
                 .build()
                 .expect("Failed to build context")
+        };
+        
+        // Extract the context offset
+        let ctx_offset = match context_value {
+            Value::Context(offset) => offset,
+            _ => panic!("Expected Context value"),
         };
         
         // Look up symbols to verify values
@@ -291,27 +297,37 @@ mod tests {
         
         // Create a block and contexts
         let block_data = [1, 2, 3, 4, 5];
-        let (block_offset, parent_ctx, ctx_offset) = {
+        let (block_offset, parent_ctx_offset, ctx_offset) = {
             let heap = module.get_heap_mut();
             
             // Create a block
             let block_offset = heap.alloc_block(&block_data).expect("Failed to create block");
             
             // Create a parent context
-            let parent_ctx = ContextBuilder::new(heap, 5)
+            let parent_ctx_value = ContextBuilder::new(heap, 5)
                 .with("value", 100)
                 .build()
                 .expect("Failed to build parent context");
+                
+            let parent_ctx_offset = match parent_ctx_value {
+                Value::Context(offset) => offset,
+                _ => panic!("Expected Context value"),
+            };
             
             // Create a context with references using the generic with method
-            let ctx_offset = ContextBuilder::new(heap, 10)
+            let ctx_value = ContextBuilder::new(heap, 10)
                 .with("block", BlockOffset(block_offset))
-                .with("parent", parent_ctx)  // Offset is treated as Context by default
+                .with("parent", parent_ctx_offset)  // Offset is treated as Context by default
                 .with("ref", WordRef("value".to_string()))
                 .build()
                 .expect("Failed to build context");
                 
-            (block_offset, parent_ctx, ctx_offset)
+            let ctx_offset = match ctx_value {
+                Value::Context(offset) => offset,
+                _ => panic!("Expected Context value"),
+            };
+                
+            (block_offset, parent_ctx_offset, ctx_offset)
         };
         
         // Look up symbols to verify values
@@ -354,7 +370,7 @@ mod tests {
             // Verify parent context reference
             let parent_value = ctx.get(parent_sym).expect("Failed to get parent");
             assert_eq!(parent_value[0], Value::TAG_CONTEXT);
-            assert_eq!(parent_value[1], parent_ctx);
+            assert_eq!(parent_value[1], parent_ctx_offset);
             
             // Verify word reference
             let ref_value = ctx.get(ref_sym).expect("Failed to get ref");
@@ -368,7 +384,7 @@ mod tests {
         let mut module = setup_module();
         
         // Create a block with the block builder
-        let block_offset = {
+        let block_value = {
             let heap = module.get_heap_mut();
             BlockBuilder::new(heap)
                 .with_int(42)
@@ -377,6 +393,12 @@ mod tests {
                 .with_none()
                 .build()
                 .expect("Failed to build block")
+        };
+        
+        // Extract the block offset
+        let block_offset = match block_value {
+            Value::Block(offset) => offset,
+            _ => panic!("Expected Block value"),
         };
         
         // Verify the block contents
@@ -410,39 +432,54 @@ mod tests {
         let mut module = setup_module();
         
         // Create nested blocks and contexts
-        let (inner_block, ctx, outer_block) = {
+        let (inner_block_offset, ctx_offset, outer_block_offset) = {
             let heap = module.get_heap_mut();
             
             // Create inner block
-            let inner_block = BlockBuilder::new(heap)
+            let inner_block_value = BlockBuilder::new(heap)
                 .with_int(10)
                 .with_string("Inner")
                 .build()
                 .expect("Failed to build inner block");
                 
+            let inner_block_offset = match inner_block_value {
+                Value::Block(offset) => offset,
+                _ => panic!("Expected Block value"),
+            };
+                
             // Create a context
-            let ctx = ContextBuilder::new(heap, 5)
+            let ctx_value = ContextBuilder::new(heap, 5)
                 .with("x", 100)
                 .with("y", 200)
                 .build()
                 .expect("Failed to build context");
                 
+            let ctx_offset = match ctx_value {
+                Value::Context(offset) => offset,
+                _ => panic!("Expected Context value"),
+            };
+                
             // Create outer block that references inner structures
-            let outer_block = BlockBuilder::new(heap)
+            let outer_block_value = BlockBuilder::new(heap)
                 .with_int(42)
-                .with_block(inner_block)      // Reference to inner block
-                .with_context(ctx)            // Reference to context
+                .with(inner_block_value)      // Reference to inner block
+                .with(ctx_value)              // Reference to context
                 .with_word("print")           // Word reference
                 .build()
                 .expect("Failed to build outer block");
                 
-            (inner_block, ctx, outer_block)
+            let outer_block_offset = match outer_block_value {
+                Value::Block(offset) => offset,
+                _ => panic!("Expected Block value"),
+            };
+                
+            (inner_block_offset, ctx_offset, outer_block_offset)
         };
         
         // Verify the outer block contents
         {
             let heap = module.get_heap_mut();
-            let block_data = heap.get_block(outer_block).expect("Failed to get outer block");
+            let block_data = heap.get_block(outer_block_offset).expect("Failed to get outer block");
             
             // The outer block should contain 4 values (8 words)
             assert_eq!(block_data.len(), 8);
@@ -453,11 +490,11 @@ mod tests {
             
             // Check block reference
             assert_eq!(block_data[2], Value::TAG_BLOCK);
-            assert_eq!(block_data[3], inner_block);
+            assert_eq!(block_data[3], inner_block_offset);
             
             // Check context reference
             assert_eq!(block_data[4], Value::TAG_CONTEXT);
-            assert_eq!(block_data[5], ctx);
+            assert_eq!(block_data[5], ctx_offset);
             
             // Check word reference
             assert_eq!(block_data[6], Value::TAG_WORD);

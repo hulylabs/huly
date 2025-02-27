@@ -43,19 +43,27 @@ The recommended way to create contexts in RebelDB is using the `ContextBuilder` 
 use rebel::{ContextBuilder, Value, BlockOffset, WordRef};
 
 // Basic value types use automatic type inference
-let ctx = ContextBuilder::new(heap, 10)
+let ctx_value = ContextBuilder::new(heap, 10)
     .with("age", 42)                        // i32 -> Int
     .with("name", "Test User")              // &str -> String
     .with("active", true)                   // bool -> Bool
     .with("none", Value::None)              // Direct value
-    .build()?;
+    .build()?;                              // Returns Value::Context
+
+// The build() method returns a Value variant (Value::Context)
+match ctx_value {
+    Value::Context(offset) => println!("Context created at offset {}", offset),
+    _ => panic!("Expected Context value"),
+}
 
 // For references to other VM objects, use wrapper types:
-let ctx = ContextBuilder::new(heap, 10)
+let parent_ctx_value = ContextBuilder::new(heap, 5).with("x", 100).build()?;
+
+let ctx_value = ContextBuilder::new(heap, 10)
     // Block references need BlockOffset wrapper
     .with("code", BlockOffset(block_offset))
-    // Context references use Offset directly
-    .with("parent", parent_ctx)
+    // Context references can use Value::Context directly
+    .with("parent", parent_ctx_value)
     // Word references use WordRef wrapper
     .with("symbol", WordRef("some_word".to_string()))
     .build()?;
@@ -68,25 +76,31 @@ For creating blocks, use the `BlockBuilder` API:
 use rebel::{BlockBuilder, Value, BlockOffset, WordRef};
 
 // Create a simple block with values
-let block = BlockBuilder::new(heap)
+let block_value = BlockBuilder::new(heap)
     .with_int(42)
-    .with_string("Hello")
+    .with_string("Hello") 
     .with_bool(true)
     .with_none()
-    .build()?;
+    .build()?;                        // Returns Value::Block
+
+// The build() method returns a Value variant (Value::Block)
+match block_value {
+    Value::Block(offset) => println!("Block created at offset {}", offset),
+    _ => panic!("Expected Block value"),
+}
 
 // Create nested blocks
-let inner_block = BlockBuilder::new(heap)
+let inner_block_value = BlockBuilder::new(heap)
     .with_int(10)
     .with_string("Inner")
     .build()?;
     
 // Outer block that references the inner block
-let outer_block = BlockBuilder::new(heap)
+let outer_block_value = BlockBuilder::new(heap)
     .with_int(42)
-    .with_block(inner_block)      // Reference to inner block
-    .with_context(ctx)            // Reference to context
-    .with_word("print")           // Word reference
+    .with(inner_block_value)         // Pass Value directly 
+    .with(ctx_value)                 // Pass Value directly
+    .with_word("print")              // Word reference
     .build()?;
 ```
 
@@ -100,11 +114,12 @@ Both builders use the generic `with<T>()` method which accepts anything implemen
 - WordRef(String) → Word VM value
 - Value → Direct value
 
-## Repository Rules
+## Commit Rules
 
 - We're using git
 - Always sign-off commits
 - Only commit code that compiles and all tests succeed
+- Make sure that clippy is happy before committing
 
 ## Preserve Knowledge
 
