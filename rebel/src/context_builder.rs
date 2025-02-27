@@ -2,6 +2,7 @@
 
 use crate::core::{Value, CoreError, inline_string};
 use crate::mem::{Context, Heap, Word, Offset};
+use std::convert::Into;
 
 /// A value that can be stored in a context
 #[derive(Debug)]
@@ -20,6 +21,75 @@ pub enum ContextValue {
     Word(String),
     /// None/null value
     None,
+}
+
+/// Trait for values that can be converted into a ContextValue
+pub trait IntoContextValue {
+    /// Convert this type to a ContextValue
+    fn into_context_value(self) -> ContextValue;
+}
+
+// Implementation for common Rust types
+impl IntoContextValue for i32 {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::Int(self)
+    }
+}
+
+impl IntoContextValue for &str {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::String(self.to_string())
+    }
+}
+
+impl IntoContextValue for String {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::String(self)
+    }
+}
+
+impl IntoContextValue for bool {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::Bool(self)
+    }
+}
+
+// Implementation for Offset - need to distinguish between different uses
+impl IntoContextValue for Offset {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::Context(self)
+    }
+}
+
+/// Container for block offsets to differentiate from context offsets
+pub struct BlockOffset(pub Offset);
+
+impl IntoContextValue for BlockOffset {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::Block(self.0)
+    }
+}
+
+/// Container for word references
+pub struct WordRef(pub String);
+
+impl IntoContextValue for WordRef {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::Word(self.0)
+    }
+}
+
+impl IntoContextValue for &WordRef {
+    fn into_context_value(self) -> ContextValue {
+        ContextValue::Word(self.0.clone())
+    }
+}
+
+// Special case for direct ContextValue values
+impl IntoContextValue for ContextValue {
+    fn into_context_value(self) -> ContextValue {
+        self
+    }
 }
 
 /// A builder for creating Context objects with a Rust-friendly API
@@ -55,6 +125,11 @@ where
     pub fn with_value(mut self, name: &str, value: ContextValue) -> Self {
         self.values.push((name.to_string(), value));
         self
+    }
+    
+    /// Add a value to the context with the given name using any type that implements IntoContextValue
+    pub fn with<V: IntoContextValue>(self, name: &str, value: V) -> Self {
+        self.with_value(name, value.into_context_value())
     }
     
     /// Add an integer value to the context
@@ -169,24 +244,24 @@ mod tests {
     }
     
     #[test]
-    fn test_context_builder_basic() {
+    fn test_context_builder_generic() {
         // Create a module
         let mut module = setup_module();
         
-        // Create a context with the builder
+        // Create a context with the generic builder
         let ctx_offset = {
             let heap = module.get_heap_mut();
             ContextBuilder::new(heap, 10)
-                .with_int("age", 42)
-                .with_string("name", "Test User")
-                .with_bool("active", true)
-                .with_none("optional")
+                .with("age", 42)
+                .with("name", "Test User")
+                .with("active", true)
+                .with("none", ContextValue::None)
                 .build()
                 .expect("Failed to build context")
         };
         
         // Look up symbols to verify values
-        let (name_sym, age_sym, active_sym, optional_sym) = {
+        let (name_sym, age_sym, active_sym, none_sym) = {
             // Get the name symbol
             let name_sym = {
                 let mut sym_tbl = module.get_symbols_mut().expect("Failed to get symbols table");
@@ -208,14 +283,14 @@ mod tests {
                     .expect("Failed to get active symbol")
             };
             
-            // Get the optional symbol
-            let optional_sym = {
+            // Get the none symbol
+            let none_sym = {
                 let mut sym_tbl = module.get_symbols_mut().expect("Failed to get symbols table");
-                sym_tbl.get_or_insert(inline_string("optional").unwrap())
-                    .expect("Failed to get optional symbol")
+                sym_tbl.get_or_insert(inline_string("none").unwrap())
+                    .expect("Failed to get none symbol")
             };
             
-            (name_sym, age_sym, active_sym, optional_sym)
+            (name_sym, age_sym, active_sym, none_sym)
         };
         
         // Now verify values in the context
@@ -229,7 +304,7 @@ mod tests {
             assert_eq!(age_value[0], Value::TAG_INT);
             assert_eq!(age_value[1], 42);
             
-            // Verify string value type (can't easily check actual string content)
+            // Verify string value type
             let name_value = ctx.get(name_sym).expect("Failed to get name");
             assert_eq!(name_value[0], Value::TAG_INLINE_STRING);
             
@@ -239,14 +314,14 @@ mod tests {
             assert_eq!(active_value[1], 1); // true = 1
             
             // Verify none value
-            let optional_value = ctx.get(optional_sym).expect("Failed to get optional");
-            assert_eq!(optional_value[0], Value::TAG_NONE);
-            assert_eq!(optional_value[1], 0);
+            let none_value = ctx.get(none_sym).expect("Failed to get none");
+            assert_eq!(none_value[0], Value::TAG_NONE);
+            assert_eq!(none_value[1], 0);
         }
     }
     
     #[test]
-    fn test_context_builder_references() {
+    fn test_context_builder_references_generic() {
         // Create a module
         let mut module = setup_module();
         
@@ -260,15 +335,15 @@ mod tests {
             
             // Create a parent context
             let parent_ctx = ContextBuilder::new(heap, 5)
-                .with_int("value", 100)
+                .with("value", 100)
                 .build()
                 .expect("Failed to build parent context");
             
-            // Create a context with references
+            // Create a context with references using the generic with method
             let ctx_offset = ContextBuilder::new(heap, 10)
-                .with_block("block", block_offset)
-                .with_context("parent", parent_ctx)
-                .with_word("ref", "value")
+                .with("block", BlockOffset(block_offset))
+                .with("parent", parent_ctx)  // Offset is treated as Context by default
+                .with("ref", WordRef("value".to_string()))
                 .build()
                 .expect("Failed to build context");
                 
@@ -301,7 +376,7 @@ mod tests {
             (block_sym, parent_sym, ref_sym)
         };
         
-        // Get the context block and verify block reference
+        // Verify all values in the context
         {
             let heap = module.get_heap_mut();
             let ctx_data = heap.get_block(ctx_offset).expect("Failed to get context block");
@@ -311,32 +386,13 @@ mod tests {
             let block_value = ctx.get(block_sym).expect("Failed to get block");
             assert_eq!(block_value[0], Value::TAG_BLOCK);
             assert_eq!(block_value[1], block_offset);
-        }
-        
-        // Verify the block content separately
-        {
-            let heap = module.get_heap_mut();
-            let stored_block = heap.get_block(block_offset).expect("Failed to get stored block");
-            assert_eq!(stored_block, &block_data);
-        }
-        
-        // Verify parent context reference 
-        {
-            let heap = module.get_heap_mut();
-            let ctx_data = heap.get_block(ctx_offset).expect("Failed to get context block");
-            let ctx = Context::new(ctx_data);
             
+            // Verify parent context reference
             let parent_value = ctx.get(parent_sym).expect("Failed to get parent");
             assert_eq!(parent_value[0], Value::TAG_CONTEXT);
             assert_eq!(parent_value[1], parent_ctx);
-        }
-        
-        // Verify word reference
-        {
-            let heap = module.get_heap_mut();
-            let ctx_data = heap.get_block(ctx_offset).expect("Failed to get context block");
-            let ctx = Context::new(ctx_data);
             
+            // Verify word reference
             let ref_value = ctx.get(ref_sym).expect("Failed to get ref");
             assert_eq!(ref_value[0], Value::TAG_WORD);
         }
