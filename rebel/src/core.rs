@@ -47,8 +47,8 @@ pub enum Value {
     None,
     /// An integer value
     Int(i32),
-    /// A string value
-    String(String),
+    /// A string value - refers to a string stored in the heap
+    String(Offset),
     /// A boolean value
     Bool(bool),
     /// A reference to a context
@@ -80,15 +80,21 @@ impl IntoValue for i32 {
     }
 }
 
+// String types can't be directly converted to Value::String anymore
+// since they need to be allocated in the heap with Module::create_string.
+// Instead, users need to use the Module API for string creation.
+//
+// We keep a stub implementation that panics with a helpful message for better error reporting.
+
 impl IntoValue for &str {
     fn into_value(self) -> Value {
-        Value::String(self.to_string())
+        panic!("Cannot directly convert &str to Value, use Module::create_string instead: '{}'", self)
     }
 }
 
 impl IntoValue for String {
     fn into_value(self) -> Value {
-        Value::String(self)
+        panic!("Cannot directly convert String to Value, use Module::create_string instead: '{}'", self)
     }
 }
 
@@ -163,22 +169,11 @@ impl Value {
         match self {
             Value::None => Ok([Self::TAG_NONE, 0]),
             Value::Int(i) => Ok([Self::TAG_INT, *i as Word]),
-            Value::String(s) => {
-                // Try to create an inline string first (for strings <= 31 bytes)
-                if let Some(s_inline) = inline_string(s) {
-                    let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                    Ok([Self::TAG_INLINE_STRING, s_offset])
-                } else {
-                    // For longer strings, the caller should use Module::create_string instead
-                    // Here we just truncate since we can't access the blob store
-                    let truncated = s.chars().take(31).collect::<String>();
-                    let s_inline = inline_string(&truncated).ok_or(CoreError::StringTooLong)?;
-                    let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                    
-                    // Return with a warning in the tag - should only happen in tests
-                    eprintln!("Warning: to_vm_value called with long string without blob store access. String truncated.");
-                    Ok([Self::TAG_INLINE_STRING, s_offset])
-                }
+            Value::String(offset) => {
+                // String already has an offset to allocated VM representation
+                // Now we need to get the [tag, data] pair from that offset
+                let [tag, data] = heap.get(*offset).ok_or(CoreError::BoundsCheckFailed)?;
+                Ok([tag, data])
             },
             Value::Bool(b) => Ok([Self::TAG_BOOL, if *b { 1 } else { 0 }]),
             Value::Context(c) => Ok([Self::TAG_CONTEXT, *c]),

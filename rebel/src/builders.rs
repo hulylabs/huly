@@ -62,9 +62,19 @@ where
     }
     
     /// Add a string value to the context
+    /// 
+    /// NOTE: This operation can only create inline strings (≤31 bytes).
+    /// For longer strings, you must use module.create_string() and add the result to the context.
     pub fn with_string(self, name: &str, value: &str) -> Self {
-        // Use default Value::String, the to_vm_value method will handle blob storage if needed
-        self.with_value(name, Value::String(value.to_string()))
+        // Since we can't access a module here, we can only create inline strings
+        if value.len() > 31 {
+            panic!("String too long for inline storage. Use module.create_string() instead: '{}'", value);
+        }
+        
+        // We can't create a proper Value::String here, so we'll use a placeholder
+        // The actual string data will be properly handled in the build() method
+        // We use a special marker to indicate it's a raw string that needs processing
+        self.with_value(name, crate::core::Value::Word(format!("__RAW_STRING__:{}", value)))
     }
     
     /// Add a boolean value to the context
@@ -120,25 +130,27 @@ where
                 sym_tbl.get_or_insert(name_inline).ok_or(CoreError::SymbolTableFull)?
             };
             
-            // Convert the value to a VM representation - just use inline strings or simple values
+            // Convert the value to a VM representation
             let vm_value = match value {
                 Value::None => [Value::TAG_NONE, 0],
                 Value::Int(i) => [Value::TAG_INT, i as Word],
                 Value::Bool(b) => [Value::TAG_BOOL, if b { 1 } else { 0 }],
                 Value::Context(c) => [Value::TAG_CONTEXT, c],
                 Value::Block(b) => [Value::TAG_BLOCK, b],
-                Value::String(s) => {
-                    if let Some(s_inline) = inline_string(&s) {
-                        let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                        [Value::TAG_INLINE_STRING, s_offset]
-                    } else {
-                        // For long strings, we'll convert them to inline strings and truncate
-                        // This isn't ideal, but it's a workaround until we define a proper way to build modules
-                        let truncated = s.chars().take(31).collect::<String>();
-                        let s_inline = inline_string(&truncated).ok_or(CoreError::StringTooLong)?;
-                        let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                        [Value::TAG_INLINE_STRING, s_offset]
-                    }
+                // Special handling for our __RAW_STRING__ marker
+                Value::Word(w) if w.starts_with("__RAW_STRING__:") => {
+                    // Extract the actual string content
+                    let content = &w["__RAW_STRING__:".len()..];
+                    
+                    // Create inline string - we already checked length in with_string method
+                    let s_inline = inline_string(content).ok_or(CoreError::StringTooLong)?;
+                    let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
+                    [Value::TAG_INLINE_STRING, s_offset]
+                },
+                // Handle already processed string values from Module::create_string
+                Value::String(offset) => {
+                    // Just fetch the [tag, data] pair from the heap
+                    self.heap.get(offset).ok_or(CoreError::OutOfMemory)?
                 },
                 Value::Word(w) => {
                     let word_inline = inline_string(&w).ok_or(CoreError::StringTooLong)?;
@@ -204,9 +216,19 @@ where
     }
     
     /// Add a string value to the block
+    /// 
+    /// NOTE: This operation can only create inline strings (≤31 bytes).
+    /// For longer strings, you must use module.create_string() and add the result to the block.
     pub fn with_string(self, value: &str) -> Self {
-        // Use default Value::String, the to_vm_value method will handle blob storage if needed
-        self.with_value(Value::String(value.to_string()))
+        // Since we can't access a module here, we can only create inline strings
+        if value.len() > 31 {
+            panic!("String too long for inline storage. Use module.create_string() instead: '{}'", value);
+        }
+        
+        // We can't create a proper Value::String here, so we'll use a placeholder
+        // The actual string data will be properly handled in the build() method
+        // We use a special marker to indicate it's a raw string that needs processing
+        self.with_value(crate::core::Value::Word(format!("__RAW_STRING__:{}", value)))
     }
     
     /// Add a boolean value to the block
@@ -240,25 +262,27 @@ where
         let mut vm_words = Vec::new();
         
         for value in self.values {
-            // Convert the value to a VM representation - just use inline strings or simple values
+            // Convert the value to a VM representation
             let vm_value = match value {
                 Value::None => [Value::TAG_NONE, 0],
                 Value::Int(i) => [Value::TAG_INT, i as Word],
                 Value::Bool(b) => [Value::TAG_BOOL, if b { 1 } else { 0 }],
                 Value::Context(c) => [Value::TAG_CONTEXT, c],
                 Value::Block(b) => [Value::TAG_BLOCK, b],
-                Value::String(s) => {
-                    if let Some(s_inline) = inline_string(&s) {
-                        let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                        [Value::TAG_INLINE_STRING, s_offset]
-                    } else {
-                        // For long strings, we'll convert them to inline strings and truncate
-                        // This isn't ideal, but it's a workaround until we define a proper way to build modules
-                        let truncated = s.chars().take(31).collect::<String>();
-                        let s_inline = inline_string(&truncated).ok_or(CoreError::StringTooLong)?;
-                        let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                        [Value::TAG_INLINE_STRING, s_offset]
-                    }
+                // We have a raw string marker from with_string
+                Value::Word(w) if w.starts_with("__RAW_STRING__:") => {
+                    // Extract the actual string content
+                    let content = &w["__RAW_STRING__:".len()..];
+                    
+                    // Create inline string - we already checked length in with_string method
+                    let s_inline = inline_string(content).ok_or(CoreError::StringTooLong)?;
+                    let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
+                    [Value::TAG_INLINE_STRING, s_offset]
+                },
+                // Handle already processed string values from Module::create_string
+                Value::String(offset) => {
+                    // Just fetch the [tag, data] pair from the heap
+                    self.heap.get(offset).ok_or(CoreError::OutOfMemory)?
                 },
                 Value::Word(w) => {
                     let word_inline = inline_string(&w).ok_or(CoreError::StringTooLong)?;
@@ -306,12 +330,16 @@ mod tests {
         // Create a module
         let mut module = setup_module();
         
+        // Create a string name marker directly for testing
+        // Note: In real code, users should use module.create_string(), but for the test
+        // we can use the with_string method since it now handles the conversion
+        
         // Create a context with the generic builder
         let context_value = {
             let heap = module.get_heap_mut();
             ContextBuilder::new(heap)
                 .with("age", 42)
-                .with("name", "Test User")
+                .with_string("name", "Test User")  // Using the special with_string method
                 .with("active", true)
                 .with("none", Value::None)
                 .build()
@@ -482,7 +510,7 @@ mod tests {
             let heap = module.get_heap_mut();
             BlockBuilder::new(heap)
                 .with_int(42)
-                .with_string("Hello")
+                .with_string("Hello")  // Using the with_string method that creates a marker
                 .with_bool(true)
                 .with_none()
                 .build()
@@ -529,10 +557,10 @@ mod tests {
         let (inner_block_offset, ctx_offset, outer_block_offset) = {
             let heap = module.get_heap_mut();
             
-            // Create inner block
+            // Create inner block 
             let inner_block_value = BlockBuilder::new(heap)
                 .with_int(10)
-                .with_string("Inner")
+                .with_string("Inner")  // Using the with_string method that creates a marker
                 .build()
                 .expect("Failed to build inner block");
                 
