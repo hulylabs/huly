@@ -322,32 +322,40 @@ impl<R: Read> BinaryDeserializer<R> {
 
     /// Read a single value from the reader
     pub fn read_value(&mut self) -> Result<Value, BinaryDeserializerError> {
+        // Define tag constants for pattern matching
+        const TAG_NONE: u8 = Tag::TAG_NONE as u8;
+        const TAG_INT: u8 = Tag::TAG_INT as u8;
+        const TAG_INLINE_STRING: u8 = Tag::TAG_INLINE_STRING as u8;
+        const TAG_WORD: u8 = Tag::TAG_WORD as u8;
+        const TAG_SET_WORD: u8 = Tag::TAG_SET_WORD as u8;
+        const TAG_BLOCK: u8 = Tag::TAG_BLOCK as u8;
+        
         let tag = self.read_byte()?;
         
         match tag {
-            t if t == Tag::TAG_NONE as u8 => Ok(Value::None),
+            TAG_NONE => Ok(Value::None),
             
-            t if t == Tag::TAG_INT as u8 => {
+            TAG_INT => {
                 let value = self.read_varint()?;
                 Ok(Value::Int(value))
             },
             
-            t if t == Tag::TAG_INLINE_STRING as u8 => {
+            TAG_INLINE_STRING => {
                 let value = self.read_string()?;
                 Ok(Value::String(SmolStr::new(value)))
             },
             
-            t if t == Tag::TAG_WORD as u8 => {
+            TAG_WORD => {
                 let value = self.read_string()?;
                 Ok(Value::Word(SmolStr::new(value)))
             },
             
-            t if t == Tag::TAG_SET_WORD as u8 => {
+            TAG_SET_WORD => {
                 let value = self.read_string()?;
                 Ok(Value::SetWord(SmolStr::new(value)))
             },
             
-            t if t == Tag::TAG_BLOCK as u8 => {
+            TAG_BLOCK => {
                 let len = self.read_varint()?;
                 if len < 0 {
                     return Err(BinaryDeserializerError::DeserializeError("Invalid block length".into()));
