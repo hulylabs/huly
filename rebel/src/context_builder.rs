@@ -117,6 +117,7 @@ where
 mod tests {
     use super::*;
     use crate::core::{Module, Value};
+    use crate::{BlockOffset, WordRef};
     
     // Create a module to use for testing
     fn setup_module() -> Module<Box<[Word]>> {
