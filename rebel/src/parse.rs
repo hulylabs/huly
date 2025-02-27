@@ -1,6 +1,8 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::CoreError;
+use crate::core::{CoreError, Value, inline_string};
+use crate::mem::{Stack, Word, Offset};
+use crate::module::Module;
 use std::str::CharIndices;
 
 #[derive(Debug)]
@@ -180,4 +182,74 @@ where
         }
         Ok(())
     }
+}
+
+// P A R S E  C O L L E C T O R
+
+pub struct ParseCollector<'a, T> {
+    module: &'a mut Module<T>,
+    pub parse: Stack<[Word; 64]>,
+    ops: Stack<[Word; 32]>,
+}
+
+impl<'a, T> ParseCollector<'a, T> {
+    pub fn new(module: &'a mut Module<T>) -> Self {
+        Self {
+            module,
+            parse: Stack::new([0; 64]),
+            ops: Stack::new([0; 32]),
+        }
+    }
+}
+
+impl<T> Collector for ParseCollector<'_, T>
+where
+    T: AsMut<[Word]> + AsRef<[Word]>,
+{
+    fn string(&mut self, string: &str) -> Option<()> {
+        let offset = self.module.get_heap_mut().alloc(inline_string(string)?)?;
+        self.parse.push([Value::TAG_INLINE_STRING, offset])
+    }
+
+    fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
+        let symbol = inline_string(word)?;
+        let id = self.module.get_symbols_mut()?.get_or_insert(symbol)?;
+        let tag = match kind {
+            WordKind::Word => Value::TAG_WORD,
+            WordKind::SetWord => Value::TAG_SET_WORD,
+        };
+        self.parse.push([tag, id])
+    }
+
+    fn integer(&mut self, value: i32) -> Option<()> {
+        self.parse.push([Value::TAG_INT, value as u32])
+    }
+
+    fn begin_block(&mut self) -> Option<()> {
+        self.ops.push([self.parse.len()?])
+    }
+
+    fn end_block(&mut self) -> Option<()> {
+        let [bp] = self.ops.pop()?;
+        let block_data = self.parse.pop_all(bp)?;
+        let offset = self.module.get_heap_mut().alloc_block(block_data)?;
+        self.parse.push([Value::TAG_BLOCK, offset])
+    }
+}
+
+// Public parse function that can be used to parse a string into a block of code
+pub fn parse<T>(module: &mut Module<T>, code: &str) -> Result<Offset, CoreError> 
+where
+    T: AsMut<[Word]> + AsRef<[Word]>
+{
+    let mut collector = ParseCollector::new(module);
+    collector
+        .begin_block()
+        .ok_or(CoreError::ParseCollectorError)?;
+    Parser::new(code, &mut collector).parse()?;
+    collector
+        .end_block()
+        .ok_or(CoreError::ParseCollectorError)?;
+    let result = collector.parse.pop::<2>().ok_or(CoreError::InternalError)?;
+    Ok(result[1])
 }

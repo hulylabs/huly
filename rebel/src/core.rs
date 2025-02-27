@@ -1,8 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::boot::core_package;
-use crate::mem::{Context, Heap, Offset, Stack, Symbol, SymbolTable, Word};
-use crate::parse::{Collector, Parser, WordKind};
+use crate::mem::{Context, Heap, Offset, Stack, Symbol, Word};
+use crate::module::Module;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -204,118 +203,10 @@ pub fn inline_string(string: &str) -> Option<[u32; 8]> {
 
 // M O D U L E
 
-type NativeFn<T> = fn(module: &mut Exec<T>) -> Option<()>;
+pub type NativeFn<T> = fn(module: &mut Exec<T>) -> Option<()>;
 
-struct FuncDesc<T> {
-    func: NativeFn<T>,
-    arity: u32,
-}
-
-pub struct Module<T> {
-    heap: Heap<T>,
-    system_words: Offset,
-    functions: Vec<FuncDesc<T>>,
-}
-
-impl<T> Module<T> {
-    // const NULL: Offset = 0;
-    const SYMBOLS: Offset = 1;
-    // const CONTEXT: Offset = 2;
-
-    fn get_func(&self, index: u32) -> Option<&FuncDesc<T>> {
-        self.functions.get(index as usize)
-    }
-}
-
-impl<T> Module<T>
-where
-    T: AsRef<[Word]> + AsMut<[Word]>,
-{
-    pub fn init(data: T) -> Option<Self> {
-        let mut heap = Heap::new(data);
-        heap.init(3)?;
-
-        let system_words = heap.alloc_context(1024)?;
-
-        let mut module = Self {
-            heap,
-            system_words,
-            functions: Vec::new(),
-        };
-
-        let (symbols_addr, symbols_data) = module.heap.alloc_empty_block(1024)?;
-        SymbolTable::new(symbols_data).init()?;
-
-        module
-            .heap
-            .put(0, [0xdeadbeef, symbols_addr, system_words])?;
-        core_package(&mut module)?;
-        Some(module)
-    }
-
-    pub fn add_native_fn(&mut self, name: &str, func: NativeFn<T>, arity: u32) -> Option<()> {
-        let index = self.functions.len() as u32;
-        self.functions.push(FuncDesc { func, arity });
-        let symbol = inline_string(name)?;
-        let id = self.get_symbols_mut()?.get_or_insert(symbol)?;
-        let mut words = self
-            .heap
-            .get_block_mut(self.system_words)
-            .map(Context::new)?;
-        words.put(id, [Value::TAG_NATIVE_FN, index])
-    }
-
-    pub fn eval(&mut self, block: Offset) -> Option<[Word; 2]> {
-        let mut exec = Exec::new(self)?;
-        exec.call(block)?;
-        exec.eval()
-    }
-}
-
-impl<T> Module<T>
-where
-    T: AsRef<[Word]>,
-{
-    fn get_array<const N: usize>(&self, addr: Offset) -> Option<[Word; N]> {
-        self.heap.get(addr)
-    }
-
-    fn get_block<const N: usize>(&self, block: Offset, offset: Offset) -> Option<[Word; N]> {
-        let offset = offset as usize;
-        self.heap
-            .get_block(block)
-            .and_then(|block| block.get(offset..offset + N))
-            .and_then(|value| value.try_into().ok())
-    }
-}
-
-impl<T> Module<T>
-where
-    T: AsMut<[Word]>,
-{
-    pub fn get_symbols_mut(&mut self) -> Option<SymbolTable<&mut [Word]>> {
-        let addr = self.heap.get_mut::<1>(Self::SYMBOLS).map(|[addr]| *addr)?;
-        self.heap.get_block_mut(addr).map(SymbolTable::new)
-    }
-    
-    /// Gets access to the heap for this module
-    pub fn get_heap_mut(&mut self) -> &mut Heap<T> {
-        &mut self.heap
-    }
-
-    pub fn parse(&mut self, code: &str) -> Result<Offset, CoreError> {
-        let mut collector = ParseCollector::new(self);
-        collector
-            .begin_block()
-            .ok_or(CoreError::ParseCollectorError)?;
-        Parser::new(code, &mut collector).parse()?;
-        collector
-            .end_block()
-            .ok_or(CoreError::ParseCollectorError)?;
-        let result = collector.parse.pop::<2>().ok_or(CoreError::InternalError)?;
-        Ok(result[1])
-    }
-}
+// Core module functions that are moved to module.rs
+pub(crate) const SYMBOLS: Offset = 1;
 
 // E X E C U T I O N  C O N T E X T
 
@@ -346,14 +237,19 @@ impl IP {
     {
         let addr = self.ip;
         self.ip += 2;
-        module.get_block(self.block, addr)
+        let offset = addr as usize;
+        module
+            .get_heap()
+            .get_block(self.block)
+            .and_then(|block| block.get(offset..offset + 2))
+            .and_then(|value| value.try_into().ok())
     }
 }
 
 pub struct Exec<'a, T> {
     ip: IP,
     base_ptr: Offset,
-    module: &'a mut Module<T>,
+    pub module: &'a mut Module<T>,
     stack: Stack<[Offset; 1024]>,
     arity: Stack<[Offset; 256]>,
     base: Stack<[Offset; 256]>,
@@ -362,9 +258,9 @@ pub struct Exec<'a, T> {
 }
 
 impl<'a, T> Exec<'a, T> {
-    fn new(module: &'a mut Module<T>) -> Option<Self> {
+    pub fn new(module: &'a mut Module<T>) -> Option<Self> {
         let mut env = Stack::new([0; 256]);
-        env.push([module.system_words])?;
+        env.push([module.system_words()])?;
         Some(Self {
             ip: IP::new(0, 0),
             base_ptr: 0,
@@ -383,24 +279,29 @@ where
     T: AsRef<[Word]>,
 {
     pub fn get_block<const N: usize>(&self, block: Offset, offset: Offset) -> Option<[Word; N]> {
-        self.module.get_block(block, offset)
+        let offset = offset as usize;
+        self.module
+            .get_heap()
+            .get_block(block)
+            .and_then(|block| block.get(offset..offset + N))
+            .and_then(|value| value.try_into().ok())
     }
 
     pub fn get_block_len(&self, block: Offset) -> Option<usize> {
-        self.module.heap.get_block(block).map(|block| block.len())
+        self.module.get_heap().get_block(block).map(|block| block.len())
     }
 
     fn find_word(&self, symbol: Symbol) -> Option<[Word; 2]> {
         let [ctx] = self.env.peek()?;
-        let context = self.module.heap.get_block(ctx).map(Context::new)?;
+        let context = self.module.get_heap().get_block(ctx).map(Context::new)?;
         let result = context.get(symbol);
         match result {
             Err(CoreError::WordNotFound) => {
-                if ctx != self.module.system_words {
+                if ctx != self.module.system_words() {
                     let system_words = self
                         .module
-                        .heap
-                        .get_block(self.module.system_words)
+                        .get_heap()
+                        .get_block(self.module.system_words())
                         .map(Context::new)?;
                     system_words.get(symbol).ok()
                 } else {
@@ -451,20 +352,20 @@ where
     }
 
     pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Option<Offset> {
-        self.module.heap.alloc(values)
+        self.module.get_heap_mut().alloc(values)
     }
 
     pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Option<()> {
         let [ctx] = self.env.peek()?;
         self.module
-            .heap
+            .get_heap_mut()
             .get_block_mut(ctx)
             .map(Context::new)
             .and_then(|mut ctx| ctx.put(symbol, value))
     }
 
     pub fn new_context(&mut self, size: u32) -> Option<()> {
-        self.env.push([self.module.heap.alloc_context(size)?])
+        self.env.push([self.module.get_heap_mut().alloc_context(size)?])
     }
 
     pub fn pop_context(&mut self) -> Option<Offset> {
@@ -496,7 +397,11 @@ where
                     Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
                 }
                 Value::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-                Value::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
+                Value::TAG_FUNC => {
+                    let addr = value[1];
+                    let arity_value = self.module.get_heap().get::<1>(addr)?;
+                    Some((Op::CALL_FUNC, arity_value[0]))
+                },
                 _ => None,
             } {
                 let sp = self.stack.len()?;
@@ -508,7 +413,7 @@ where
         None
     }
 
-    fn eval(&mut self) -> Option<[Word; 2]> {
+    pub fn eval(&mut self) -> Option<[Word; 2]> {
         loop {
             if let Some(value) = self.next_value() {
                 self.stack.alloc(value)?;
@@ -547,7 +452,17 @@ where
                             (native_fn.func)(self)?;
                         }
                         Op::CALL_FUNC => {
-                            let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
+                            // value is the func object pointer, it has [arity, ctx, blk]
+                            // The actual memory layout is:
+                            // At offset 'value': [arity]
+                            // At offset 'value + 1': [ctx, blk]
+                            // We don't need arity here, just get context and block
+                            
+                            // Get the context and block from the function object
+                            let rest_entry = self.module.get_heap().get::<2>(value + 1)?;
+                            let ctx = rest_entry[0];
+                            let blk = rest_entry[1];
+                            
                             self.env.push([ctx])?;
                             self.base.push([bp])?;
                             self.arity.push([Op::LEAVE, 0, sp, 2])?;
@@ -582,56 +497,7 @@ where
 
 // P A R S E  C O L L E C T O R
 
-struct ParseCollector<'a, T> {
-    module: &'a mut Module<T>,
-    parse: Stack<[Word; 64]>,
-    ops: Stack<[Word; 32]>,
-}
-
-impl<'a, T> ParseCollector<'a, T> {
-    fn new(module: &'a mut Module<T>) -> Self {
-        Self {
-            module,
-            parse: Stack::new([0; 64]),
-            ops: Stack::new([0; 32]),
-        }
-    }
-}
-
-impl<T> Collector for ParseCollector<'_, T>
-where
-    T: AsMut<[Word]>,
-{
-    fn string(&mut self, string: &str) -> Option<()> {
-        let offset = self.module.heap.alloc(inline_string(string)?)?;
-        self.parse.push([Value::TAG_INLINE_STRING, offset])
-    }
-
-    fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
-        let symbol = inline_string(word)?;
-        let id = self.module.get_symbols_mut()?.get_or_insert(symbol)?;
-        let tag = match kind {
-            WordKind::Word => Value::TAG_WORD,
-            WordKind::SetWord => Value::TAG_SET_WORD,
-        };
-        self.parse.push([tag, id])
-    }
-
-    fn integer(&mut self, value: i32) -> Option<()> {
-        self.parse.push([Value::TAG_INT, value as u32])
-    }
-
-    fn begin_block(&mut self) -> Option<()> {
-        self.ops.push([self.parse.len()?])
-    }
-
-    fn end_block(&mut self) -> Option<()> {
-        let [bp] = self.ops.pop()?;
-        let block_data = self.parse.pop_all(bp)?;
-        let offset = self.module.heap.alloc_block(block_data)?;
-        self.parse.push([Value::TAG_BLOCK, offset])
-    }
-}
+// Moved out to parse.rs and adjusted to use the new module API
 
 //
 
@@ -648,6 +514,7 @@ pub fn eval(module: &mut Exec<&mut [Word]>) -> Option<[Word; 2]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::module::Module;
 
     fn eval(input: &str) -> Result<[Word; 2], CoreError> {
         let mut module =

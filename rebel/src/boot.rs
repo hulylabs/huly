@@ -1,6 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Exec, Module, Op, Value};
+use crate::core::{Exec, Op, Value};
+use crate::module::Module;
 use crate::mem::{Offset, Word};
 
 fn add<T>(module: &mut Exec<T>) -> Option<()>
@@ -92,16 +93,88 @@ where
     }
 }
 
+// Additional core functions that were in the original core.rs implementation
+fn int<T>(module: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.pop()? {
+        [_tag, value] => module.push([Value::TAG_INT, value]),
+    }
+}
+
+fn string_op<T>(module: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.pop()? {
+        [_tag, value] => module.push([Value::TAG_INLINE_STRING, value]),
+    }
+}
+
+fn word<T>(module: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.pop()? {
+        [_tag, value] => module.push([Value::TAG_WORD, value]),
+    }
+}
+
+fn mul<T>(module: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.pop()? {
+        [Value::TAG_INT, a, Value::TAG_INT, b] => {
+            let result = (a as i32) * (b as i32);
+            module.push([Value::TAG_INT, result as Word])
+        }
+        _ => None,
+    }
+}
+
+fn eq<T>(module: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.pop()? {
+        [tag_a, a, tag_b, b] => {
+            let result = if tag_a == tag_b && a == b { 1 } else { 0 };
+            module.push([Value::TAG_BOOL, result])
+        }
+    }
+}
+
+fn print<T>(module: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.pop()? {
+        [tag, value] => {
+            println!("[{}, {}]", tag, value);
+            module.push([tag, value])
+        }
+    }
+}
+
 pub fn core_package<T>(module: &mut Module<T>) -> Option<()>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
+    // Add all native functions
+    module.add_native_fn("int", int, 1)?;
+    module.add_native_fn("string", string_op, 1)?;
+    module.add_native_fn("word", word, 1)?;
     module.add_native_fn("add", add, 2)?;
+    module.add_native_fn("mul", mul, 2)?;
+    module.add_native_fn("eq", eq, 2)?;
     module.add_native_fn("lt", lt, 2)?;
-    module.add_native_fn("do", func_do, 1)?;
     module.add_native_fn("context", context, 1)?;
-    module.add_native_fn("func", func, 2)?;
+    module.add_native_fn("print", print, 1)?;
     module.add_native_fn("either", either, 3)?;
+    module.add_native_fn("do", func_do, 1)?;
+    module.add_native_fn("func", func, 2)?;
     Some(())
 }
 

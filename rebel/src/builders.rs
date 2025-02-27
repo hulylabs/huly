@@ -222,7 +222,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::{Module, Value};
+    use crate::module::Module;
+    use crate::core::Value;
     use crate::{BlockOffset, WordRef};
     
     // Create a module to use for testing

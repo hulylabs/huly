@@ -2,7 +2,8 @@
 
 use anyhow::Result;
 use colored::*;
-use rebel::core::{CoreError, Module};
+use rebel::core::CoreError;
+use rebel::Module;
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 fn main() -> Result<()> {
