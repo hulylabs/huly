@@ -151,28 +151,43 @@ impl Value {
     pub const TAG_BOOL: Word = 10;
     pub const TAG_STRING: Word = 11; // New tag for blob-based strings
     
-    /// Convert a Value to its VM representation as a [tag, data] pair
-    pub fn to_vm_value(&self, heap: &mut Heap<impl AsMut<[Word]> + AsRef<[Word]>>) -> Result<[Word; 2], CoreError> {
+    /// Get the VM representation of a value as a [tag, data] pair
+    /// 
+    /// This function works for all value types except String, which needs heap access
+    /// to get the proper tag and data. For strings, use the to_vm_value method instead.
+    pub fn to_vm_repr(&self) -> [Word; 2] {
         match self {
-            Value::None => Ok([Self::TAG_NONE, 0]),
-            Value::Int(i) => Ok([Self::TAG_INT, *i as Word]),
+            Value::None => [Self::TAG_NONE, 0],
+            Value::Int(i) => [Self::TAG_INT, *i as Word],
+            Value::Bool(b) => [Self::TAG_BOOL, if *b { 1 } else { 0 }],
+            Value::Context(c) => [Self::TAG_CONTEXT, *c],
+            Value::Block(b) => [Self::TAG_BLOCK, *b],
+            Value::Word(symbol) => [Self::TAG_WORD, *symbol],
+            Value::NativeFn(n) => [Self::TAG_NATIVE_FN, *n],
+            Value::Func(f) => [Self::TAG_FUNC, *f],
+            Value::SetWord(s) => [Self::TAG_SET_WORD, *s],
+            Value::StackValue(s) => [Self::TAG_STACK_VALUE, *s],
+            // String is a special case - it needs heap access
+            // This is a fallback that shouldn't be used directly
+            Value::String(_) => {
+                // We don't know if this is an inline string or blob string,
+                // so we can't determine the right tag
+                panic!("Cannot directly convert Value::String without heap access. Use to_vm_value() instead.")
+            }
+        }
+    }
+    
+    /// Convert a Value to its VM representation, handling the special case of String
+    /// 
+    /// For String values, this accesses the heap to get the actual tag and data stored
+    /// at the string's offset. For all other values, it returns the same as to_vm_repr.
+    pub fn to_vm_value(&self, heap: &Heap<impl AsRef<[Word]>>) -> Result<[Word; 2], CoreError> {
+        match self {
             Value::String(offset) => {
-                // String already has an offset to allocated VM representation
-                // Now we need to get the [tag, data] pair from that offset
-                let [tag, data] = heap.get(*offset).ok_or(CoreError::BoundsCheckFailed)?;
-                Ok([tag, data])
+                // Get the tag/data pair from the heap
+                heap.get(*offset).ok_or(CoreError::BoundsCheckFailed)
             },
-            Value::Bool(b) => Ok([Self::TAG_BOOL, if *b { 1 } else { 0 }]),
-            Value::Context(c) => Ok([Self::TAG_CONTEXT, *c]),
-            Value::Block(b) => Ok([Self::TAG_BLOCK, *b]),
-            Value::Word(symbol) => {
-                // Symbol is already a symbol ID, so we just use it directly
-                Ok([Self::TAG_WORD, *symbol])
-            },
-            Value::NativeFn(n) => Ok([Self::TAG_NATIVE_FN, *n]),
-            Value::Func(f) => Ok([Self::TAG_FUNC, *f]),
-            Value::SetWord(s) => Ok([Self::TAG_SET_WORD, *s]),
-            Value::StackValue(s) => Ok([Self::TAG_STACK_VALUE, *s]),
+            _ => Ok(self.to_vm_repr()),
         }
     }
 }
@@ -525,6 +540,46 @@ mod tests {
         let mut module = Module::init(memory, blob_store).expect("can't create module");
         let block = module.parse(input)?;
         module.eval(block).ok_or(CoreError::InternalError)
+    }
+    
+    #[test]
+    fn test_value_to_vm_repr() {
+        // Test basic values
+        assert_eq!(Value::None.to_vm_repr(), [Value::TAG_NONE, 0]);
+        assert_eq!(Value::Int(42).to_vm_repr(), [Value::TAG_INT, 42]);
+        assert_eq!(Value::Bool(true).to_vm_repr(), [Value::TAG_BOOL, 1]);
+        assert_eq!(Value::Bool(false).to_vm_repr(), [Value::TAG_BOOL, 0]);
+        
+        // Test references
+        let ctx_offset = 0x1234;
+        let blk_offset = 0x5678;
+        assert_eq!(Value::Context(ctx_offset).to_vm_repr(), [Value::TAG_CONTEXT, ctx_offset]);
+        assert_eq!(Value::Block(blk_offset).to_vm_repr(), [Value::TAG_BLOCK, blk_offset]);
+        
+        // Note: We don't test String here since it needs heap access
+        
+        // Test symbol
+        let symbol_id = 0x42;
+        assert_eq!(Value::Word(symbol_id).to_vm_repr(), [Value::TAG_WORD, symbol_id]);
+        assert_eq!(Value::SetWord(symbol_id).to_vm_repr(), [Value::TAG_SET_WORD, symbol_id]);
+        
+        // Test function references
+        let func_offset = 0xDEF0;
+        let native_fn_id = 0x1122;
+        assert_eq!(Value::Func(func_offset).to_vm_repr(), [Value::TAG_FUNC, func_offset]);
+        assert_eq!(Value::NativeFn(native_fn_id).to_vm_repr(), [Value::TAG_NATIVE_FN, native_fn_id]);
+        
+        // Test stack value
+        let stack_idx = 0x33;
+        assert_eq!(Value::StackValue(stack_idx).to_vm_repr(), [Value::TAG_STACK_VALUE, stack_idx]);
+    }
+    
+    #[test]
+    #[should_panic(expected = "Cannot directly convert Value::String without heap access")]
+    fn test_string_value_needs_heap() {
+        // This should panic because String values need heap access
+        let str_offset = 0x9ABC;
+        Value::String(str_offset).to_vm_repr();
     }
 
     #[test]

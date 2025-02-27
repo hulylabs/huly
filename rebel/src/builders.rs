@@ -114,26 +114,7 @@ where
             };
             
             // Convert the value to a VM representation
-            let vm_value = match value {
-                Value::None => [Value::TAG_NONE, 0],
-                Value::Int(i) => [Value::TAG_INT, i as Word],
-                Value::Bool(b) => [Value::TAG_BOOL, if b { 1 } else { 0 }],
-                Value::Context(c) => [Value::TAG_CONTEXT, c],
-                Value::Block(b) => [Value::TAG_BLOCK, b],
-                // Handle already processed string values from Module::create_string
-                Value::String(offset) => {
-                    // Just fetch the [tag, data] pair from the heap
-                    self.heap.get(offset).ok_or(CoreError::OutOfMemory)?
-                },
-                Value::Word(symbol) => {
-                    // It's already a proper symbol ID
-                    [Value::TAG_WORD, symbol]
-                },
-                Value::NativeFn(n) => [Value::TAG_NATIVE_FN, n],
-                Value::Func(f) => [Value::TAG_FUNC, f],
-                Value::SetWord(s) => [Value::TAG_SET_WORD, s],
-                Value::StackValue(s) => [Value::TAG_STACK_VALUE, s],
-            };
+            let vm_value = value.to_vm_value(self.heap)?;
             
             to_store.push((symbol, vm_value));
         }
@@ -215,31 +196,7 @@ where
         
         for value in self.values.iter() {
             // Convert the value to a VM representation
-            let vm_value = match value {
-                Value::None => [Value::TAG_NONE, 0],
-                Value::Int(i) => [Value::TAG_INT, *i as Word],
-                Value::Bool(b) => [Value::TAG_BOOL, if *b { 1 } else { 0 }],
-                Value::Context(c) => [Value::TAG_CONTEXT, *c],
-                Value::Block(b) => [Value::TAG_BLOCK, *b],
-                // This should never happen now that we don't use special markers
-                Value::Word(symbol) if *symbol == u32::MAX => {
-                    // This is a legacy/error case - it should never happen in the new API
-                    return Err(CoreError::InternalError);
-                },
-                // Handle already processed string values from Module::create_string
-                Value::String(offset) => {
-                    // Just fetch the [tag, data] pair from the heap
-                    self.heap.get(*offset).ok_or(CoreError::OutOfMemory)?
-                },
-                Value::Word(symbol) => {
-                    // Regular symbol
-                    [Value::TAG_WORD, *symbol]
-                },
-                Value::NativeFn(n) => [Value::TAG_NATIVE_FN, *n],
-                Value::Func(f) => [Value::TAG_FUNC, *f],
-                Value::SetWord(s) => [Value::TAG_SET_WORD, *s],
-                Value::StackValue(s) => [Value::TAG_STACK_VALUE, *s],
-            };
+            let vm_value = value.to_vm_value(self.heap)?;
             
             vm_words.push(vm_value[0]);
             vm_words.push(vm_value[1]);
