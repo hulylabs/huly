@@ -1,5 +1,5 @@
 [workspace]
-members = ["rebel", "rebel-sh", "rebel2"]
+members = ["rebel", "rebel-sh"]
 resolver = "2"
 
 [workspace.dependencies]

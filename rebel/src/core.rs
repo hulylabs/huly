@@ -58,7 +58,7 @@ impl Value {
     pub const TAG_BOOL: Word = 10;
 }
 
-fn inline_string(string: &str) -> Option<[u32; 8]> {
+pub fn inline_string(string: &str) -> Option<[u32; 8]> {
     let bytes = string.as_bytes();
     let len = bytes.len();
     if len < 32 {
@@ -165,9 +165,14 @@ impl<T> Module<T>
 where
     T: AsMut<[Word]>,
 {
-    fn get_symbols_mut(&mut self) -> Option<SymbolTable<&mut [Word]>> {
+    pub fn get_symbols_mut(&mut self) -> Option<SymbolTable<&mut [Word]>> {
         let addr = self.heap.get_mut::<1>(Self::SYMBOLS).map(|[addr]| *addr)?;
         self.heap.get_block_mut(addr).map(SymbolTable::new)
+    }
+    
+    /// Gets access to the heap for this module
+    pub fn get_heap_mut(&mut self) -> &mut Heap<T> {
+        &mut self.heap
     }
 
     pub fn parse(&mut self, code: &str) -> Result<Offset, CoreError> {

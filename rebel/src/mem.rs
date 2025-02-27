@@ -531,7 +531,16 @@ where
         Context::new(data).init()?;
         Some(addr)
     }
+    
+    pub fn get_symbols_mut(&mut self) -> Option<SymbolTable<&mut [Word]>> {
+        // Assuming the symbol table is at offset 1, similar to Module::SYMBOLS
+        self.get_mut::<1>(1).map(|[addr]| *addr).and_then(|addr| {
+            self.get_block_mut(addr).map(SymbolTable::new)
+        })
+    }
 }
+
+// ContextBuilder moved to context_builder.rs
 
 //
 
@@ -583,3 +592,5 @@ where
 // ) -> Result<Symbol, CoreError> {
 //     table.get_or_insert(sym)
 // }
+
+// Tests for ContextBuilder moved to context_builder.rs
