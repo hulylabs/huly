@@ -28,17 +28,15 @@ where
     let mut result = String::new();
     
     // Process directory entries
-    for entry in entries {
-        if let Ok(entry) = entry {
-            let path = entry.path();
-            let name = path.file_name().unwrap_or_default().to_string_lossy();
-            
-            // Check if it's a directory and append slash if needed
-            if path.is_dir() {
-                result.push_str(&format!("{}/\n", name));
-            } else {
-                result.push_str(&format!("{}\n", name));
-            }
+    for entry in entries.flatten() {
+        let path = entry.path();
+        let name = path.file_name().unwrap_or_default().to_string_lossy();
+        
+        // Check if it's a directory and append slash if needed
+        if path.is_dir() {
+            result.push_str(&format!("{}/\n", name));
+        } else {
+            result.push_str(&format!("{}\n", name));
         }
     }
 
