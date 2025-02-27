@@ -33,3 +33,37 @@ cargo clippy
 - **Documentation**: Document public APIs with clear descriptions and examples
 - **Types**: Use Rust's strong type system; avoid raw pointers when possible
 - **Error Propagation**: Use `?` operator for error propagation, not `.unwrap()` or `.expect()`
+
+## RebelDB VM Context Creation
+The recommended way to create contexts in RebelDB is using the `ContextBuilder` API:
+
+```rust
+use rebel::{ContextBuilder, BlockOffset, WordRef};
+
+// Basic value types use automatic type inference
+let ctx = ContextBuilder::new(heap, 10)
+    .with("age", 42)                        // i32 -> Int 
+    .with("name", "Test User")              // &str -> String
+    .with("active", true)                   // bool -> Bool
+    .with("none", ContextValue::None)       // Direct value
+    .build()?;
+
+// For references to other VM objects, use wrapper types:
+let ctx = ContextBuilder::new(heap, 10)
+    // Block references need BlockOffset wrapper
+    .with("code", BlockOffset(block_offset))
+    // Context references use Offset directly
+    .with("parent", parent_ctx)
+    // Word references use WordRef wrapper
+    .with("symbol", WordRef("some_word".to_string()))
+    .build()?;
+```
+
+The generic `with<T>()` method accepts anything implementing `IntoContextValue`:
+- i32 → Int VM value
+- &str and String → String VM value
+- bool → Bool VM value
+- Offset → Context VM value
+- BlockOffset(Offset) → Block VM value
+- WordRef(String) → Word VM value
+- ContextValue → Direct value
