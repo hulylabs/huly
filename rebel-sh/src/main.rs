@@ -3,7 +3,8 @@
 use anyhow::Result;
 use colored::*;
 use rebel::core::CoreError;
-use rebel::Module;
+use rebel::fs;
+use rebel::{MemoryBlobStore, Module};
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 fn main() -> Result<()> {
@@ -14,8 +15,12 @@ fn main() -> Result<()> {
     );
     println!("Type {} or press Ctrl+D to exit\n", ":quit".red().bold());
 
-    let mut module =
-        Module::init(vec![0; 0x10000].into_boxed_slice()).ok_or(CoreError::OutOfMemory)?;
+    let memory = vec![0; 0x10000].into_boxed_slice();
+    let blob_store = MemoryBlobStore::new();
+    let mut module = Module::init(memory, blob_store).ok_or(CoreError::OutOfMemory)?;
+    
+    // Register filesystem commands from the fs module
+    fs::register_fs_commands(&mut module).ok_or(CoreError::OutOfMemory)?;
 
     let mut rl = DefaultEditor::new()?;
 

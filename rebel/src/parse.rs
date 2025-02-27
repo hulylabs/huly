@@ -186,14 +186,14 @@ where
 
 // P A R S E  C O L L E C T O R
 
-pub struct ParseCollector<'a, T> {
-    module: &'a mut Module<T>,
+pub struct ParseCollector<'a, T, B> {
+    module: &'a mut Module<T, B>,
     pub parse: Stack<[Word; 64]>,
     ops: Stack<[Word; 32]>,
 }
 
-impl<'a, T> ParseCollector<'a, T> {
-    pub fn new(module: &'a mut Module<T>) -> Self {
+impl<'a, T, B> ParseCollector<'a, T, B> {
+    pub fn new(module: &'a mut Module<T, B>) -> Self {
         Self {
             module,
             parse: Stack::new([0; 64]),
@@ -202,9 +202,10 @@ impl<'a, T> ParseCollector<'a, T> {
     }
 }
 
-impl<T> Collector for ParseCollector<'_, T>
+impl<T, B> Collector for ParseCollector<'_, T, B>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
+    B: crate::module::BlobStore,
 {
     fn string(&mut self, string: &str) -> Option<()> {
         let offset = self.module.get_heap_mut().alloc(inline_string(string)?)?;
@@ -238,9 +239,10 @@ where
 }
 
 // Public parse function that can be used to parse a string into a block of code
-pub fn parse<T>(module: &mut Module<T>, code: &str) -> Result<Offset, CoreError> 
+pub fn parse<T, B>(module: &mut Module<T, B>, code: &str) -> Result<Offset, CoreError> 
 where
-    T: AsMut<[Word]> + AsRef<[Word]>
+    T: AsMut<[Word]> + AsRef<[Word]>,
+    B: crate::module::BlobStore,
 {
     let mut collector = ParseCollector::new(module);
     collector

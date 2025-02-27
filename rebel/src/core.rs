@@ -34,6 +34,8 @@ pub enum CoreError {
     TryFromSliceError(#[from] std::array::TryFromSliceError),
     #[error("parse collector error")]
     ParseCollectorError,
+    #[error("blob not found")]
+    BlobNotFound,
 }
 
 // V A L U E
@@ -203,7 +205,7 @@ pub fn inline_string(string: &str) -> Option<[u32; 8]> {
 
 // M O D U L E
 
-pub type NativeFn<T> = fn(module: &mut Exec<T>) -> Option<()>;
+pub type NativeFn<T, B> = fn(module: &mut Exec<T, B>) -> Option<()>;
 
 // Core module functions that are moved to module.rs
 
@@ -230,9 +232,10 @@ impl IP {
         Self { block, ip }
     }
 
-    fn next<T>(&mut self, module: &Module<T>) -> Option<[Word; 2]>
+    fn next<T, B>(&mut self, module: &Module<T, B>) -> Option<[Word; 2]>
     where
         T: AsRef<[Word]>,
+        B: crate::module::BlobStore,
     {
         let addr = self.ip;
         self.ip += 2;
@@ -245,10 +248,10 @@ impl IP {
     }
 }
 
-pub struct Exec<'a, T> {
+pub struct Exec<'a, T, B> {
     ip: IP,
     base_ptr: Offset,
-    pub module: &'a mut Module<T>,
+    pub module: &'a mut Module<T, B>,
     stack: Stack<[Offset; 1024]>,
     arity: Stack<[Offset; 256]>,
     base: Stack<[Offset; 256]>,
@@ -256,8 +259,8 @@ pub struct Exec<'a, T> {
     blocks: Stack<[Offset; 256]>,
 }
 
-impl<'a, T> Exec<'a, T> {
-    pub fn new(module: &'a mut Module<T>) -> Option<Self> {
+impl<'a, T, B> Exec<'a, T, B> {
+    pub fn new(module: &'a mut Module<T, B>) -> Option<Self> {
         let mut env = Stack::new([0; 256]);
         env.push([module.system_words()])?;
         Some(Self {
@@ -273,9 +276,10 @@ impl<'a, T> Exec<'a, T> {
     }
 }
 
-impl<T> Exec<'_, T>
+impl<T, B> Exec<'_, T, B>
 where
     T: AsRef<[Word]>,
+    B: crate::module::BlobStore,
 {
     pub fn get_block<const N: usize>(&self, block: Offset, offset: Offset) -> Option<[Word; N]> {
         let offset = offset as usize;
@@ -327,9 +331,10 @@ where
     // }
 }
 
-impl<T> Exec<'_, T>
+impl<T, B> Exec<'_, T, B>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
+    B: crate::module::BlobStore,
 {
     pub fn pop<const N: usize>(&mut self) -> Option<[Word; N]> {
         self.stack.pop()
@@ -504,7 +509,10 @@ where
 //     module.parse(str)
 // }
 
-pub fn eval(module: &mut Exec<&mut [Word]>) -> Option<[Word; 2]> {
+pub fn eval<B>(module: &mut Exec<&mut [Word], B>) -> Option<[Word; 2]> 
+where 
+    B: crate::module::BlobStore,
+{
     module.eval()
 }
 
@@ -515,9 +523,12 @@ mod tests {
     use super::*;
     use crate::module::Module;
 
+    use crate::MemoryBlobStore;
+    
     fn eval(input: &str) -> Result<[Word; 2], CoreError> {
-        let mut module =
-            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+        let memory = vec![0; 0x10000].into_boxed_slice();
+        let blob_store = MemoryBlobStore::new();
+        let mut module = Module::init(memory, blob_store).expect("can't create module");
         let block = module.parse(input)?;
         module.eval(block).ok_or(CoreError::InternalError)
     }

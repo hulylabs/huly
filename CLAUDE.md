@@ -22,7 +22,74 @@ cargo fmt
 
 # Run clippy linter
 cargo clippy
+
+# Run Rebel Shell (interactive environment)
+cargo run --package rebel-sh
 ```
+
+## Rebel Overview
+- **Rebel**: A programming language and interpreter developed as part of the Huly project
+- **Rebel Shell**: Interactive environment that uses Rebel for scripting and command execution
+- **Use Cases**: Shell scripting, data processing, and system automation
+
+### Built-in Modules
+The Rebel interpreter includes several built-in modules:
+
+#### Filesystem Module (fs)
+The `fs` module provides filesystem operations:
+
+- **ls**: List files in the current directory
+- *(Future additions: cat, mkdir, rm, etc.)*
+
+Usage in Rebel Shell:
+```
+ls  // Lists files in current directory
+```
+
+To use the fs module in your Rebel applications:
+```rust
+// Register filesystem commands
+fs::register_fs_commands(&mut module)?;
+```
+
+### Implementing Custom Commands
+Rebel can be extended with custom commands implemented as native functions. Here's the basic pattern:
+
+```rust
+// 1. Define the command function
+fn my_command<T>(exec: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    // Implement command functionality
+    // Can use exec.pop() to get arguments
+    // Use exec.push() to return results
+    exec.push([Value::TAG_INLINE_STRING, offset])
+}
+
+// 2. Register the command in a setup function
+fn register_commands<T>(module: &mut Module<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    // Register with name, function pointer, and arity (number of arguments)
+    module.add_native_fn("my_command", my_command, 0)?;
+    Some(())
+}
+
+// 3. Call the registration function in your application
+fn main() -> Result<()> {
+    let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+    register_commands(&mut module)?;
+    // ... rest of setup
+}
+```
+
+When creating reusable command modules:
+1. Place related commands in a dedicated module (like `fs.rs`)
+2. Implement a registration function that adds all commands to a module
+3. Document the arity (number of arguments) for each command
+4. Consider string size limitations when returning results
 
 ## Code Style Guidelines
 - **License Header**: Start files with license header: `// RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT`
@@ -34,16 +101,39 @@ cargo clippy
 - **Types**: Use Rust's strong type system; avoid raw pointers when possible
 - **Error Propagation**: Use `?` operator for error propagation, not `.unwrap()` or `.expect()`
 
-## RebelDB VM Builders
+## RebelDB VM Architecture
+
+### BlobStore
+The RebelDB VM uses a BlobStore for storing immutable blobs of data that can be accessed via content-addressable hashes:
+
+```rust
+// BlobStore trait defines the interface for blob storage
+pub trait BlobStore {
+    // Get a blob by its hash
+    fn get(&self, hash: &Hash) -> Result<&[u8], CoreError>;
+    
+    // Store a blob and return its hash
+    fn put(&mut self, data: &[u8]) -> Result<Hash, CoreError>;
+}
+
+// In-memory implementation for testing and development
+let blob_store = MemoryBlobStore::new();
+
+// Access blobs from a module
+let hash = module.store_blob(data)?;
+let retrieved_data = module.get_blob(&hash)?;
+```
 
 ### Module as the Main Entry Point
 The recommended way to interact with the RebelDB VM is through the `Module` type, which provides factory methods for creating builders:
 
 ```rust
-use rebel::{Module, Value};
+use rebel::{Module, Value, MemoryBlobStore};
 
-// Create a module
-let mut module = Module::init(memory)?;
+// Create a module with memory and blob storage
+let memory = vec![0; 0x10000].into_boxed_slice();
+let blob_store = MemoryBlobStore::new();
+let mut module = Module::init(memory, blob_store)?;
 
 // Create context and block builders from the module
 let context_builder = module.context_builder();

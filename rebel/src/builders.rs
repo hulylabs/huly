@@ -226,10 +226,13 @@ mod tests {
     use crate::core::Value;
     use crate::{BlockOffset, WordRef};
     
+    use crate::MemoryBlobStore;
+    
     // Create a module to use for testing
-    fn setup_module() -> Module<Box<[Word]>> {
+    fn setup_module() -> Module<Box<[Word]>, MemoryBlobStore> {
         let memory = vec![0; 0x10000].into_boxed_slice();
-        Module::init(memory).expect("Failed to initialize module")
+        let blob_store = MemoryBlobStore::new();
+        Module::init(memory, blob_store).expect("Failed to initialize module")
     }
     
     #[test]

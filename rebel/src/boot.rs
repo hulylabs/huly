@@ -4,9 +4,10 @@ use crate::core::{Exec, Op, Value};
 use crate::module::Module;
 use crate::mem::{Offset, Word};
 
-fn add<T>(module: &mut Exec<T>) -> Option<()>
+fn add<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [Value::TAG_INT, a, Value::TAG_INT, b] => {
@@ -17,9 +18,10 @@ where
     }
 }
 
-fn lt<T>(module: &mut Exec<T>) -> Option<()>
+fn lt<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [Value::TAG_INT, a, Value::TAG_INT, b] => {
@@ -30,9 +32,10 @@ where
     }
 }
 
-fn func_do<T>(module: &mut Exec<T>) -> Option<()>
+fn func_do<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [Value::TAG_BLOCK, block] => module.call(block),
@@ -40,9 +43,10 @@ where
     }
 }
 
-fn context<T>(module: &mut Exec<T>) -> Option<()>
+fn context<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [Value::TAG_BLOCK, block] => {
@@ -54,9 +58,10 @@ where
     }
 }
 
-fn func<T>(module: &mut Exec<T>) -> Option<()>
+fn func<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [Value::TAG_BLOCK, params, Value::TAG_BLOCK, body] => {
@@ -80,9 +85,10 @@ where
     }
 }
 
-fn either<T>(module: &mut Exec<T>) -> Option<()>
+fn either<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [Value::TAG_BOOL, cond, Value::TAG_BLOCK, if_true, Value::TAG_BLOCK, if_false] => {
@@ -94,36 +100,40 @@ where
 }
 
 // Additional core functions that were in the original core.rs implementation
-fn int<T>(module: &mut Exec<T>) -> Option<()>
+fn int<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [_tag, value] => module.push([Value::TAG_INT, value]),
     }
 }
 
-fn string_op<T>(module: &mut Exec<T>) -> Option<()>
+fn string_op<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [_tag, value] => module.push([Value::TAG_INLINE_STRING, value]),
     }
 }
 
-fn word<T>(module: &mut Exec<T>) -> Option<()>
+fn word<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [_tag, value] => module.push([Value::TAG_WORD, value]),
     }
 }
 
-fn mul<T>(module: &mut Exec<T>) -> Option<()>
+fn mul<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [Value::TAG_INT, a, Value::TAG_INT, b] => {
@@ -134,9 +144,10 @@ where
     }
 }
 
-fn eq<T>(module: &mut Exec<T>) -> Option<()>
+fn eq<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [tag_a, a, tag_b, b] => {
@@ -146,9 +157,10 @@ where
     }
 }
 
-fn print<T>(module: &mut Exec<T>) -> Option<()>
+fn print<T, B>(module: &mut Exec<T, B>) -> Option<()>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
+    B: crate::module::BlobStore,
 {
     match module.pop()? {
         [tag, value] => {
@@ -158,9 +170,10 @@ where
     }
 }
 
-pub fn core_package<T>(module: &mut Module<T>) -> Option<()>
+pub fn core_package<T, B>(module: &mut Module<T, B>) -> Option<()>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
+    B: crate::module::BlobStore,
 {
     // Add all native functions
     module.add_native_fn("int", int, 1)?;
