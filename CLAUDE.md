@@ -128,23 +128,30 @@ let retrieved_data = module.get_blob(&hash)?;
 RebelDB handles strings in two ways depending on their length:
 
 ```rust
-// Create a string that will be stored appropriately 
-// based on its length
-let (api_string, vm_value) = module.create_string("Hello world")?;
+// Create a string that will be stored appropriately based on its length
+let string_value = module.create_string("Hello world")?;
+
+// The created string value can be used with builders
+ctx_builder.with("greeting", string_value)
 
 // For short strings (≤31 bytes): Uses TAG_INLINE_STRING with direct storage
 // For long strings (>31 bytes): Uses TAG_STRING with storage in BlobStore
 
-// Extract a string from a VM value
-let extracted = module.extract_string(tag, data)?;
+// Extract a string from a Value::String
+let extracted = module.extract_string_from_value(&string_value)?;
 
-// Or from an offset in the heap
+// Or from an offset in the heap (for implementation details)
 let extracted = module.extract_string_from_offset(offset)?;
 ```
 
 The string creation process:
 1. Short strings (≤31 bytes): Stored inline with `TAG_INLINE_STRING` and packed into a fixed-size array
 2. Long strings (>31 bytes): Stored in the BlobStore with `TAG_STRING` and a reference to the blob hash
+3. The final Value::String stores an Offset to the heap location, similar to Value::Block and Value::Context
+
+Important note:
+- Since string storage may need the BlobStore, direct string creation via `.into_value()` or `Value::String` constructors is not supported
+- Always create strings through the Module API with `module.create_string()`
 
 ### Module as the Main Entry Point
 The recommended way to interact with the RebelDB VM is through the `Module` type, which provides factory methods for creating builders:
