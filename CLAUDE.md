@@ -33,6 +33,7 @@ cargo clippy
 - **Documentation**: Document public APIs with clear descriptions and examples
 - **Types**: Use Rust's strong type system; avoid raw pointers when possible
 - **Error Propagation**: Use `?` operator for error propagation, not `.unwrap()` or `.expect()`
+- **Unwrap Avoidance**: Avoid `unwrap()` calls; use pattern matching, `ok_or()`, or proper error handling instead
 - **Clippy**: Run `cargo clippy` to catch common mistakes and improve code quality
 - **Comments**: Avoid inline comments, write self-explanatory code, use comments for complex logic
 - **Rust Docs**: Write Rust docs for public APIs, use `cargo doc --open` to generate and view docs
