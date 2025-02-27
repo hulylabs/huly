@@ -161,6 +161,10 @@ impl<'a> Process<'a> {
     // }
 }
 
+pub fn next(process: &mut Process) -> Result<(), CoreError> {
+    process.next()
+}
+
 // P A R S E  C O L L E C T O R
 
 struct ParseCollector<'a> {
