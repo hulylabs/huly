@@ -21,45 +21,45 @@
 /// * `buffer` - The destination buffer to write into (must be at least 5 bytes long)
 ///
 /// # Returns
-/// The number of bytes written to the buffer
-///
-/// # Panics
-/// Will panic if the buffer is too small (less than 5 bytes)
-pub fn encode_i32(value: i32, buffer: &mut [u8]) -> usize {
-    assert!(buffer.len() >= 5, "Buffer must be at least 5 bytes");
+/// `Some(n)` with the number of bytes written on success, `None` if the buffer is too small
+pub fn encode_i32(value: i32, buffer: &mut [u8]) -> Option<usize> {
+    // Check buffer size
+    if buffer.len() < 5 {
+        return None;
+    }
 
     match value {
         // Small positive values (0-63): Single byte with high bit unset
         0..=63 => {
             buffer[0] = value as u8;
-            1
+            Some(1)
         }
 
         // Small negative values (-1 to -64): Single byte with high bit set
         -64..=-1 => {
             // Encode -1 as 0x80, -2 as 0x81, etc.
             buffer[0] = 0x80 | ((-value - 1) as u8);
-            1
+            Some(1)
         }
 
         // Larger positive values: Multiple bytes with tag
         64..=127 => {
             buffer[0] = 0x40; // Tag: 01000000 (one byte positive)
             buffer[1] = value as u8;
-            2
+            Some(2)
         }
         128..=32767 => {
             buffer[0] = 0x41; // Tag: 01000001 (two bytes positive)
             buffer[1] = (value >> 8) as u8;
             buffer[2] = value as u8;
-            3
+            Some(3)
         }
         32768..=8388607 => {
             buffer[0] = 0x42; // Tag: 01000010 (three bytes positive)
             buffer[1] = (value >> 16) as u8;
             buffer[2] = (value >> 8) as u8;
             buffer[3] = value as u8;
-            4
+            Some(4)
         }
         // Larger values requiring full 4 bytes
         _ if value > 0 => {
@@ -68,20 +68,20 @@ pub fn encode_i32(value: i32, buffer: &mut [u8]) -> usize {
             buffer[2] = (value >> 16) as u8;
             buffer[3] = (value >> 8) as u8;
             buffer[4] = value as u8;
-            5
+            Some(5)
         }
         // Larger negative values: Multiple bytes with tag
         -128..=-65 => {
             buffer[0] = 0x44; // Tag: 01000100 (one byte negative)
             buffer[1] = (-value) as u8;
-            2
+            Some(2)
         }
         -32768..=-129 => {
             buffer[0] = 0x45; // Tag: 01000101 (two bytes negative)
             let abs_val = -value;
             buffer[1] = (abs_val >> 8) as u8;
             buffer[2] = abs_val as u8;
-            3
+            Some(3)
         }
         -8388608..=-32769 => {
             buffer[0] = 0x46; // Tag: 01000110 (three bytes negative)
@@ -89,7 +89,7 @@ pub fn encode_i32(value: i32, buffer: &mut [u8]) -> usize {
             buffer[1] = (abs_val >> 16) as u8;
             buffer[2] = (abs_val >> 8) as u8;
             buffer[3] = abs_val as u8;
-            4
+            Some(4)
         }
         // Negative values requiring full 4 bytes
         _ => {
@@ -104,7 +104,7 @@ pub fn encode_i32(value: i32, buffer: &mut [u8]) -> usize {
             buffer[2] = (abs_val >> 16) as u8;
             buffer[3] = (abs_val >> 8) as u8;
             buffer[4] = abs_val as u8;
-            5
+            Some(5)
         }
     }
 }
@@ -115,76 +115,104 @@ pub fn encode_i32(value: i32, buffer: &mut [u8]) -> usize {
 /// * `buffer` - The buffer containing the encoded value
 ///
 /// # Returns
-/// A tuple of (decoded value, number of bytes read)
-///
-/// # Panics
-/// Will panic if the buffer is too small for the encoded value
-pub fn decode_i32(buffer: &[u8]) -> (i32, usize) {
-    assert!(!buffer.is_empty(), "Buffer must not be empty");
+/// `Some((value, bytes_read))` on success, `None` if the buffer is too small or has an invalid tag
+pub fn decode_i32(buffer: &[u8]) -> Option<(i32, usize)> {
+    // Check for empty buffer
+    if buffer.is_empty() {
+        return None;
+    }
 
     let first_byte = buffer[0];
 
     match first_byte {
         // Small positive values (0-63): Single byte with high bit unset
-        0..=0x3F => (first_byte as i32, 1),
+        0..=0x3F => Some((first_byte as i32, 1)),
 
         // Small negative values (-1 to -64): Single byte with high bit set
         0x80..=0xBF => {
             // Decode 0x80 as -1, 0x81 as -2, etc.
             let negative_offset = (first_byte & 0x7F) as i32;
-            (-negative_offset - 1, 1)
+            Some((-negative_offset - 1, 1))
         }
 
         // Larger values with tags
         0x40 => {
-            assert!(buffer.len() >= 2, "Buffer too small for encoded value");
-            (buffer[1] as i32, 2)
+            if buffer.len() < 2 {
+                return None;
+            }
+            buffer.get(1).map(|&b| (b as i32, 2))
         }
         0x41 => {
-            assert!(buffer.len() >= 3, "Buffer too small for encoded value");
-            let value = ((buffer[1] as i32) << 8) | (buffer[2] as i32);
-            (value, 3)
+            if buffer.len() < 3 {
+                return None;
+            }
+            let b1 = *buffer.get(1)? as i32;
+            let b2 = *buffer.get(2)? as i32;
+            let value = (b1 << 8) | b2;
+            Some((value, 3))
         }
         0x42 => {
-            assert!(buffer.len() >= 4, "Buffer too small for encoded value");
-            let value = ((buffer[1] as i32) << 16) | ((buffer[2] as i32) << 8) | (buffer[3] as i32);
-            (value, 4)
+            if buffer.len() < 4 {
+                return None;
+            }
+            let b1 = *buffer.get(1)? as i32;
+            let b2 = *buffer.get(2)? as i32;
+            let b3 = *buffer.get(3)? as i32;
+            let value = (b1 << 16) | (b2 << 8) | b3;
+            Some((value, 4))
         }
         0x43 => {
-            assert!(buffer.len() >= 5, "Buffer too small for encoded value");
-            let value = ((buffer[1] as i32) << 24)
-                | ((buffer[2] as i32) << 16)
-                | ((buffer[3] as i32) << 8)
-                | (buffer[4] as i32);
-            (value, 5)
+            if buffer.len() < 5 {
+                return None;
+            }
+            let b1 = *buffer.get(1)? as i32;
+            let b2 = *buffer.get(2)? as i32;
+            let b3 = *buffer.get(3)? as i32;
+            let b4 = *buffer.get(4)? as i32;
+            let value = (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
+            Some((value, 5))
         }
 
         // Larger negative values with tags
         0x44 => {
-            assert!(buffer.len() >= 2, "Buffer too small for encoded value");
-            (-(buffer[1] as i32), 2)
+            if buffer.len() < 2 {
+                return None;
+            }
+            buffer.get(1).map(|&b| (-(b as i32), 2))
         }
         0x45 => {
-            assert!(buffer.len() >= 3, "Buffer too small for encoded value");
-            let value = ((buffer[1] as i32) << 8) | (buffer[2] as i32);
-            (-value, 3)
+            if buffer.len() < 3 {
+                return None;
+            }
+            let b1 = *buffer.get(1)? as i32;
+            let b2 = *buffer.get(2)? as i32;
+            let value = (b1 << 8) | b2;
+            Some((-value, 3))
         }
         0x46 => {
-            assert!(buffer.len() >= 4, "Buffer too small for encoded value");
-            let value = ((buffer[1] as i32) << 16) | ((buffer[2] as i32) << 8) | (buffer[3] as i32);
-            (-value, 4)
+            if buffer.len() < 4 {
+                return None;
+            }
+            let b1 = *buffer.get(1)? as i32;
+            let b2 = *buffer.get(2)? as i32;
+            let b3 = *buffer.get(3)? as i32;
+            let value = (b1 << 16) | (b2 << 8) | b3;
+            Some((-value, 4))
         }
         0x47 => {
-            assert!(buffer.len() >= 5, "Buffer too small for encoded value");
-            let value = ((buffer[1] as i32) << 24)
-                | ((buffer[2] as i32) << 16)
-                | ((buffer[3] as i32) << 8)
-                | (buffer[4] as i32);
-            (-value, 5)
+            if buffer.len() < 5 {
+                return None;
+            }
+            let b1 = *buffer.get(1)? as i32;
+            let b2 = *buffer.get(2)? as i32;
+            let b3 = *buffer.get(3)? as i32;
+            let b4 = *buffer.get(4)? as i32;
+            let value = (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
+            Some((-value, 5))
         }
 
         // Invalid tag
-        _ => panic!("Invalid tag in encoded value: {}", first_byte),
+        _ => None,
     }
 }
 
@@ -212,17 +240,17 @@ mod tests {
         let mut buffer = [0u8; 5];
         
         // Test encoding 0
-        let bytes_written = encode_i32(0, &mut buffer);
+        let bytes_written = encode_i32(0, &mut buffer).unwrap();
         assert_eq!(bytes_written, 1);
         assert_eq!(buffer[0], 0);
         
         // Test encoding 42
-        let bytes_written = encode_i32(42, &mut buffer);
+        let bytes_written = encode_i32(42, &mut buffer).unwrap();
         assert_eq!(bytes_written, 1);
         assert_eq!(buffer[0], 42);
         
         // Test encoding 63 (max single-byte positive)
-        let bytes_written = encode_i32(63, &mut buffer);
+        let bytes_written = encode_i32(63, &mut buffer).unwrap();
         assert_eq!(bytes_written, 1);
         assert_eq!(buffer[0], 63);
     }
@@ -232,17 +260,17 @@ mod tests {
         let mut buffer = [0u8; 5];
         
         // Test encoding -1
-        let bytes_written = encode_i32(-1, &mut buffer);
+        let bytes_written = encode_i32(-1, &mut buffer).unwrap();
         assert_eq!(bytes_written, 1);
         assert_eq!(buffer[0], 0x80);
         
         // Test encoding -42
-        let bytes_written = encode_i32(-42, &mut buffer);
+        let bytes_written = encode_i32(-42, &mut buffer).unwrap();
         assert_eq!(bytes_written, 1);
         assert_eq!(buffer[0], 0x80 + 41);
         
         // Test encoding -64 (max single-byte negative)
-        let bytes_written = encode_i32(-64, &mut buffer);
+        let bytes_written = encode_i32(-64, &mut buffer).unwrap();
         assert_eq!(bytes_written, 1);
         assert_eq!(buffer[0], 0x80 + 63);
     }
@@ -252,20 +280,20 @@ mod tests {
         let mut buffer = [0u8; 5];
         
         // Test encoding 100 (positive)
-        let bytes_written = encode_i32(100, &mut buffer);
+        let bytes_written = encode_i32(100, &mut buffer).unwrap();
         assert_eq!(bytes_written, 2);
         assert_eq!(buffer[0], 0x40);
         assert_eq!(buffer[1], 100);
         
         // Test encoding 1000 (positive)
-        let bytes_written = encode_i32(1000, &mut buffer);
+        let bytes_written = encode_i32(1000, &mut buffer).unwrap();
         assert_eq!(bytes_written, 3);
         assert_eq!(buffer[0], 0x41);
         assert_eq!(buffer[1], 0x03);
         assert_eq!(buffer[2], 0xE8);
         
         // Test encoding 100000 (positive)
-        let bytes_written = encode_i32(100000, &mut buffer);
+        let bytes_written = encode_i32(100000, &mut buffer).unwrap();
         assert_eq!(bytes_written, 4);
         assert_eq!(buffer[0], 0x42);
         assert_eq!(buffer[1], 0x01);
@@ -273,7 +301,7 @@ mod tests {
         assert_eq!(buffer[3], 0xA0);
         
         // Test encoding 2000000000 (positive)
-        let bytes_written = encode_i32(2000000000, &mut buffer);
+        let bytes_written = encode_i32(2000000000, &mut buffer).unwrap();
         assert_eq!(bytes_written, 5);
         assert_eq!(buffer[0], 0x43);
         assert_eq!(buffer[1], 0x77);
@@ -287,20 +315,20 @@ mod tests {
         let mut buffer = [0u8; 5];
         
         // Test encoding -100 (negative)
-        let bytes_written = encode_i32(-100, &mut buffer);
+        let bytes_written = encode_i32(-100, &mut buffer).unwrap();
         assert_eq!(bytes_written, 2);
         assert_eq!(buffer[0], 0x44);
         assert_eq!(buffer[1], 100);
         
         // Test encoding -1000 (negative)
-        let bytes_written = encode_i32(-1000, &mut buffer);
+        let bytes_written = encode_i32(-1000, &mut buffer).unwrap();
         assert_eq!(bytes_written, 3);
         assert_eq!(buffer[0], 0x45);
         assert_eq!(buffer[1], 0x03);
         assert_eq!(buffer[2], 0xE8);
         
         // Test encoding -100000 (negative)
-        let bytes_written = encode_i32(-100000, &mut buffer);
+        let bytes_written = encode_i32(-100000, &mut buffer).unwrap();
         assert_eq!(bytes_written, 4);
         assert_eq!(buffer[0], 0x46);
         assert_eq!(buffer[1], 0x01);
@@ -308,7 +336,7 @@ mod tests {
         assert_eq!(buffer[3], 0xA0);
         
         // Test encoding -2000000000 (negative)
-        let bytes_written = encode_i32(-2000000000, &mut buffer);
+        let bytes_written = encode_i32(-2000000000, &mut buffer).unwrap();
         assert_eq!(bytes_written, 5);
         assert_eq!(buffer[0], 0x47);
         assert_eq!(buffer[1], 0x77);
@@ -317,7 +345,7 @@ mod tests {
         assert_eq!(buffer[4], 0x00);
         
         // Test encoding i32::MIN (negative edge case)
-        let bytes_written = encode_i32(i32::MIN, &mut buffer);
+        let bytes_written = encode_i32(i32::MIN, &mut buffer).unwrap();
         assert_eq!(bytes_written, 5);
         assert_eq!(buffer[0], 0x47);
         // i32::MIN is -2147483648, so the bytes should be 0x80000000
@@ -325,6 +353,14 @@ mod tests {
         assert_eq!(buffer[2], 0x00);
         assert_eq!(buffer[3], 0x00);
         assert_eq!(buffer[4], 0x00);
+    }
+    
+    #[test]
+    fn test_buffer_too_small() {
+        // Test with buffer that's too small
+        let mut small_buffer = [0u8; 2];
+        let result = encode_i32(100000, &mut small_buffer);
+        assert!(result.is_none(), "Should return None for buffer that's too small");
     }
     
     #[test]
@@ -338,13 +374,30 @@ mod tests {
         ];
         
         for &value in &test_values {
-            let bytes_written = encode_i32(value, &mut buffer);
-            let (decoded, bytes_read) = decode_i32(&buffer);
+            let bytes_written = encode_i32(value, &mut buffer).unwrap();
+            let (decoded, bytes_read) = decode_i32(&buffer).unwrap();
             
             assert_eq!(decoded, value, "Failed to round-trip value {}", value);
             assert_eq!(bytes_read, bytes_written, "Bytes read != bytes written for value {}", value);
             assert_eq!(encoded_size(value), bytes_written, "encoded_size doesn't match actual bytes written for {}", value);
         }
+    }
+    
+    #[test]
+    fn test_decode_invalid_input() {
+        // Test decoding from an empty buffer
+        let empty: [u8; 0] = [];
+        assert!(decode_i32(&empty).is_none(), "Should return None for empty buffer");
+        
+        // Test decoding with buffer too small for the value
+        let mut buffer = [0u8; 5];
+        let _ = encode_i32(1000, &mut buffer).unwrap(); // Requires 3 bytes
+        let truncated = &buffer[0..2]; // Only provide first 2 bytes
+        assert!(decode_i32(truncated).is_none(), "Should return None for truncated buffer");
+        
+        // Test decoding with invalid tag
+        let invalid_tag = [0x48, 0, 0, 0, 0]; // 0x48 is not a defined tag
+        assert!(decode_i32(&invalid_tag).is_none(), "Should return None for invalid tag");
     }
     
     #[test]
