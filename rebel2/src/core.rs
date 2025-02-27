@@ -33,6 +33,8 @@ pub enum CoreError {
     IOError(#[from] std::io::Error),
     #[error("symbol too long")]
     SymbolTooLong,
+    #[error("invalid native function")]
+    InvalidNativeFunction,
 }
 
 //
@@ -273,14 +275,15 @@ impl Block {
         }
     }
 
-    pub fn get<T: BlobStore>(&self, store: &T, index: usize) -> Option<Value> {
+    pub fn get(&self, store: &dyn BlobStore, index: usize) -> Result<Value, CoreError> {
         match &self.0 {
             Blob::Inline(inline) => Array::<&[u8], u8>::new(inline.as_slice()).get(index),
             Blob::External(hash) => {
-                let data = store.get(hash).ok()?;
+                let data = store.get(hash)?;
                 Array::<&[u8], u32>::new(data).get(index)
             }
         }
+        .ok_or(CoreError::InternalError)
     }
 
     pub fn new_inline(values: &[Value]) -> Option<Self> {
@@ -315,7 +318,7 @@ impl Block {
             .map(Block)
     }
 
-    pub fn new<T: BlobStore>(store: &mut T, values: &[Value]) -> Result<Self, CoreError> {
+    pub fn new(store: &mut dyn BlobStore, values: &[Value]) -> Result<Self, CoreError> {
         match Self::new_inline(values) {
             Some(block) => Ok(block),
             None => {
@@ -367,6 +370,8 @@ pub enum Value {
     String(Blob),
     Word(SmolStr),
     SetWord(SmolStr),
+    StackRef(usize),
+    NativeFunc(usize),
 }
 
 impl Value {
@@ -418,10 +423,18 @@ impl Value {
             Self::String(blob) => blob.write(dst, Self::TAG_STRING),
             Self::Word(word) => WordKind::Word.write(dst, Self::TAG_WORD, word),
             Self::SetWord(word) => WordKind::SetWord.write(dst, Self::TAG_WORD, word),
+            Self::StackRef(value) => dst.get_mut(0..9).map(|bytes| {
+                bytes[0] = Self::TAG_INT;
+                for i in 0..8 {
+                    bytes[8 - i] = (value >> (i * 8)) as u8;
+                }
+                9
+            }),
+            Self::NativeFunc(_) => None,
         }
     }
 
-    pub fn new_block<T: BlobStore>(store: &mut T, values: &[Value]) -> Result<Self, CoreError> {
+    pub fn new_block(store: &mut dyn BlobStore, values: &[Value]) -> Result<Self, CoreError> {
         Block::new(store, values).map(Self::Block)
     }
 }
@@ -447,6 +460,8 @@ impl std::fmt::Display for Value {
             },
             Self::Word(word) => write!(f, "{}", word),
             Self::SetWord(word) => write!(f, "{}:", word),
+            Self::StackRef(value) => write!(f, "stack[{}]", value),
+            Self::NativeFunc(_) => write!(f, "<native function>"),
         }
     }
 }

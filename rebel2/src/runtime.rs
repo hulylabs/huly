@@ -17,100 +17,140 @@ use std::collections::HashMap;
 //     buf
 // }
 
-//
+// R U N T I M E
 
-pub struct Runtime<B> {
-    blobs: B,
+type NativeFn = fn(process: &mut Process) -> Result<(), CoreError>;
+
+struct FuncDesc {
+    func: NativeFn,
+    arity: usize,
+}
+
+pub struct Runtime {
+    blobs: Box<dyn BlobStore>,
+    functions: Vec<FuncDesc>,
     system_words: HashMap<SmolStr, Value>,
 }
 
-impl<B> Runtime<B>
-where
-    B: BlobStore,
-{
-    pub fn new(blobs: B) -> Self {
+impl Runtime {
+    pub fn new(blobs: Box<dyn BlobStore>) -> Self {
         Runtime {
             blobs,
+            functions: Vec::new(),
             system_words: HashMap::new(),
         }
     }
 
-    fn find_word(&self, symbol: &SmolStr) -> Result<&Value, CoreError> {
-        self.system_words.get(symbol).ok_or(CoreError::WordNotFound)
+    fn get_func(&self, index: usize) -> Result<&FuncDesc, CoreError> {
+        self.functions
+            .get(index)
+            .ok_or(CoreError::InvalidNativeFunction)
+    }
+
+    fn find_word(&self, symbol: &SmolStr) -> Option<&Value> {
+        self.system_words.get(symbol)
     }
 }
 
 //
 
 enum Op {
-    SetWord,
-    CallNative,
-    CallFunc,
+    Value(Value),
+    SetWord(SmolStr),
+    CallNative(usize),
 }
 
-struct Process<'a, T> {
-    runtime: &'a mut Runtime<T>,
-    block: Block,
-    ip: usize,
+struct Process<'a> {
+    runtime: &'a mut Runtime,
+    // block: Block,
+    // ip: usize,
     stack: Vec<Value>,
     call_stack: Vec<(Block, usize)>,
+    op_stack: Vec<(Op, usize, usize)>,
+    base: Vec<usize>,
 }
 
-impl<'a, T> Process<'a, T>
-where
-    T: BlobStore,
-{
-    fn new(runtime: &'a mut Runtime<T>, block: Block) -> Result<Self, CoreError> {
+impl<'a> Process<'a> {
+    fn new(runtime: &'a mut Runtime, block: Block) -> Result<Self, CoreError> {
         Ok(Process {
             runtime,
-            block,
-            ip: 0,
+            // block,
+            // ip: 0,
             stack: Vec::new(),
             call_stack: Vec::new(),
+            op_stack: Vec::new(),
+            base: Vec::new(),
         })
     }
 
-    fn next(&mut self) -> Option<Value> {
-        self.block
-            .get(&self.runtime.blobs, self.ip)
-            .inspect(|_| self.ip += 1)
+    fn do_op(&mut self, op: &Op) -> Result<(), CoreError> {
+        match op {
+            Op::SetWord(symbol) => self
+                .stack
+                .pop()
+                .and_then(|value| {
+                    self.runtime
+                        .system_words
+                        .insert(symbol.clone(), value.clone())
+                        .map(|_| ())
+                })
+                .ok_or(CoreError::InternalError),
+            Op::CallNative(index) => {
+                let native = self.runtime.get_func(*index)?;
+                (native.func)(self)
+            }
+            Op::Value(value) => Ok(self.stack.push(value.clone())),
+        }
     }
 
-    // fn next_value(&mut self) -> Result<Value, CoreError> {
-    //     while let Some(value) = self.next() {
-    //         // resolve value
-    //         let resolved = match value {
-    //             Value::Word(symbol) => {
-    //                 let bound = self.runtime.find_word(&symbol)?;
-    //                 match bound {
-    //                     Value::Block(block) => Value::Block(block.clone()),
-    //                     _ => bound.clone(),
-    //                 }
-    //             }
-    //             _ => &value,
-    //         };
+    fn operation(&self, value: Value) -> Result<(Op, usize, usize), CoreError> {
+        let stack_len = self.stack.len();
+        match value {
+            Value::NativeFunc(index) => self
+                .runtime
+                .get_func(index)
+                .map(|native| (Op::CallNative(index), native.arity, stack_len)),
+            Value::SetWord(symbol) => Ok((Op::SetWord(symbol.clone()), 1, stack_len)),
+            // Value::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
+            _ => Ok((Op::Value(value), 0, stack_len)),
+        }
+    }
 
-    //         // translate into operation
+    fn resolve(&self, value: Value) -> Result<Value, CoreError> {
+        if let Value::Word(symbol) = value {
+            self.runtime
+                .find_word(&symbol)
+                .and_then(|bound| match bound {
+                    Value::StackRef(offset) => {
+                        self.base.last().map(|bp| self.stack[*bp + *offset].clone())
+                    }
+                    _ => Some(bound.clone()),
+                })
+                .ok_or(CoreError::WordNotFound)
+        } else {
+            Ok(value)
+        }
+    }
 
-    //         return Some(value);
+    fn read_next(&mut self) -> Result<Value, CoreError> {
+        let ip = self.call_stack.last_mut().ok_or(CoreError::EndOfInput)?;
+        ip.0.get(self.runtime.blobs.as_ref(), ip.1)
+            .inspect(|_| ip.1 += 1)
+    }
 
-    //         // // translate into operation
-    //         // if let Some((op, arity)) = match value[0] {
-    //         //     Value::TAG_NATIVE_FN => {
-    //         //         Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
-    //         //     }
-    //         //     Value::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-    //         //     Value::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
-    //         //     _ => None,
-    //         // } {
-    //         //     let sp = self.stack.len()?;
-    //         //     self.arity.push([op, value[1], sp, arity * 2])?;
-    //         // } else {
-    //         //     return Some(value);
-    //         // }
-    //     }
-    //     None
-    // }
+    fn next(&mut self) -> Result<(), CoreError> {
+        if let Some(op) = self.op_stack.last() {
+            if self.stack.len() == op.1 + op.2 {
+                let (op, _, _) = self.op_stack.pop().ok_or(CoreError::InternalError)?;
+                return self.do_op(&op);
+            }
+        }
+        let op = self
+            .read_next()
+            .and_then(|value| self.resolve(value))
+            .and_then(|value| self.operation(value))?;
+        Ok(self.op_stack.push(op))
+    }
 
     // fn eval(&mut self) -> Result<Value, CoreError> {
     //     loop {
@@ -123,14 +163,14 @@ where
 
 // P A R S E  C O L L E C T O R
 
-struct ParseCollector<'a, T> {
-    module: &'a mut Runtime<T>,
+struct ParseCollector<'a> {
+    module: &'a mut Runtime,
     parse: Vec<Value>,
     ops: Vec<usize>,
 }
 
-impl<'a, T> ParseCollector<'a, T> {
-    fn new(module: &'a mut Runtime<T>) -> Self {
+impl<'a> ParseCollector<'a> {
+    fn new(module: &'a mut Runtime) -> Self {
         Self {
             module,
             parse: Vec::new(),
@@ -139,10 +179,7 @@ impl<'a, T> ParseCollector<'a, T> {
     }
 }
 
-impl<T> Collector for ParseCollector<'_, T>
-where
-    T: BlobStore,
-{
+impl Collector for ParseCollector<'_> {
     fn string(&mut self, string: &str) -> Result<(), CoreError> {
         self.module
             .blobs
@@ -172,7 +209,7 @@ where
     fn end_block(&mut self) -> Result<(), CoreError> {
         let block_start = self.ops.pop().ok_or(CoreError::InternalError)?;
         let block_items = self.parse.drain(block_start..).collect::<Vec<Value>>();
-        let block = Value::new_block(&mut self.module.blobs, &block_items)?;
+        let block = Value::new_block(self.module.blobs.as_mut(), &block_items)?;
         self.parse.push(block);
         Ok(())
     }
@@ -210,8 +247,6 @@ mod tests {
         }
 
         fn put(&mut self, data: &[u8]) -> Result<Hash, CoreError> {
-            // For test purposes, using a simple hash function
-            // In a real implementation, this would be a cryptographic hash
             let mut hash = [0u8; HASH_SIZE];
             for (i, &byte) in data.iter().enumerate().take(HASH_SIZE) {
                 hash[i % HASH_SIZE] ^= byte;
@@ -223,24 +258,20 @@ mod tests {
     }
 
     /// Helper function to parse a string into a Value using ParseCollector
-    fn parse_to_value(
-        input: &str,
-        store: MemoryBlobStore,
-    ) -> Result<(Value, MemoryBlobStore), CoreError> {
-        let mut runtime = Runtime::new(store);
+    fn parse_to_value(input: &str) -> Result<Value, CoreError> {
+        let store = MemoryBlobStore::new();
+        let mut runtime = Runtime::new(Box::new(store));
         let mut collector = ParseCollector::new(&mut runtime);
         let mut parser = Parser::new(input, &mut collector);
 
         parser.parse()?;
         let value = collector.parse.pop().ok_or(CoreError::InternalError)?;
-        Ok((value, runtime.blobs))
+        Ok(value)
     }
 
     #[test]
     fn test_parse_collector_word() {
-        let store = MemoryBlobStore::new();
-
-        let (value, _store) = parse_to_value("hello", store).unwrap();
+        let value = parse_to_value("hello").unwrap();
 
         match value {
             Value::Word(word) => {
@@ -252,9 +283,7 @@ mod tests {
 
     #[test]
     fn test_parse_collector_set_word() {
-        let store = MemoryBlobStore::new();
-
-        let (value, _store) = parse_to_value("x:", store).unwrap();
+        let value = parse_to_value("x:").unwrap();
 
         match value {
             Value::SetWord(word) => {
@@ -266,9 +295,7 @@ mod tests {
 
     #[test]
     fn test_parse_collector_integer() {
-        let store = MemoryBlobStore::new();
-
-        let (value, _store) = parse_to_value("42", store).unwrap();
+        let value = parse_to_value("42").unwrap();
 
         match value {
             Value::Int(num) => {
@@ -280,9 +307,7 @@ mod tests {
 
     #[test]
     fn test_parse_collector_negative_integer() {
-        let store = MemoryBlobStore::new();
-
-        let (value, _store) = parse_to_value("-123", store).unwrap();
+        let value = parse_to_value("-123").unwrap();
 
         match value {
             Value::Int(num) => {
@@ -294,26 +319,20 @@ mod tests {
 
     #[test]
     fn test_parse_collector_string() {
-        let store = MemoryBlobStore::new();
-
-        let (value, store) = parse_to_value("\"hello world\"", store).unwrap();
+        let value = parse_to_value("\"hello world\"").unwrap();
 
         assert_eq!(value.to_string(), "\"hello world\"");
     }
 
     #[test]
     fn test_parse_collector_simple_block() {
-        let store = MemoryBlobStore::new();
-
-        let (value, store) = parse_to_value("[hello 42]", store).unwrap();
+        let value = parse_to_value("[hello 42]").unwrap();
         assert_eq!(value.to_string(), "[hello 42]");
     }
 
     #[test]
     fn test_parse_collector_nested_block() {
-        let store = MemoryBlobStore::new();
-
-        let (value, store) = parse_to_value("[x: 10 [nested 20]]", store).unwrap();
+        let value = parse_to_value("[x: 10 [nested 20]]").unwrap();
         println!("value: {}", value);
     }
 
