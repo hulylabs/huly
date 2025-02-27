@@ -39,6 +39,17 @@ cargo clippy
 - **Comments**: Avoid inline comments, write self-explanatory code, use comments for complex logic
 - **Rust Docs**: Write Rust docs for public APIs, use `cargo doc --open` to generate and view docs
 
+## Code Patterns
+- **Visitor Pattern**: 
+  - Used for parsing with `Collector` trait (`parse.rs`, `collector.rs`) 
+  - Used for serialization with `Serializer` trait (`serialize.rs`)
+  - Allows creating new formats without modifying value representation
+  
+- **Value Serialization**:
+  - Binary serialization is available using `to_bytes` and `from_bytes` functions
+  - Custom serializers can be implemented using the `Serializer` trait
+  - Variable-length integer encoding used for efficient space utilization
+
 ## Commits
 
 - Make sure project compiles and tests pass before committing.

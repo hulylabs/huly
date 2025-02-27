@@ -3,7 +3,7 @@
 use smol_str::SmolStr;
 use std::fmt;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum Value {
     None,
     Int(i32),

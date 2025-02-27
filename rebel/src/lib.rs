@@ -7,4 +7,5 @@ pub mod encoding;
 mod hash;
 mod mem;
 pub mod parse;
+pub mod serialize;
 pub mod value;
