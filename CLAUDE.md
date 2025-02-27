@@ -124,6 +124,28 @@ let hash = module.store_blob(data)?;
 let retrieved_data = module.get_blob(&hash)?;
 ```
 
+### String Handling
+RebelDB handles strings in two ways depending on their length:
+
+```rust
+// Create a string that will be stored appropriately 
+// based on its length
+let (api_string, vm_value) = module.create_string("Hello world")?;
+
+// For short strings (≤31 bytes): Uses TAG_INLINE_STRING with direct storage
+// For long strings (>31 bytes): Uses TAG_STRING with storage in BlobStore
+
+// Extract a string from a VM value
+let extracted = module.extract_string(tag, data)?;
+
+// Or from an offset in the heap
+let extracted = module.extract_string_from_offset(offset)?;
+```
+
+The string creation process:
+1. Short strings (≤31 bytes): Stored inline with `TAG_INLINE_STRING` and packed into a fixed-size array
+2. Long strings (>31 bytes): Stored in the BlobStore with `TAG_STRING` and a reference to the blob hash
+
 ### Module as the Main Entry Point
 The recommended way to interact with the RebelDB VM is through the `Module` type, which provides factory methods for creating builders:
 
@@ -226,9 +248,10 @@ Both builders use the generic `with<T>()` method which accepts anything implemen
 ## Commit Rules
 
 - We're using git
-- Always sign-off commits
+- ALWAYS sign-off commits with `git commit -s` or add `Signed-off-by: Your Name <your.email@example.com>` to commit messages
 - Only commit code that compiles and all tests succeed
 - Make sure that clippy is happy before committing
+- Format commit messages with a clear title followed by bullet points explaining changes
 
 ## Preserve Knowledge
 

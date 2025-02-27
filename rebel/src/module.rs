@@ -121,6 +121,18 @@ where
     pub fn block_builder(&mut self) -> crate::builders::BlockBuilder<T> {
         crate::builders::BlockBuilder::new(&mut self.heap)
     }
+    
+    /// Process a string value for a builder
+    /// 
+    /// This is a helper method for builders to properly create string values
+    /// in the VM, using either inline strings or blob storage as appropriate.
+    /// 
+    /// Returns a [tag, data] pair ready to be used in the VM.
+    pub fn process_string_for_builder(&mut self, s: &str) -> Result<[Word; 2], CoreError> {
+        // Create the string and return just the VM value
+        let (_, vm_value) = self.create_string(s)?;
+        Ok(vm_value)
+    }
 }
 
 impl<T, B> Module<T, B> {
@@ -175,34 +187,52 @@ where
         self.store.put(data)
     }
     
-    /// Create a string value, either inline or blob-based depending on length
+    /// Create a string value in the heap, either inline or blob-based depending on length
     /// 
     /// This function handles the logic of choosing between inline strings (≤31 bytes)
     /// and blob-based strings (>31 bytes).
     /// 
-    /// Returns a Value with the appropriate string representation.
-    pub fn create_string(&mut self, s: &str) -> Result<crate::core::Value, CoreError> {
+    /// Returns a Value::String variant for API representation and the actual [tag, offset] 
+    /// pair that was created in the heap.
+    pub fn create_string(&mut self, s: &str) -> Result<(crate::core::Value, [Word; 2]), CoreError> {
         use crate::core::{Value, inline_string};
         
-        // Try to create an inline string first
-        if let Some(inline) = inline_string(s) {
-            // Create inline string representation - we pre-allocate it for efficiency
-            // but the actual storage happens in to_vm_value
-            let _offset = self.heap.alloc(inline).ok_or(CoreError::OutOfMemory)?;
-        } else {
-            // For longer strings, store in blob store
-            // Pre-store the blob for efficiency, but the actual storage reference happens in to_vm_value
-            let _hash = self.store_blob(s.as_bytes())?;
-        }
+        // The string is represented as a Value::String in the API
+        let string_value = Value::String(s.to_string());
         
-        // The string is always represented as a Value::String in the API
-        // The blob handling is done internally by to_vm_value
-        Ok(Value::String(s.to_string()))
+        // But we also need to create the actual storage in the heap
+        let vm_value = if let Some(inline) = inline_string(s) {
+            // Create inline string representation in heap
+            let offset = self.heap.alloc(inline).ok_or(CoreError::OutOfMemory)?;
+            [Value::TAG_INLINE_STRING, offset]
+        } else {
+            // For longer strings, store in blob store and reference the hash in heap
+            let hash = self.store_blob(s.as_bytes())?;
+            
+            // Convert hash bytes to Words and store in a block
+            let hash_words: Vec<Word> = hash.iter().map(|&b| b as Word).collect();
+            let hash_offset = self.heap.alloc_block(&hash_words).ok_or(CoreError::OutOfMemory)?;
+            
+            [Value::TAG_STRING, hash_offset]
+        };
+        
+        Ok((string_value, vm_value))
+    }
+    
+    /// Extract a string from VM representation given an offset (where the tag/data pair is stored)
+    /// 
+    /// This function examines the tag at the offset to determine if it's an inline or blob-based string,
+    /// then extracts the string appropriately.
+    pub fn extract_string_from_offset(&self, offset: Offset) -> Result<String, CoreError> {
+        // Get the tag and data from the offset
+        let [tag, data] = self.get_array::<2>(offset).ok_or(CoreError::BoundsCheckFailed)?;
+        self.extract_string(tag, data)
     }
     
     /// Extract a string from VM representation, whether inline or blob-based
     /// 
-    /// This function handles both inline strings and blob-based strings.
+    /// This function handles both inline strings and blob-based strings based on the tag.
+    /// It requires the tag/data pair that was created by create_string.
     pub fn extract_string(&self, tag: Word, data: Word) -> Result<String, CoreError> {
         use crate::core::Value;
         
@@ -339,40 +369,119 @@ mod tests {
         // Create a module
         let mut module = setup_module();
         
-        // Short string that should be stored inline
-        let short_string = "Hello";
+        // 1. Test short string (31 bytes or less) - should use inline representation
+        let short_string = "Hello, world!";
         
-        // Create a string Value
-        let short_string_value = module.create_string(short_string).expect("Failed to create short string");
+        // Create the short string in the heap and get both the API value and VM representation
+        let (api_value, vm_value) = module.create_string(short_string)
+            .expect("Failed to create short string");
         
-        // Extract the string to verify it works
-        let extracted_short = {
-            // First convert to VM representation in heap (not using to_vm_value since it works differently now)
-            if let Value::String(s) = &short_string_value {
-                let inline = inline_string(&s).unwrap();
-                let offset = module.heap.alloc(inline).unwrap();
-                module.extract_string(Value::TAG_INLINE_STRING, offset).expect("Failed to extract short string")
-            } else {
-                panic!("Expected string value");
-            }
-        };
+        // Check the API value is correct
+        if let Value::String(s) = api_value {
+            assert_eq!(s, short_string);
+        } else {
+            panic!("Expected String value");
+        }
         
+        // Check the VM representation uses the correct tag
+        let [tag, data] = vm_value;
+        assert_eq!(tag, Value::TAG_INLINE_STRING);
+        
+        // Store the VM representation in heap for testing
+        let vm_offset = module.heap.alloc(vm_value).expect("Failed to store VM value");
+        
+        // Test extract_string directly with tag/data
+        let extracted_short = module.extract_string(tag, data)
+            .expect("Failed to extract short string");
         assert_eq!(extracted_short, short_string);
         
-        // Test long string handling with blob store
+        // Test extract_string_from_offset with the offset
+        let extracted_short_from_offset = module.extract_string_from_offset(vm_offset)
+            .expect("Failed to extract short string from offset");
+        assert_eq!(extracted_short_from_offset, short_string);
+        
+        // 2. Test long string (more than 31 bytes) - should use blob store
         let long_string = "This is a very long string that should definitely be stored in the blob store because it exceeds the inline string limit of 31 bytes by quite a bit.";
         
-        // Store directly in blob store
-        let hash = module.store_blob(long_string.as_bytes()).expect("Failed to store blob");
+        // Create the long string and get both API value and VM representation
+        let (api_value_long, vm_value_long) = module.create_string(long_string)
+            .expect("Failed to create long string");
         
-        // Convert hash to words and store in heap
-        let hash_words: Vec<Word> = hash.iter().map(|&b| b as Word).collect();
-        let hash_offset = module.heap.alloc_block(&hash_words).unwrap();
+        // Check the API value is correct
+        if let Value::String(s) = api_value_long {
+            assert_eq!(s, long_string);
+        } else {
+            panic!("Expected String value");
+        }
         
-        // Extract using TAG_STRING
-        let extracted_long = module.extract_string(Value::TAG_STRING, hash_offset)
+        // Check the VM representation uses the correct tag
+        let [tag_long, data_long] = vm_value_long;
+        assert_eq!(tag_long, Value::TAG_STRING);
+        
+        // Store the VM representation in heap for testing
+        let vm_offset_long = module.heap.alloc(vm_value_long).expect("Failed to store VM value");
+        
+        // Test extract_string directly with tag/data
+        let extracted_long = module.extract_string(tag_long, data_long)
             .expect("Failed to extract long string");
-        
         assert_eq!(extracted_long, long_string);
+        
+        // Test extract_string_from_offset with the offset
+        let extracted_long_from_offset = module.extract_string_from_offset(vm_offset_long)
+            .expect("Failed to extract long string from offset");
+        assert_eq!(extracted_long_from_offset, long_string);
+        
+        // 3. Test exact boundary case (30 bytes)
+        let boundary_string = "This string is exactly 30 byte";
+        assert_eq!(boundary_string.len(), 30);
+        
+        let (_, vm_value_boundary) = module.create_string(boundary_string)
+            .expect("Failed to create boundary string");
+        
+        let [tag_boundary, data_boundary] = vm_value_boundary;
+        assert_eq!(tag_boundary, Value::TAG_INLINE_STRING);
+        
+        let extracted_boundary = module.extract_string(tag_boundary, data_boundary)
+            .expect("Failed to extract boundary string");
+        assert_eq!(extracted_boundary, boundary_string);
+        
+        // 4. Test just over boundary case (31+ bytes)
+        let over_boundary_string = "This string is over 31 bytes long!!";
+        assert_eq!(over_boundary_string.len(), 35);
+        
+        let (_, vm_value_over) = module.create_string(over_boundary_string)
+            .expect("Failed to create over boundary string");
+        
+        let [tag_over, data_over] = vm_value_over;
+        assert_eq!(tag_over, Value::TAG_STRING);
+        
+        let extracted_over = module.extract_string(tag_over, data_over)
+            .expect("Failed to extract over boundary string");
+        assert_eq!(extracted_over, over_boundary_string);
+        
+        // 5. Test Unicode string (with multi-byte characters)
+        let unicode_string = "Hello, 世界! 👋";
+        
+        let (_, vm_value_unicode) = module.create_string(unicode_string)
+            .expect("Failed to create Unicode string");
+        
+        let [tag_unicode, data_unicode] = vm_value_unicode;
+        
+        let extracted_unicode = module.extract_string(tag_unicode, data_unicode)
+            .expect("Failed to extract Unicode string");
+        assert_eq!(extracted_unicode, unicode_string);
+        
+        // 6. Test empty string
+        let empty_string = "";
+        
+        let (_, vm_value_empty) = module.create_string(empty_string)
+            .expect("Failed to create empty string");
+        
+        let [tag_empty, data_empty] = vm_value_empty;
+        assert_eq!(tag_empty, Value::TAG_INLINE_STRING);
+        
+        let extracted_empty = module.extract_string(tag_empty, data_empty)
+            .expect("Failed to extract empty string");
+        assert_eq!(extracted_empty, empty_string);
     }
 }

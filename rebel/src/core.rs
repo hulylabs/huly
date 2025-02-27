@@ -169,11 +169,14 @@ impl Value {
                     let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
                     Ok([Self::TAG_INLINE_STRING, s_offset])
                 } else {
-                    // This is a simplification for now - in the full Module implementation,
-                    // we'd store this in a blob, but here we'll truncate
+                    // For longer strings, the caller should use Module::create_string instead
+                    // Here we just truncate since we can't access the blob store
                     let truncated = s.chars().take(31).collect::<String>();
                     let s_inline = inline_string(&truncated).ok_or(CoreError::StringTooLong)?;
                     let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
+                    
+                    // Return with a warning in the tag - should only happen in tests
+                    eprintln!("Warning: to_vm_value called with long string without blob store access. String truncated.");
                     Ok([Self::TAG_INLINE_STRING, s_offset])
                 }
             },
