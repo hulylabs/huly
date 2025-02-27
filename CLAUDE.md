@@ -69,9 +69,20 @@ RebelDB is inspired by REBOL (Relative Expression-Based Object Language), and im
 - **Serialization**:
   - All Value types support serialization/deserialization
   - Binary format is compact and preserves all value semantics
-  - Tagged format allows efficient encoding/decoding
+  - Tagged format with variable-length encoding for efficient size
+  - Serialization API via Visitor pattern for extensibility
+  - Strong error types with specific error variants
+  - Support for streaming I/O with Reader/Writer interfaces
 
-For more information, see the [REBOL Design Principles](docs/rebol-design.md) documentation.
+The binary serialization format uses:
+  - Type tag byte (matching Tag constants in core.rs)
+  - Variable-length integer encoding for numbers and lengths
+  - UTF-8 encoding for string data
+  - Recursive encoding for nested structures (Block, Context)
+
+For detailed documentation, see:
+  - [REBOL Design Principles](docs/rebol-design.md)
+  - [Binary Serialization Format](docs/binary-serialization.md)
 
 ## Commits
 

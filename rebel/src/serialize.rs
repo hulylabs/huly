@@ -40,6 +40,10 @@
 //! - Integers use variable-length encoding (1-5 bytes)
 //! - Strings include a length prefix followed by UTF-8 bytes
 //! - Blocks include a length prefix followed by serialized items
+//! - Contexts store key-value pairs with string keys and any value type
+//!
+//! For detailed documentation of the binary format, see the 
+//! [Binary Serialization Format](/docs/binary-serialization.md) document.
 //!
 //! # Creating a Custom Serializer
 //!
