@@ -206,7 +206,6 @@ pub fn inline_string(string: &str) -> Option<[u32; 8]> {
 pub type NativeFn<T> = fn(module: &mut Exec<T>) -> Option<()>;
 
 // Core module functions that are moved to module.rs
-pub(crate) const SYMBOLS: Offset = 1;
 
 // E X E C U T I O N  C O N T E X T
 

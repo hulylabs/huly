@@ -7,6 +7,7 @@ use std::arch::x86_64::{_mm_crc32_u32, _mm_crc32_u64};
 use std::arch::aarch64::__crc32cw;
 
 /// Compile-time CRC32C table generation using a `const fn`
+#[allow(dead_code)]
 const fn generate_crc32c_table() -> [u32; 256] {
     let mut table = [0; 256];
     let mut i = 0;
@@ -29,6 +30,7 @@ const fn generate_crc32c_table() -> [u32; 256] {
 }
 
 /// Precomputed CRC32C lookup table (computed at compile time)
+#[allow(dead_code)]
 const CRC32C_TABLE: [u32; 256] = generate_crc32c_table();
 
 /// Computes a 32-bit hash for an 8-element u32 array
@@ -92,6 +94,7 @@ unsafe fn hash_u32x8_arm(input: [u32; 8]) -> u32 {
 // }
 
 /// Computes a CRC32C hash for a 8-element `u32` array at **compile time**.
+#[allow(dead_code)]
 pub const fn hash_u32x8_const(input: [u32; 8]) -> u32 {
     let mut crc: u32 = 0;
     let mut i = 0;
