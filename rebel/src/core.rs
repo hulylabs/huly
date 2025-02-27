@@ -156,6 +156,7 @@ impl Value {
     pub const TAG_STACK_VALUE: Word = 8;
     pub const TAG_FUNC: Word = 9;
     pub const TAG_BOOL: Word = 10;
+    pub const TAG_STRING: Word = 11; // New tag for blob-based strings
     
     /// Convert a Value to its VM representation as a [tag, data] pair
     pub fn to_vm_value(&self, heap: &mut Heap<impl AsMut<[Word]> + AsRef<[Word]>>) -> Result<[Word; 2], CoreError> {
@@ -163,15 +164,24 @@ impl Value {
             Value::None => Ok([Self::TAG_NONE, 0]),
             Value::Int(i) => Ok([Self::TAG_INT, *i as Word]),
             Value::String(s) => {
-                let s_inline = inline_string(s).ok_or(CoreError::StringTooLong)?;
-                let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                Ok([Self::TAG_INLINE_STRING, s_offset])
+                // Try to create an inline string first (for strings <= 31 bytes)
+                if let Some(s_inline) = inline_string(s) {
+                    let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
+                    Ok([Self::TAG_INLINE_STRING, s_offset])
+                } else {
+                    // This is a simplification for now - in the full Module implementation,
+                    // we'd store this in a blob, but here we'll truncate
+                    let truncated = s.chars().take(31).collect::<String>();
+                    let s_inline = inline_string(&truncated).ok_or(CoreError::StringTooLong)?;
+                    let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
+                    Ok([Self::TAG_INLINE_STRING, s_offset])
+                }
             },
             Value::Bool(b) => Ok([Self::TAG_BOOL, if *b { 1 } else { 0 }]),
             Value::Context(c) => Ok([Self::TAG_CONTEXT, *c]),
             Value::Block(b) => Ok([Self::TAG_BLOCK, *b]),
             Value::Word(w) => {
-                // Get or create the referenced word's symbol
+                // Words must be inline strings (symbols can't be stored in blobs)
                 let word_inline = inline_string(w).ok_or(CoreError::StringTooLong)?;
                 let word_symbol = {
                     let mut sym_tbl = heap.get_symbols_mut().ok_or(CoreError::InternalError)?;
@@ -187,10 +197,14 @@ impl Value {
     }
 }
 
+/// Create an inline string representation for short strings (up to 31 bytes)
+/// The first byte stores the length, remaining 31 bytes store the string data
 pub fn inline_string(string: &str) -> Option<[u32; 8]> {
     let bytes = string.as_bytes();
     let len = bytes.len();
-    if len < 32 {
+    
+    // Strings must be <= 31 bytes for inline representation
+    if len <= 31 {
         let mut buf = [0; 8];
         buf[0] = len as u32;
         for (i, byte) in bytes.iter().enumerate() {
