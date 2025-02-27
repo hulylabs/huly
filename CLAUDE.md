@@ -153,6 +153,34 @@ Important note:
 - Since string storage may need the BlobStore, direct string creation via `.into_value()` or `Value::String` constructors is not supported
 - Always create strings through the Module API with `module.create_string()`
 
+### Word Handling
+RebelDB handles words (identifiers) as symbols stored in a symbol table:
+
+```rust
+// Create a word value directly with the module API
+let word_value = module.create_word("my_variable")?;
+
+// Create a set-word value directly with the module API
+let set_word_value = module.create_set_word("my_variable")?;
+
+// Use the word values with builders
+ctx_builder.with("command", word_value)
+block_builder.with(word_value)
+```
+
+The word handling process:
+1. Words are first converted to inline string representation
+2. These strings are registered in a symbol table to get unique Symbol IDs
+3. The Symbol ID (u32) is used for lookups during execution
+4. Value::Word and Value::SetWord variants store the Symbol ID, not the string itself
+
+Important:
+- Value::Word(Symbol) and Value::SetWord(Symbol) use integer IDs instead of strings
+- Symbol IDs are more efficient than string comparisons during execution
+- The symbol table provides a form of string interning
+- Always create words using the Module API methods (module.create_word() and module.create_set_word())
+- Never use deprecated methods like with_word() or with_string() - they have been removed
+
 ### Module as the Main Entry Point
 The recommended way to interact with the RebelDB VM is through the `Module` type, which provides factory methods for creating builders:
 

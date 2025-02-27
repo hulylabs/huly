@@ -1,8 +1,8 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::boot::core_package;
-use crate::core::{inline_string, CoreError, Value};
-use crate::mem::{Context, Heap, Offset, SymbolTable, Word};
+use crate::core::{CoreError, Value};
+use crate::mem::{Context, Heap, Offset, SymbolTable, Word, Symbol};
 
 // FuncDesc struct moved from core.rs
 use crate::core::NativeFn;
@@ -67,16 +67,23 @@ where
         name: &str,
         func: crate::core::NativeFn<T, B>,
         arity: u32,
-    ) -> Option<()> {
+    ) -> Option<()> 
+    where 
+        T: AsMut<[Word]> + AsRef<[Word]>
+    {
         let index = self.functions.len() as u32;
         self.functions.push(FuncDesc { func, arity });
-        let symbol = inline_string(name)?;
-        let id = self.get_symbols_mut()?.get_or_insert(symbol)?;
+        
+        // Get the symbol ID for the name
+        let symbol_id = self.get_or_create_symbol(name).ok()?;
+        
+        // Get the context and store the function
         let mut words = self
             .heap
             .get_block_mut(self.system_words)
             .map(Context::new)?;
-        words.put(id, [Value::TAG_NATIVE_FN, index])
+        
+        words.put(symbol_id, [Value::TAG_NATIVE_FN, index])
     }
 
     pub fn eval(&mut self, block: Offset) -> Option<[Word; 2]> {
@@ -182,6 +189,45 @@ where
     pub fn get_blob(&self, hash: &Hash) -> Result<&[u8], CoreError> {
         self.store.get(hash)
     }
+    
+    /// Get or create a symbol ID for a word
+    fn get_or_create_symbol(&mut self, word: &str) -> Result<Symbol, CoreError> 
+    where 
+        T: AsMut<[Word]> + AsRef<[Word]>
+    {
+        use crate::core::inline_string;
+        
+        // Convert to inline string
+        let word_inline = inline_string(word).ok_or(CoreError::StringTooLong)?;
+        
+        // Get or insert into symbol table - special handling since this is the module
+        let symbols_addr = self.heap.get::<1>(Self::SYMBOLS).ok_or(CoreError::InternalError)?;
+        let symbols_addr = symbols_addr[0];
+        let symbols_block = self.heap.get_block_mut(symbols_addr).ok_or(CoreError::InternalError)?;
+        let mut sym_tbl = SymbolTable::new(symbols_block);
+        
+        sym_tbl.get_or_insert(word_inline).ok_or(CoreError::SymbolTableFull)
+    }
+    
+    /// Create a word value from a string
+    pub fn create_word(&mut self, word: &str) -> Result<Value, CoreError> 
+    where 
+        T: AsMut<[Word]> + AsRef<[Word]>
+    {
+        let symbol = self.get_or_create_symbol(word)?;
+        Ok(Value::Word(symbol))
+    }
+    
+    /// Create a set-word value from a string
+    pub fn create_set_word(&mut self, word: &str) -> Result<Value, CoreError> 
+    where 
+        T: AsMut<[Word]> + AsRef<[Word]>
+    {
+        let symbol = self.get_or_create_symbol(word)?;
+        Ok(Value::SetWord(symbol))
+    }
+    
+    // The create_word_from_ref method has been removed as it's no longer needed
 }
 
 impl<T, B> Module<T, B>

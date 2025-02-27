@@ -61,21 +61,7 @@ where
         self.with_value(name, Value::Int(value))
     }
     
-    /// Add a string value to the context
-    /// 
-    /// NOTE: This operation can only create inline strings (≤31 bytes).
-    /// For longer strings, you must use module.create_string() and add the result to the context.
-    pub fn with_string(self, name: &str, value: &str) -> Self {
-        // Since we can't access a module here, we can only create inline strings
-        if value.len() > 31 {
-            panic!("String too long for inline storage. Use module.create_string() instead: '{}'", value);
-        }
-        
-        // We can't create a proper Value::String here, so we'll use a placeholder
-        // The actual string data will be properly handled in the build() method
-        // We use a special marker to indicate it's a raw string that needs processing
-        self.with_value(name, crate::core::Value::Word(format!("__RAW_STRING__:{}", value)))
-    }
+    // with_string method has been removed - use module.create_string() and ctx_builder.with() instead
     
     /// Add a boolean value to the context
     pub fn with_bool(self, name: &str, value: bool) -> Self {
@@ -92,10 +78,7 @@ where
         self.with_value(name, Value::Block(block))
     }
     
-    /// Add a word reference to the context
-    pub fn with_word(self, name: &str, word: &str) -> Self {
-        self.with_value(name, Value::Word(word.to_string()))
-    }
+    // with_word method has been removed - use module.create_word() and ctx_builder.with() instead
     
     /// Add a none/null value to the context
     pub fn with_none(self, name: &str) -> Self {
@@ -137,28 +120,14 @@ where
                 Value::Bool(b) => [Value::TAG_BOOL, if b { 1 } else { 0 }],
                 Value::Context(c) => [Value::TAG_CONTEXT, c],
                 Value::Block(b) => [Value::TAG_BLOCK, b],
-                // Special handling for our __RAW_STRING__ marker
-                Value::Word(w) if w.starts_with("__RAW_STRING__:") => {
-                    // Extract the actual string content
-                    let content = &w["__RAW_STRING__:".len()..];
-                    
-                    // Create inline string - we already checked length in with_string method
-                    let s_inline = inline_string(content).ok_or(CoreError::StringTooLong)?;
-                    let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                    [Value::TAG_INLINE_STRING, s_offset]
-                },
                 // Handle already processed string values from Module::create_string
                 Value::String(offset) => {
                     // Just fetch the [tag, data] pair from the heap
                     self.heap.get(offset).ok_or(CoreError::OutOfMemory)?
                 },
-                Value::Word(w) => {
-                    let word_inline = inline_string(&w).ok_or(CoreError::StringTooLong)?;
-                    let word_symbol = {
-                        let mut sym_tbl = self.heap.get_symbols_mut().ok_or(CoreError::InternalError)?;
-                        sym_tbl.get_or_insert(word_inline).ok_or(CoreError::SymbolTableFull)?
-                    };
-                    [Value::TAG_WORD, word_symbol]
+                Value::Word(symbol) => {
+                    // It's already a proper symbol ID
+                    [Value::TAG_WORD, symbol]
                 },
                 Value::NativeFn(n) => [Value::TAG_NATIVE_FN, n],
                 Value::Func(f) => [Value::TAG_FUNC, f],
@@ -215,21 +184,7 @@ where
         self.with_value(Value::Int(value))
     }
     
-    /// Add a string value to the block
-    /// 
-    /// NOTE: This operation can only create inline strings (≤31 bytes).
-    /// For longer strings, you must use module.create_string() and add the result to the block.
-    pub fn with_string(self, value: &str) -> Self {
-        // Since we can't access a module here, we can only create inline strings
-        if value.len() > 31 {
-            panic!("String too long for inline storage. Use module.create_string() instead: '{}'", value);
-        }
-        
-        // We can't create a proper Value::String here, so we'll use a placeholder
-        // The actual string data will be properly handled in the build() method
-        // We use a special marker to indicate it's a raw string that needs processing
-        self.with_value(crate::core::Value::Word(format!("__RAW_STRING__:{}", value)))
-    }
+    // with_string method has been removed - use module.create_string() and block_builder.with() instead
     
     /// Add a boolean value to the block
     pub fn with_bool(self, value: bool) -> Self {
@@ -251,51 +206,39 @@ where
         self.with_value(Value::Block(block))
     }
     
-    /// Add a word reference to the block
-    pub fn with_word(self, word: &str) -> Self {
-        self.with_value(Value::Word(word.to_string()))
-    }
+    // with_word method has been removed - use module.create_word() and block_builder.with() instead
     
     /// Build the block and return a Value::Block
     pub fn build(self) -> Result<Value, CoreError> {
         // First, convert each value to its VM representation
         let mut vm_words = Vec::new();
         
-        for value in self.values {
+        for value in self.values.iter() {
             // Convert the value to a VM representation
             let vm_value = match value {
                 Value::None => [Value::TAG_NONE, 0],
-                Value::Int(i) => [Value::TAG_INT, i as Word],
-                Value::Bool(b) => [Value::TAG_BOOL, if b { 1 } else { 0 }],
-                Value::Context(c) => [Value::TAG_CONTEXT, c],
-                Value::Block(b) => [Value::TAG_BLOCK, b],
-                // We have a raw string marker from with_string
-                Value::Word(w) if w.starts_with("__RAW_STRING__:") => {
-                    // Extract the actual string content
-                    let content = &w["__RAW_STRING__:".len()..];
-                    
-                    // Create inline string - we already checked length in with_string method
-                    let s_inline = inline_string(content).ok_or(CoreError::StringTooLong)?;
-                    let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                    [Value::TAG_INLINE_STRING, s_offset]
+                Value::Int(i) => [Value::TAG_INT, *i as Word],
+                Value::Bool(b) => [Value::TAG_BOOL, if *b { 1 } else { 0 }],
+                Value::Context(c) => [Value::TAG_CONTEXT, *c],
+                Value::Block(b) => [Value::TAG_BLOCK, *b],
+                // This should never happen now that we don't use special markers
+                Value::Word(symbol) if *symbol == u32::MAX => {
+                    // This is a legacy/error case - it should never happen in the new API
+                    return Err(CoreError::InternalError);
                 },
                 // Handle already processed string values from Module::create_string
                 Value::String(offset) => {
                     // Just fetch the [tag, data] pair from the heap
-                    self.heap.get(offset).ok_or(CoreError::OutOfMemory)?
+                    self.heap.get(*offset).ok_or(CoreError::OutOfMemory)?
                 },
-                Value::Word(w) => {
-                    let word_inline = inline_string(&w).ok_or(CoreError::StringTooLong)?;
-                    let word_symbol = {
-                        let mut sym_tbl = self.heap.get_symbols_mut().ok_or(CoreError::InternalError)?;
-                        sym_tbl.get_or_insert(word_inline).ok_or(CoreError::SymbolTableFull)?
-                    };
-                    [Value::TAG_WORD, word_symbol]
+                Value::Word(symbol) => {
+                    // Regular symbol
+                    [Value::TAG_WORD, *symbol]
                 },
-                Value::NativeFn(n) => [Value::TAG_NATIVE_FN, n],
-                Value::Func(f) => [Value::TAG_FUNC, f],
-                Value::SetWord(s) => [Value::TAG_SET_WORD, s],
-                Value::StackValue(s) => [Value::TAG_STACK_VALUE, s],
+                Value::NativeFn(n) => [Value::TAG_NATIVE_FN, *n],
+                Value::Func(f) => [Value::TAG_FUNC, *f],
+                Value::SetWord(s) => [Value::TAG_SET_WORD, *s],
+                Value::StackValue(s) => [Value::TAG_STACK_VALUE, *s],
             };
             
             vm_words.push(vm_value[0]);
@@ -314,7 +257,7 @@ mod tests {
     use super::*;
     use crate::module::Module;
     use crate::core::Value;
-    use crate::{BlockOffset, WordRef};
+    use crate::BlockOffset;
     
     use crate::MemoryBlobStore;
     
@@ -330,16 +273,15 @@ mod tests {
         // Create a module
         let mut module = setup_module();
         
-        // Create a string name marker directly for testing
-        // Note: In real code, users should use module.create_string(), but for the test
-        // we can use the with_string method since it now handles the conversion
+        // Create a string value first
+        let string_value = module.create_string("Test User").expect("Failed to create string");
         
         // Create a context with the generic builder
         let context_value = {
             let heap = module.get_heap_mut();
             ContextBuilder::new(heap)
                 .with("age", 42)
-                .with_string("name", "Test User")  // Using the special with_string method
+                .with("name", string_value)  // Using the string value
                 .with("active", true)
                 .with("none", Value::None)
                 .build()
@@ -420,6 +362,10 @@ mod tests {
         // Create a block and contexts
         let block_data = [1, 2, 3, 4, 5];
         let (block_offset, parent_ctx_offset, ctx_offset) = {
+            // Create a word value first
+            let word_value = module.create_word("value").expect("Failed to create word");
+            
+            // Now get the heap
             let heap = module.get_heap_mut();
             
             // Create a block
@@ -440,7 +386,7 @@ mod tests {
             let ctx_value = ContextBuilder::new(heap)
                 .with("block", BlockOffset(block_offset))
                 .with("parent", parent_ctx_offset)  // Offset is treated as Context by default
-                .with("ref", WordRef("value".to_string()))
+                .with("ref", word_value)
                 .build()
                 .expect("Failed to build context");
                 
@@ -505,12 +451,15 @@ mod tests {
         // Create a module
         let mut module = setup_module();
         
+        // Create a string value first
+        let string_value = module.create_string("Hello").expect("Failed to create string");
+        
         // Create a block with the block builder
         let block_value = {
             let heap = module.get_heap_mut();
             BlockBuilder::new(heap)
                 .with_int(42)
-                .with_string("Hello")  // Using the with_string method that creates a marker
+                .with(string_value)  // Using the string value directly
                 .with_bool(true)
                 .with_none()
                 .build()
@@ -555,12 +504,19 @@ mod tests {
         
         // Create nested blocks and contexts
         let (inner_block_offset, ctx_offset, outer_block_offset) = {
+            // Create a string value first
+            let inner_string_value = module.create_string("Inner").expect("Failed to create string");
+            
+            // Create a word value
+            let word_value = module.create_word("print").expect("Failed to create word");
+            
+            // Now get the heap for the builders
             let heap = module.get_heap_mut();
             
             // Create inner block 
             let inner_block_value = BlockBuilder::new(heap)
                 .with_int(10)
-                .with_string("Inner")  // Using the with_string method that creates a marker
+                .with(inner_string_value)  // Using the pre-created string value
                 .build()
                 .expect("Failed to build inner block");
                 
@@ -586,7 +542,7 @@ mod tests {
                 .with_int(42)
                 .with(inner_block_value)      // Reference to inner block
                 .with(ctx_value)              // Reference to context
-                .with_word("print")           // Word reference
+                .with(word_value)             // Word reference (pre-created)
                 .build()
                 .expect("Failed to build outer block");
                 

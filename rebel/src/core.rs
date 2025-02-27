@@ -55,14 +55,14 @@ pub enum Value {
     Context(Offset),
     /// A reference to a block
     Block(Offset),
-    /// A reference to a word
-    Word(String),
+    /// A reference to a word (identified by symbol ID)
+    Word(Symbol),
     /// A reference to a native function
     NativeFn(Word),
     /// A reference to a function
     Func(Offset),
-    /// A reference to a set word
-    SetWord(Word),
+    /// A reference to a set word (identified by symbol ID)
+    SetWord(Symbol),
     /// A stack value reference
     StackValue(Word),
 }
@@ -127,21 +127,8 @@ impl IntoValue for &BlockOffset {
     }
 }
 
-/// Container for word references
-#[derive(Debug, Clone)]
-pub struct WordRef(pub String);
-
-impl IntoValue for WordRef {
-    fn into_value(self) -> Value {
-        Value::Word(self.0)
-    }
-}
-
-impl IntoValue for &WordRef {
-    fn into_value(self) -> Value {
-        Value::Word(self.0.clone())
-    }
-}
+// WordRef has been removed since it's no longer needed with the new API.
+// Users should use module.create_word() and module.create_set_word() directly.
 
 // Special case for direct Value values
 impl IntoValue for Value {
@@ -178,14 +165,9 @@ impl Value {
             Value::Bool(b) => Ok([Self::TAG_BOOL, if *b { 1 } else { 0 }]),
             Value::Context(c) => Ok([Self::TAG_CONTEXT, *c]),
             Value::Block(b) => Ok([Self::TAG_BLOCK, *b]),
-            Value::Word(w) => {
-                // Words must be inline strings (symbols can't be stored in blobs)
-                let word_inline = inline_string(w).ok_or(CoreError::StringTooLong)?;
-                let word_symbol = {
-                    let mut sym_tbl = heap.get_symbols_mut().ok_or(CoreError::InternalError)?;
-                    sym_tbl.get_or_insert(word_inline).ok_or(CoreError::SymbolTableFull)?
-                };
-                Ok([Self::TAG_WORD, word_symbol])
+            Value::Word(symbol) => {
+                // Symbol is already a symbol ID, so we just use it directly
+                Ok([Self::TAG_WORD, *symbol])
             },
             Value::NativeFn(n) => Ok([Self::TAG_NATIVE_FN, *n]),
             Value::Func(f) => Ok([Self::TAG_FUNC, *f]),

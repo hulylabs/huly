@@ -13,6 +13,6 @@ mod parse;
 // Re-export important types
 pub use blob::MemoryBlobStore;
 pub use builders::{BlockBuilder, ContextBuilder};
-pub use core::{inline_string, BlockOffset, CoreError, Exec, IntoValue, Value, WordRef};
+pub use core::{inline_string, BlockOffset, CoreError, Exec, IntoValue, Value};
 pub use mem::{Context, Heap, Offset, Stack, Symbol, SymbolTable, Word};
 pub use module::{BlobStore, Hash, Module};
