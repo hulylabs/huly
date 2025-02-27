@@ -55,7 +55,7 @@ impl Runtime {
 //
 
 enum Op {
-    Value(Value),
+    None,
     SetWord(SmolStr),
     CallNative(usize),
 }
@@ -99,20 +99,19 @@ impl<'a> Process<'a> {
                 let native = self.runtime.get_func(*index)?;
                 (native.func)(self)
             }
-            Op::Value(value) => Ok(self.stack.push(value.clone())),
+            Op::None => Err(CoreError::InternalError),
         }
     }
 
-    fn operation(&self, value: Value) -> Result<(Op, usize, usize), CoreError> {
-        let stack_len = self.stack.len();
+    fn operation(&self, value: Value) -> Result<(Op, usize), CoreError> {
         match value {
             Value::NativeFunc(index) => self
                 .runtime
                 .get_func(index)
-                .map(|native| (Op::CallNative(index), native.arity, stack_len)),
-            Value::SetWord(symbol) => Ok((Op::SetWord(symbol.clone()), 1, stack_len)),
+                .map(|native| (Op::CallNative(index), native.arity)),
+            Value::SetWord(symbol) => Ok((Op::SetWord(symbol.clone()), 1)),
             // Value::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
-            _ => Ok((Op::Value(value), 0, stack_len)),
+            _ => Ok((Op::None, 0)),
         }
     }
 
@@ -145,11 +144,19 @@ impl<'a> Process<'a> {
                 return self.do_op(&op);
             }
         }
-        let op = self
+        let (op, arity) = self
             .read_next()
             .and_then(|value| self.resolve(value))
             .and_then(|value| self.operation(value))?;
-        Ok(self.op_stack.push(op))
+        if arity == 0 {
+            match op {
+                Op::None => self.stack.push(Value::None),
+                _ => self.do_op(&op)?,
+            }
+        } else {
+            self.op_stack.push((op, arity, self.stack.len()));
+        }
+        Ok(())
     }
 
     // fn eval(&mut self) -> Result<Value, CoreError> {
