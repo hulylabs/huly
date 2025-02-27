@@ -5,9 +5,9 @@ pub mod core;
 mod hash;
 pub mod mem;
 mod parse;
-pub mod context_builder;
+pub mod builders;
 
 // Re-export important types
 pub use core::{Module, Exec, Value, CoreError, inline_string, IntoValue, BlockOffset, WordRef};
 pub use mem::{Heap, Context, Stack, SymbolTable, Word, Offset, Symbol};
-pub use context_builder::ContextBuilder;
+pub use builders::{ContextBuilder, BlockBuilder};
