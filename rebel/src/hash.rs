@@ -76,7 +76,7 @@ unsafe fn hash_u32x8_arm(input: [u32; 8]) -> u32 {
 }
 
 // -------------------- SCALAR FALLBACK (CRC32C TABLE) --------------------
-/// Software CRC32C implementation using a lookup table (identical to x86 & ARM CRC32C)
+// /// Software CRC32C implementation using a lookup table (identical to x86 & ARM CRC32C)
 // fn hash_u32x8_scalar(input: [u32; 8]) -> u32 {
 //     let mut crc: u32 = 0;
 //     for &val in &input {

@@ -194,6 +194,10 @@ where
     pub fn len(&self) -> Option<Offset> {
         self.0.len()
     }
+    
+    pub fn is_empty(&self) -> bool {
+        self.len().map_or(true, |len| len == 0)
+    }
 
     pub fn get<const N: usize>(&self, offset: Offset) -> Option<[Word; N]> {
         self.0.get(offset)

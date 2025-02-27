@@ -378,7 +378,7 @@ impl<'a, T> Exec<'a, T> {
     }
 }
 
-impl<'a, T> Exec<'a, T>
+impl<T> Exec<'_, T>
 where
     T: AsRef<[Word]>,
 {
@@ -427,7 +427,7 @@ where
     // }
 }
 
-impl<'a, T> Exec<'a, T>
+impl<T> Exec<'_, T>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
