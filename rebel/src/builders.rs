@@ -7,28 +7,41 @@ use crate::mem::{Context, Heap, Word, Offset};
 pub struct ContextBuilder<'a, T> {
     heap: &'a mut Heap<T>,
     values: Vec<(String, Value)>,
-    size: Offset,
+    capacity: Option<Offset>,
 }
 
 impl<'a, T> ContextBuilder<'a, T> 
 where
     T: AsMut<[Word]> + AsRef<[Word]>
 {
-    /// Create a new ContextBuilder with the given heap and size
-    pub fn new(heap: &'a mut Heap<T>, size: Offset) -> Self {
+    /// Create a new ContextBuilder with the given heap
+    /// 
+    /// The capacity will be calculated automatically based on the number of values added.
+    pub fn new(heap: &'a mut Heap<T>) -> Self {
         Self {
             heap,
             values: Vec::new(),
-            size,
+            capacity: None,
         }
     }
     
-    /// Create a new ContextBuilder with the given module's heap and size
-    pub fn with_module_heap(heap: &'a mut Heap<T>, size: Offset) -> Self {
+    /// Create a new ContextBuilder with the given heap and explicit capacity
+    /// 
+    /// Use this if you want to specify a fixed size for the context.
+    pub fn with_capacity(heap: &'a mut Heap<T>, capacity: Offset) -> Self {
         Self {
             heap,
             values: Vec::new(),
-            size,
+            capacity: Some(capacity),
+        }
+    }
+    
+    /// Create a new ContextBuilder with the given module's heap
+    pub fn with_module_heap(heap: &'a mut Heap<T>) -> Self {
+        Self {
+            heap,
+            values: Vec::new(),
+            capacity: None,
         }
     }
     
@@ -80,8 +93,19 @@ where
     
     /// Build the context and return a Value::Context
     pub fn build(self) -> Result<Value, CoreError> {
+        // Calculate capacity if not explicitly provided
+        // Use the entry count + some padding for growth (25% extra, min 2)
+        let capacity = match self.capacity {
+            Some(cap) => cap,
+            None => {
+                let entry_count = self.values.len() as Offset;
+                let padding = std::cmp::max(entry_count / 4, 2);
+                entry_count + padding
+            }
+        };
+        
         // Create the context
-        let ctx_offset = self.heap.alloc_context(self.size).ok_or(CoreError::OutOfMemory)?;
+        let ctx_offset = self.heap.alloc_context(capacity).ok_or(CoreError::OutOfMemory)?;
         
         // Make a map from name to VM value (tag, data) to be stored in context
         let mut to_store = Vec::with_capacity(self.values.len());
@@ -215,7 +239,7 @@ mod tests {
         // Create a context with the generic builder
         let context_value = {
             let heap = module.get_heap_mut();
-            ContextBuilder::new(heap, 10)
+            ContextBuilder::new(heap)
                 .with("age", 42)
                 .with("name", "Test User")
                 .with("active", true)
@@ -304,7 +328,7 @@ mod tests {
             let block_offset = heap.alloc_block(&block_data).expect("Failed to create block");
             
             // Create a parent context
-            let parent_ctx_value = ContextBuilder::new(heap, 5)
+            let parent_ctx_value = ContextBuilder::new(heap)
                 .with("value", 100)
                 .build()
                 .expect("Failed to build parent context");
@@ -315,7 +339,7 @@ mod tests {
             };
             
             // Create a context with references using the generic with method
-            let ctx_value = ContextBuilder::new(heap, 10)
+            let ctx_value = ContextBuilder::new(heap)
                 .with("block", BlockOffset(block_offset))
                 .with("parent", parent_ctx_offset)  // Offset is treated as Context by default
                 .with("ref", WordRef("value".to_string()))
@@ -448,7 +472,7 @@ mod tests {
             };
                 
             // Create a context
-            let ctx_value = ContextBuilder::new(heap, 5)
+            let ctx_value = ContextBuilder::new(heap)
                 .with("x", 100)
                 .with("y", 200)
                 .build()

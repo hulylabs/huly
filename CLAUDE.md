@@ -42,13 +42,19 @@ The recommended way to create contexts in RebelDB is using the `ContextBuilder` 
 ```rust
 use rebel::{ContextBuilder, Value, BlockOffset, WordRef};
 
-// Basic value types use automatic type inference
-let ctx_value = ContextBuilder::new(heap, 10)
+// Basic value types use automatic type inference 
+// The context size is calculated automatically based on the values added
+let ctx_value = ContextBuilder::new(heap)
     .with("age", 42)                        // i32 -> Int
     .with("name", "Test User")              // &str -> String
     .with("active", true)                   // bool -> Bool
     .with("none", Value::None)              // Direct value
     .build()?;                              // Returns Value::Context
+
+// You can specify an explicit capacity if needed
+let ctx_value = ContextBuilder::with_capacity(heap, 20)
+    .with("age", 42)
+    .build()?;
 
 // The build() method returns a Value variant (Value::Context)
 match ctx_value {
@@ -57,9 +63,9 @@ match ctx_value {
 }
 
 // For references to other VM objects, use wrapper types:
-let parent_ctx_value = ContextBuilder::new(heap, 5).with("x", 100).build()?;
+let parent_ctx_value = ContextBuilder::new(heap).with("x", 100).build()?;
 
-let ctx_value = ContextBuilder::new(heap, 10)
+let ctx_value = ContextBuilder::new(heap)
     // Block references need BlockOffset wrapper
     .with("code", BlockOffset(block_offset))
     // Context references can use Value::Context directly
