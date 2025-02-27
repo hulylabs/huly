@@ -34,7 +34,9 @@ cargo clippy
 - **Types**: Use Rust's strong type system; avoid raw pointers when possible
 - **Error Propagation**: Use `?` operator for error propagation, not `.unwrap()` or `.expect()`
 
-## RebelDB VM Context Creation
+## RebelDB VM Builders
+
+### Context Creation
 The recommended way to create contexts in RebelDB is using the `ContextBuilder` API:
 
 ```rust
@@ -59,7 +61,37 @@ let ctx = ContextBuilder::new(heap, 10)
     .build()?;
 ```
 
-The generic `with<T>()` method accepts anything implementing `IntoValue`:
+### Block Creation
+For creating blocks, use the `BlockBuilder` API:
+
+```rust
+use rebel::{BlockBuilder, Value, BlockOffset, WordRef};
+
+// Create a simple block with values
+let block = BlockBuilder::new(heap)
+    .with_int(42)
+    .with_string("Hello")
+    .with_bool(true)
+    .with_none()
+    .build()?;
+
+// Create nested blocks
+let inner_block = BlockBuilder::new(heap)
+    .with_int(10)
+    .with_string("Inner")
+    .build()?;
+    
+// Outer block that references the inner block
+let outer_block = BlockBuilder::new(heap)
+    .with_int(42)
+    .with_block(inner_block)      // Reference to inner block
+    .with_context(ctx)            // Reference to context
+    .with_word("print")           // Word reference
+    .build()?;
+```
+
+### IntoValue Trait
+Both builders use the generic `with<T>()` method which accepts anything implementing `IntoValue`:
 - i32 → Int VM value
 - &str and String → String VM value
 - bool → Bool VM value
@@ -72,6 +104,7 @@ The generic `with<T>()` method accepts anything implementing `IntoValue`:
 
 - We're using git
 - Always sign-off commits
+- Only commit code that compiles and all tests succeed
 
 ## Preserve Knowledge
 
