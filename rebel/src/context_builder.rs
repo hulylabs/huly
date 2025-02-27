@@ -1,101 +1,12 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Value, CoreError, inline_string};
+use crate::core::{Value, IntoValue, CoreError, inline_string};
 use crate::mem::{Context, Heap, Word, Offset};
-use std::convert::Into;
-
-/// A value that can be stored in a context
-#[derive(Debug)]
-pub enum ContextValue {
-    /// An integer value
-    Int(i32),
-    /// A string value
-    String(String),
-    /// A boolean value
-    Bool(bool),
-    /// A reference to another context
-    Context(Offset),
-    /// A reference to a code block
-    Block(Offset),
-    /// A reference to a word
-    Word(String),
-    /// None/null value
-    None,
-}
-
-/// Trait for values that can be converted into a ContextValue
-pub trait IntoContextValue {
-    /// Convert this type to a ContextValue
-    fn into_context_value(self) -> ContextValue;
-}
-
-// Implementation for common Rust types
-impl IntoContextValue for i32 {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::Int(self)
-    }
-}
-
-impl IntoContextValue for &str {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::String(self.to_string())
-    }
-}
-
-impl IntoContextValue for String {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::String(self)
-    }
-}
-
-impl IntoContextValue for bool {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::Bool(self)
-    }
-}
-
-// Implementation for Offset - need to distinguish between different uses
-impl IntoContextValue for Offset {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::Context(self)
-    }
-}
-
-/// Container for block offsets to differentiate from context offsets
-pub struct BlockOffset(pub Offset);
-
-impl IntoContextValue for BlockOffset {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::Block(self.0)
-    }
-}
-
-/// Container for word references
-pub struct WordRef(pub String);
-
-impl IntoContextValue for WordRef {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::Word(self.0)
-    }
-}
-
-impl IntoContextValue for &WordRef {
-    fn into_context_value(self) -> ContextValue {
-        ContextValue::Word(self.0.clone())
-    }
-}
-
-// Special case for direct ContextValue values
-impl IntoContextValue for ContextValue {
-    fn into_context_value(self) -> ContextValue {
-        self
-    }
-}
 
 /// A builder for creating Context objects with a Rust-friendly API
 pub struct ContextBuilder<'a, T> {
     heap: &'a mut Heap<T>,
-    values: Vec<(String, ContextValue)>,
+    values: Vec<(String, Value)>,
     size: Offset,
 }
 
@@ -122,49 +33,49 @@ where
     }
     
     /// Add a value to the context with the given name
-    pub fn with_value(mut self, name: &str, value: ContextValue) -> Self {
+    pub fn with_value(mut self, name: &str, value: Value) -> Self {
         self.values.push((name.to_string(), value));
         self
     }
     
-    /// Add a value to the context with the given name using any type that implements IntoContextValue
-    pub fn with<V: IntoContextValue>(self, name: &str, value: V) -> Self {
-        self.with_value(name, value.into_context_value())
+    /// Add a value to the context with the given name using any type that implements IntoValue
+    pub fn with<V: IntoValue>(self, name: &str, value: V) -> Self {
+        self.with_value(name, value.into_value())
     }
     
     /// Add an integer value to the context
     pub fn with_int(self, name: &str, value: i32) -> Self {
-        self.with_value(name, ContextValue::Int(value))
+        self.with_value(name, Value::Int(value))
     }
     
     /// Add a string value to the context
     pub fn with_string(self, name: &str, value: &str) -> Self {
-        self.with_value(name, ContextValue::String(value.to_string()))
+        self.with_value(name, Value::String(value.to_string()))
     }
     
     /// Add a boolean value to the context
     pub fn with_bool(self, name: &str, value: bool) -> Self {
-        self.with_value(name, ContextValue::Bool(value))
+        self.with_value(name, Value::Bool(value))
     }
     
     /// Add a context reference to the context
     pub fn with_context(self, name: &str, context: Offset) -> Self {
-        self.with_value(name, ContextValue::Context(context))
+        self.with_value(name, Value::Context(context))
     }
     
     /// Add a block reference to the context
     pub fn with_block(self, name: &str, block: Offset) -> Self {
-        self.with_value(name, ContextValue::Block(block))
+        self.with_value(name, Value::Block(block))
     }
     
     /// Add a word reference to the context
     pub fn with_word(self, name: &str, word: &str) -> Self {
-        self.with_value(name, ContextValue::Word(word.to_string()))
+        self.with_value(name, Value::Word(word.to_string()))
     }
     
     /// Add a none/null value to the context
     pub fn with_none(self, name: &str) -> Self {
-        self.with_value(name, ContextValue::None)
+        self.with_value(name, Value::None)
     }
     
     /// Build the context and return its offset
@@ -185,37 +96,7 @@ where
             };
             
             // Convert value to VM representation
-            let vm_value = match value {
-                ContextValue::Int(i) => {
-                    [Value::TAG_INT, i as Word]
-                },
-                ContextValue::String(s) => {
-                    let s_inline = inline_string(&s).ok_or(CoreError::StringTooLong)?;
-                    let s_offset = self.heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
-                    [Value::TAG_INLINE_STRING, s_offset]
-                },
-                ContextValue::Bool(b) => {
-                    [Value::TAG_BOOL, if b { 1 } else { 0 }]
-                },
-                ContextValue::Context(c) => {
-                    [Value::TAG_CONTEXT, c]
-                },
-                ContextValue::Block(b) => {
-                    [Value::TAG_BLOCK, b]
-                },
-                ContextValue::Word(w) => {
-                    // Get or create the referenced word's symbol
-                    let word_inline = inline_string(&w).ok_or(CoreError::StringTooLong)?;
-                    let word_symbol = {
-                        let mut sym_tbl = self.heap.get_symbols_mut().ok_or(CoreError::InternalError)?;
-                        sym_tbl.get_or_insert(word_inline).ok_or(CoreError::SymbolTableFull)?
-                    };
-                    [Value::TAG_WORD, word_symbol]
-                },
-                ContextValue::None => {
-                    [Value::TAG_NONE, 0]
-                }
-            };
+            let vm_value = value.to_vm_value(self.heap)?;
             
             to_store.push((symbol, vm_value));
         }
@@ -255,7 +136,7 @@ mod tests {
                 .with("age", 42)
                 .with("name", "Test User")
                 .with("active", true)
-                .with("none", ContextValue::None)
+                .with("none", Value::None)
                 .build()
                 .expect("Failed to build context")
         };

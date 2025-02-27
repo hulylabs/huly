@@ -39,9 +39,108 @@ pub enum CoreError {
 
 // V A L U E
 
+/// A value that can be used with the RebelDB VM
+#[derive(Debug, Clone)]
 pub enum Value {
+    /// None/null value
     None,
+    /// An integer value
     Int(i32),
+    /// A string value
+    String(String),
+    /// A boolean value
+    Bool(bool),
+    /// A reference to a context
+    Context(Offset),
+    /// A reference to a block
+    Block(Offset),
+    /// A reference to a word
+    Word(String),
+    /// A reference to a native function
+    NativeFn(Word),
+    /// A reference to a function
+    Func(Offset),
+    /// A reference to a set word
+    SetWord(Word),
+    /// A stack value reference
+    StackValue(Word),
+}
+
+/// Trait for values that can be converted into a Value
+pub trait IntoValue {
+    /// Convert this type to a Value
+    fn into_value(self) -> Value;
+}
+
+// Implementation for common Rust types
+impl IntoValue for i32 {
+    fn into_value(self) -> Value {
+        Value::Int(self)
+    }
+}
+
+impl IntoValue for &str {
+    fn into_value(self) -> Value {
+        Value::String(self.to_string())
+    }
+}
+
+impl IntoValue for String {
+    fn into_value(self) -> Value {
+        Value::String(self)
+    }
+}
+
+impl IntoValue for bool {
+    fn into_value(self) -> Value {
+        Value::Bool(self)
+    }
+}
+
+// Implementation for Offset - need to distinguish between different uses
+impl IntoValue for Offset {
+    fn into_value(self) -> Value {
+        Value::Context(self)
+    }
+}
+
+/// Container for block offsets to differentiate from context offsets
+#[derive(Debug, Clone)]
+pub struct BlockOffset(pub Offset);
+
+impl IntoValue for BlockOffset {
+    fn into_value(self) -> Value {
+        Value::Block(self.0)
+    }
+}
+
+impl IntoValue for &BlockOffset {
+    fn into_value(self) -> Value {
+        Value::Block(self.0)
+    }
+}
+
+/// Container for word references
+#[derive(Debug, Clone)]
+pub struct WordRef(pub String);
+
+impl IntoValue for WordRef {
+    fn into_value(self) -> Value {
+        Value::Word(self.0)
+    }
+}
+
+impl IntoValue for &WordRef {
+    fn into_value(self) -> Value {
+        Value::Word(self.0.clone())
+    }
+}
+
+// Special case for direct Value values
+impl IntoValue for Value {
+    fn into_value(self) -> Value {
+        self
+    }
 }
 
 impl Value {
@@ -56,6 +155,35 @@ impl Value {
     pub const TAG_STACK_VALUE: Word = 8;
     pub const TAG_FUNC: Word = 9;
     pub const TAG_BOOL: Word = 10;
+    
+    /// Convert a Value to its VM representation as a [tag, data] pair
+    pub fn to_vm_value(&self, heap: &mut Heap<impl AsMut<[Word]> + AsRef<[Word]>>) -> Result<[Word; 2], CoreError> {
+        match self {
+            Value::None => Ok([Self::TAG_NONE, 0]),
+            Value::Int(i) => Ok([Self::TAG_INT, *i as Word]),
+            Value::String(s) => {
+                let s_inline = inline_string(s).ok_or(CoreError::StringTooLong)?;
+                let s_offset = heap.alloc(s_inline).ok_or(CoreError::OutOfMemory)?;
+                Ok([Self::TAG_INLINE_STRING, s_offset])
+            },
+            Value::Bool(b) => Ok([Self::TAG_BOOL, if *b { 1 } else { 0 }]),
+            Value::Context(c) => Ok([Self::TAG_CONTEXT, *c]),
+            Value::Block(b) => Ok([Self::TAG_BLOCK, *b]),
+            Value::Word(w) => {
+                // Get or create the referenced word's symbol
+                let word_inline = inline_string(w).ok_or(CoreError::StringTooLong)?;
+                let word_symbol = {
+                    let mut sym_tbl = heap.get_symbols_mut().ok_or(CoreError::InternalError)?;
+                    sym_tbl.get_or_insert(word_inline).ok_or(CoreError::SymbolTableFull)?
+                };
+                Ok([Self::TAG_WORD, word_symbol])
+            },
+            Value::NativeFn(n) => Ok([Self::TAG_NATIVE_FN, *n]),
+            Value::Func(f) => Ok([Self::TAG_FUNC, *f]),
+            Value::SetWord(s) => Ok([Self::TAG_SET_WORD, *s]),
+            Value::StackValue(s) => Ok([Self::TAG_STACK_VALUE, *s]),
+        }
+    }
 }
 
 pub fn inline_string(string: &str) -> Option<[u32; 8]> {
