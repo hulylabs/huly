@@ -140,36 +140,30 @@ pub fn decode_i32(buffer: &[u8]) -> Option<(i32, usize)> {
             if buffer.len() < 2 {
                 return None;
             }
-            buffer.get(1).map(|&b| (b as i32, 2))
+            Some((buffer[1] as i32, 2))
         }
         0x41 => {
             if buffer.len() < 3 {
                 return None;
             }
-            let b1 = *buffer.get(1)? as i32;
-            let b2 = *buffer.get(2)? as i32;
-            let value = (b1 << 8) | b2;
+            let value = ((buffer[1] as i32) << 8) | (buffer[2] as i32);
             Some((value, 3))
         }
         0x42 => {
             if buffer.len() < 4 {
                 return None;
             }
-            let b1 = *buffer.get(1)? as i32;
-            let b2 = *buffer.get(2)? as i32;
-            let b3 = *buffer.get(3)? as i32;
-            let value = (b1 << 16) | (b2 << 8) | b3;
+            let value = ((buffer[1] as i32) << 16) | ((buffer[2] as i32) << 8) | (buffer[3] as i32);
             Some((value, 4))
         }
         0x43 => {
             if buffer.len() < 5 {
                 return None;
             }
-            let b1 = *buffer.get(1)? as i32;
-            let b2 = *buffer.get(2)? as i32;
-            let b3 = *buffer.get(3)? as i32;
-            let b4 = *buffer.get(4)? as i32;
-            let value = (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
+            let value = ((buffer[1] as i32) << 24)
+                | ((buffer[2] as i32) << 16)
+                | ((buffer[3] as i32) << 8)
+                | (buffer[4] as i32);
             Some((value, 5))
         }
 
@@ -178,36 +172,30 @@ pub fn decode_i32(buffer: &[u8]) -> Option<(i32, usize)> {
             if buffer.len() < 2 {
                 return None;
             }
-            buffer.get(1).map(|&b| (-(b as i32), 2))
+            Some((-(buffer[1] as i32), 2))
         }
         0x45 => {
             if buffer.len() < 3 {
                 return None;
             }
-            let b1 = *buffer.get(1)? as i32;
-            let b2 = *buffer.get(2)? as i32;
-            let value = (b1 << 8) | b2;
+            let value = ((buffer[1] as i32) << 8) | (buffer[2] as i32);
             Some((-value, 3))
         }
         0x46 => {
             if buffer.len() < 4 {
                 return None;
             }
-            let b1 = *buffer.get(1)? as i32;
-            let b2 = *buffer.get(2)? as i32;
-            let b3 = *buffer.get(3)? as i32;
-            let value = (b1 << 16) | (b2 << 8) | b3;
+            let value = ((buffer[1] as i32) << 16) | ((buffer[2] as i32) << 8) | (buffer[3] as i32);
             Some((-value, 4))
         }
         0x47 => {
             if buffer.len() < 5 {
                 return None;
             }
-            let b1 = *buffer.get(1)? as i32;
-            let b2 = *buffer.get(2)? as i32;
-            let b3 = *buffer.get(3)? as i32;
-            let b4 = *buffer.get(4)? as i32;
-            let value = (b1 << 24) | (b2 << 16) | (b3 << 8) | b4;
+            let value = ((buffer[1] as i32) << 24)
+                | ((buffer[2] as i32) << 16)
+                | ((buffer[3] as i32) << 8)
+                | (buffer[4] as i32);
             Some((-value, 5))
         }
 
