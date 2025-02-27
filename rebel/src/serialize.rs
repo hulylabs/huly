@@ -62,6 +62,7 @@ impl BinTag {
     pub const NONE: u8 = Tag::TAG_NONE as u8;
     pub const INT: u8 = Tag::TAG_INT as u8;
     pub const BLOCK: u8 = Tag::TAG_BLOCK as u8;
+    pub const CONTEXT: u8 = Tag::TAG_CONTEXT as u8;
     pub const INLINE_STRING: u8 = Tag::TAG_INLINE_STRING as u8;
     pub const WORD: u8 = Tag::TAG_WORD as u8;
     pub const SET_WORD: u8 = Tag::TAG_SET_WORD as u8;
@@ -96,6 +97,15 @@ pub trait Serializer {
 
     /// End serializing a block
     fn end_block(&mut self) -> Result<(), Self::Error>;
+    
+    /// Begin serializing a context
+    fn begin_context(&mut self, len: usize) -> Result<(), Self::Error>;
+    
+    /// Serialize a context key
+    fn context_key(&mut self, key: &str) -> Result<(), Self::Error>;
+    
+    /// End serializing a context
+    fn end_context(&mut self) -> Result<(), Self::Error>;
 }
 
 /// Extension trait for Value to add serialization capabilities
@@ -118,6 +128,14 @@ impl ValueSerialize for Value {
                     item.serialize(serializer)?;
                 }
                 serializer.end_block()
+            },
+            Value::Context(pairs) => {
+                serializer.begin_context(pairs.len())?;
+                for (key, value) in pairs.iter() {
+                    serializer.context_key(key)?;
+                    value.serialize(serializer)?;
+                }
+                serializer.end_context()
             }
         }
     }
@@ -226,6 +244,23 @@ impl<W: Write> Serializer for BinarySerializer<W> {
 
     fn end_block(&mut self) -> Result<(), Self::Error> {
         // No additional data needed for end_block in binary format
+        Ok(())
+    }
+    
+    fn begin_context(&mut self, len: usize) -> Result<(), Self::Error> {
+        // Write tag
+        self.writer.write_all(&[BinTag::CONTEXT])?;
+        // Write length (number of key-value pairs)
+        self.write_varint(len as i32)
+    }
+    
+    fn context_key(&mut self, key: &str) -> Result<(), Self::Error> {
+        // Write key as a string
+        self.write_string(key)
+    }
+    
+    fn end_context(&mut self) -> Result<(), Self::Error> {
+        // No additional data needed for end_context in binary format
         Ok(())
     }
 }
@@ -374,6 +409,28 @@ impl<R: Read> BinaryDeserializer<R> {
                 Ok(Value::Block(values.into_boxed_slice()))
             },
             
+            BinTag::CONTEXT => {
+                let len = self.read_varint()?;
+                if len < 0 {
+                    return Err(BinaryDeserializerError::DeserializeError("Invalid context length".into()));
+                }
+                
+                // Read each key-value pair in the context
+                let mut pairs = Vec::with_capacity(len as usize);
+                for _ in 0..len {
+                    // Read key
+                    let key_str = self.read_string()?;
+                    let key = SmolStr::new(key_str);
+                    
+                    // Read value
+                    let value = self.read_value()?;
+                    
+                    pairs.push((key, value));
+                }
+                
+                Ok(Value::Context(pairs.into_boxed_slice()))
+            },
+            
             _ => Err(BinaryDeserializerError::InvalidTag(tag)),
         }
     }
@@ -460,6 +517,77 @@ mod tests {
             BinTag::INT, 2, 
             BinTag::INT, 3
         ]);
+    }
+    
+    #[test]
+    fn test_serialize_empty_context() {
+        let value = Value::Context(Box::new([]));
+        let bytes = to_bytes(&value).unwrap();
+        // Tag (context), length 0
+        assert_eq!(bytes, vec![BinTag::CONTEXT, 0]);
+    }
+    
+    #[test]
+    fn test_serialize_simple_context() {
+        // Create a simple context with a few key-value pairs
+        let pairs = vec![
+            (SmolStr::new("name"), Value::String("John".into())),
+            (SmolStr::new("age"), Value::Int(30)),
+        ];
+        
+        let value = Value::Context(pairs.into_boxed_slice());
+        let bytes = to_bytes(&value).unwrap();
+        
+        // Expected format:
+        // - Tag (context)
+        // - Length 2 (2 key-value pairs)
+        // - First key: Length 4, "name" 
+        // - First value: Tag (string), Length 4, "John"
+        // - Second key: Length 3, "age"
+        // - Second value: Tag (int), 30
+        
+        // Check the context tag and length
+        assert_eq!(bytes[0], BinTag::CONTEXT);
+        assert_eq!(bytes[1], 2); // 2 pairs
+        
+        // Check the first key length and content
+        assert_eq!(bytes[2], 4); // "name" is 4 bytes
+        assert_eq!(&bytes[3..7], b"name");
+        
+        // Check the first value tag, length, and content
+        assert_eq!(bytes[7], BinTag::INLINE_STRING);
+        assert_eq!(bytes[8], 4); // "John" is 4 bytes
+        assert_eq!(&bytes[9..13], b"John");
+        
+        // Check the second key length and content
+        assert_eq!(bytes[13], 3); // "age" is 3 bytes
+        assert_eq!(&bytes[14..17], b"age");
+        
+        // Check the second value tag and content
+        assert_eq!(bytes[17], BinTag::INT);
+        assert_eq!(bytes[18], 30);
+    }
+    
+    #[test]
+    fn test_serialize_nested_context() {
+        // Create a context with nested values
+        let inner_pairs = vec![
+            (SmolStr::new("x"), Value::Int(1)),
+            (SmolStr::new("y"), Value::Int(2)),
+        ];
+        
+        let pairs = vec![
+            (SmolStr::new("name"), Value::String("Alice".into())),
+            (SmolStr::new("coords"), Value::Context(inner_pairs.into_boxed_slice())),
+        ];
+        
+        let value = Value::Context(pairs.into_boxed_slice());
+        let bytes = to_bytes(&value).unwrap();
+        
+        // This is a more complex test to verify that nested contexts are correctly serialized
+        assert!(bytes.len() > 15); // Should be substantial
+        assert_eq!(bytes[0], BinTag::CONTEXT); // Context tag
+        assert_eq!(bytes[1], 2); // 2 pairs
     }
 
     #[test]
@@ -557,6 +685,44 @@ mod tests {
     }
     
     #[test]
+    fn test_deserialize_empty_context() {
+        let bytes = [BinTag::CONTEXT, 0];
+        let value = from_bytes(&bytes).unwrap();
+        if let Value::Context(ctx) = value {
+            assert_eq!(ctx.len(), 0);
+        } else {
+            panic!("Expected Context, got {:?}", value);
+        }
+    }
+    
+    #[test]
+    fn test_deserialize_simple_context() {
+        // Format:
+        // Context tag, length 2,
+        // Key "a" (length 1, "a"), Value Int 1
+        // Key "b" (length 1, "b"), Value Int 2
+        let bytes = [
+            BinTag::CONTEXT, 2, 
+            1, b'a', BinTag::INT, 1, 
+            1, b'b', BinTag::INT, 2
+        ];
+        
+        let value = from_bytes(&bytes).unwrap();
+        
+        if let Value::Context(ctx) = value {
+            assert_eq!(ctx.len(), 2);
+            
+            assert_eq!(ctx[0].0, "a");
+            assert!(matches!(ctx[0].1, Value::Int(1)));
+            
+            assert_eq!(ctx[1].0, "b");
+            assert!(matches!(ctx[1].1, Value::Int(2)));
+        } else {
+            panic!("Expected Context, got {:?}", value);
+        }
+    }
+    
+    #[test]
     fn test_roundtrip() {
         // Test roundtrip serialization/deserialization for different value types
         let test_values = vec![
@@ -570,6 +736,20 @@ mod tests {
             Value::Block(Box::new([])),
             parse("[1 2 3]").unwrap(),
             parse("[\"hello\" world x: 42 [1 2]]").unwrap(),
+            // Context values
+            Value::Context(Box::new([])),
+            Value::Context(Box::new([
+                (SmolStr::new("a"), Value::Int(1)),
+                (SmolStr::new("b"), Value::Int(2)),
+            ])),
+            Value::Context(Box::new([
+                (SmolStr::new("name"), Value::String("John".into())),
+                (SmolStr::new("age"), Value::Int(30)),
+                (SmolStr::new("items"), Value::Block(Box::new([
+                    Value::String("apple".into()),
+                    Value::String("banana".into()),
+                ]))),
+            ])),
         ];
         
         for value in test_values {
@@ -578,6 +758,26 @@ mod tests {
             
             assert_eq!(value, roundtrip, "Value did not roundtrip correctly");
         }
+    }
+    
+    #[test]
+    fn test_context_with_nested_context() {
+        // Create a context with a nested context
+        let inner_context = Value::Context(Box::new([
+            (SmolStr::new("x"), Value::Int(1)),
+            (SmolStr::new("y"), Value::Int(2)),
+        ]));
+        
+        let outer_context = Value::Context(Box::new([
+            (SmolStr::new("name"), Value::String("Alice".into())),
+            (SmolStr::new("position"), inner_context),
+        ]));
+        
+        // Test roundtrip
+        let bytes = to_bytes(&outer_context).unwrap();
+        let roundtrip = from_bytes(&bytes).unwrap();
+        
+        assert_eq!(outer_context, roundtrip);
     }
     
     #[test]
@@ -601,6 +801,11 @@ mod tests {
         
         // Truncated block
         let bytes = [BinTag::BLOCK, 3, BinTag::INT, 1]; // Tag for block, length 3, but only one item
+        let result = from_bytes(&bytes);
+        assert!(matches!(result, Err(BinaryDeserializerError::IoError(_))));
+        
+        // Truncated context
+        let bytes = [BinTag::CONTEXT, 2, 1, b'a', BinTag::INT, 1]; // Tag for context, length 2, but only one pair
         let result = from_bytes(&bytes);
         assert!(matches!(result, Err(BinaryDeserializerError::IoError(_))));
     }

@@ -50,6 +50,29 @@ cargo clippy
   - Custom serializers can be implemented using the `Serializer` trait
   - Variable-length integer encoding used for efficient space utilization
 
+## REBOL Language Features
+RebelDB is inspired by REBOL (Relative Expression-Based Object Language), and implements many of its concepts:
+
+- **Value Types**:
+  - `Value::None`: Represents absence of a value
+  - `Value::Int`: Integer values
+  - `Value::String`: UTF-8 string values using SmolStr for efficiency
+  - `Value::Word`/`Value::SetWord`: Symbolic references and assignments
+  - `Value::Block`: Ordered collections of values (arrays/lists)
+  - `Value::Context`: Key-value pairs, similar to objects or dictionaries
+
+- **Context Implementation**:
+  - Implemented as `Box<[(SmolStr, Value)]>` for memory efficiency
+  - Used for object-like structures, configurations, and namespaces
+  - Serialized with efficient binary encoding in the `serialize.rs` module
+
+- **Serialization**:
+  - All Value types support serialization/deserialization
+  - Binary format is compact and preserves all value semantics
+  - Tagged format allows efficient encoding/decoding
+
+For more information, see the [REBOL Design Principles](docs/rebol-design.md) documentation.
+
 ## Commits
 
 - Make sure project compiles and tests pass before committing.
