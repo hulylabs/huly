@@ -5,3 +5,4 @@ pub mod core;
 mod hash;
 mod mem;
 mod parse;
+mod value;

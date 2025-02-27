@@ -24,7 +24,7 @@ fn main() -> Result<()> {
     // }
 
     loop {
-        let readline = rl.readline(&"RebelDB™ ❯ ".to_string());
+        let readline = rl.readline(&"RebelDB™ ❯ ");
 
         match readline {
             Ok(line) => {

@@ -173,6 +173,7 @@ name = "rebel"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "smol_str",
  "thiserror",
 ]
 
