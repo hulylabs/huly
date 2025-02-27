@@ -42,7 +42,7 @@ use rebel::{ContextBuilder, Value, BlockOffset, WordRef};
 
 // Basic value types use automatic type inference
 let ctx = ContextBuilder::new(heap, 10)
-    .with("age", 42)                        // i32 -> Int 
+    .with("age", 42)                        // i32 -> Int
     .with("name", "Test User")              // &str -> String
     .with("active", true)                   // bool -> Bool
     .with("none", Value::None)              // Direct value
@@ -72,3 +72,7 @@ The generic `with<T>()` method accepts anything implementing `IntoValue`:
 
 - We're using git
 - Always sign-off commits
+
+## Preserve Knowledge
+
+- Always add important notes and keep knowledge up to date in this document (CLAUDE.md). Feel free to fix it and add new sections as needed.
