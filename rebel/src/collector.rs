@@ -6,6 +6,7 @@ use crate::value::Value;
 use smol_str::SmolStr;
 
 /// A collector that builds a Value object from parsed input
+#[derive(Default)]
 pub struct ValueCollector {
     stack: Vec<Vec<Value>>,
 }
@@ -13,7 +14,7 @@ pub struct ValueCollector {
 impl ValueCollector {
     /// Create a new ValueCollector
     pub fn new() -> Self {
-        Self { stack: Vec::new() }
+        Self::default()
     }
 
     /// Get the collected Value after parsing
@@ -24,7 +25,7 @@ impl ValueCollector {
             let block = self.stack.pop()?;
             if block.len() == 1 {
                 // We've already checked that len == 1, so next() will always succeed
-                block.into_iter().next().map(|val| val)
+                block.into_iter().next()
             } else {
                 Some(Value::Block(block.into_boxed_slice()))
             }
