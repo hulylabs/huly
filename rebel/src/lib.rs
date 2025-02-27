@@ -3,6 +3,7 @@
 mod boot;
 pub mod collector;
 pub mod core;
+pub mod encoding;
 mod hash;
 mod mem;
 pub mod parse;
