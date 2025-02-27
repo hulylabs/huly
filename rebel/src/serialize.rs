@@ -55,6 +55,18 @@ use crate::value::Value;
 use smol_str::SmolStr;
 use std::io::{self, Read, Write};
 
+/// Binary serialization tag values (u8 versions of Tag constants)
+pub struct BinTag;
+
+impl BinTag {
+    pub const NONE: u8 = Tag::TAG_NONE as u8;
+    pub const INT: u8 = Tag::TAG_INT as u8;
+    pub const BLOCK: u8 = Tag::TAG_BLOCK as u8;
+    pub const INLINE_STRING: u8 = Tag::TAG_INLINE_STRING as u8;
+    pub const WORD: u8 = Tag::TAG_WORD as u8;
+    pub const SET_WORD: u8 = Tag::TAG_SET_WORD as u8;
+}
+
 // ============================================================================
 // Serialization
 // ============================================================================
@@ -128,13 +140,13 @@ pub enum BinarySerializerError {
 /// - Length for variable-length data (variable-length encoded integer)
 /// - Data (if applicable)
 ///
-/// Type tags are from Tag constants in core.rs:
-/// - TAG_NONE (0): None value
-/// - TAG_INT (1): Integer (variable-length encoded)
-/// - TAG_INLINE_STRING (5): String (length + UTF-8 bytes)
-/// - TAG_WORD (6): Word (length + UTF-8 bytes)
-/// - TAG_SET_WORD (7): SetWord (length + UTF-8 bytes)
-/// - TAG_BLOCK (2): Block (length + contents)
+/// Uses BinTag constants for identifying value types:
+/// - BinTag::NONE: None value
+/// - BinTag::INT: Integer (variable-length encoded)
+/// - BinTag::INLINE_STRING: String (length + UTF-8 bytes)
+/// - BinTag::WORD: Word (length + UTF-8 bytes)
+/// - BinTag::SET_WORD: SetWord (length + UTF-8 bytes)
+/// - BinTag::BLOCK: Block (length + contents)
 pub struct BinarySerializer<W: Write> {
     writer: W,
 }
@@ -173,41 +185,41 @@ impl<W: Write> Serializer for BinarySerializer<W> {
     type Error = BinarySerializerError;
 
     fn none(&mut self) -> Result<(), Self::Error> {
-        self.writer.write_all(&[Tag::TAG_NONE as u8])?;
+        self.writer.write_all(&[BinTag::NONE])?;
         Ok(())
     }
 
     fn integer(&mut self, value: i32) -> Result<(), Self::Error> {
         // Write tag
-        self.writer.write_all(&[Tag::TAG_INT as u8])?;
+        self.writer.write_all(&[BinTag::INT])?;
         // Write variable-length encoded integer
         self.write_varint(value)
     }
 
     fn string(&mut self, value: &str) -> Result<(), Self::Error> {
         // Write tag
-        self.writer.write_all(&[Tag::TAG_INLINE_STRING as u8])?;
+        self.writer.write_all(&[BinTag::INLINE_STRING])?;
         // Write string with length prefix
         self.write_string(value)
     }
 
     fn word(&mut self, value: &str) -> Result<(), Self::Error> {
         // Write tag
-        self.writer.write_all(&[Tag::TAG_WORD as u8])?;
+        self.writer.write_all(&[BinTag::WORD])?;
         // Write string with length prefix
         self.write_string(value)
     }
 
     fn set_word(&mut self, value: &str) -> Result<(), Self::Error> {
         // Write tag
-        self.writer.write_all(&[Tag::TAG_SET_WORD as u8])?;
+        self.writer.write_all(&[BinTag::SET_WORD])?;
         // Write string with length prefix
         self.write_string(value)
     }
 
     fn begin_block(&mut self, len: usize) -> Result<(), Self::Error> {
         // Write tag
-        self.writer.write_all(&[Tag::TAG_BLOCK as u8])?;
+        self.writer.write_all(&[BinTag::BLOCK])?;
         // Write length
         self.write_varint(len as i32)
     }
@@ -322,40 +334,32 @@ impl<R: Read> BinaryDeserializer<R> {
 
     /// Read a single value from the reader
     pub fn read_value(&mut self) -> Result<Value, BinaryDeserializerError> {
-        // Define tag constants for pattern matching
-        const TAG_NONE: u8 = Tag::TAG_NONE as u8;
-        const TAG_INT: u8 = Tag::TAG_INT as u8;
-        const TAG_INLINE_STRING: u8 = Tag::TAG_INLINE_STRING as u8;
-        const TAG_WORD: u8 = Tag::TAG_WORD as u8;
-        const TAG_SET_WORD: u8 = Tag::TAG_SET_WORD as u8;
-        const TAG_BLOCK: u8 = Tag::TAG_BLOCK as u8;
-        
         let tag = self.read_byte()?;
         
         match tag {
-            TAG_NONE => Ok(Value::None),
+            BinTag::NONE => Ok(Value::None),
             
-            TAG_INT => {
+            BinTag::INT => {
                 let value = self.read_varint()?;
                 Ok(Value::Int(value))
             },
             
-            TAG_INLINE_STRING => {
+            BinTag::INLINE_STRING => {
                 let value = self.read_string()?;
                 Ok(Value::String(SmolStr::new(value)))
             },
             
-            TAG_WORD => {
+            BinTag::WORD => {
                 let value = self.read_string()?;
                 Ok(Value::Word(SmolStr::new(value)))
             },
             
-            TAG_SET_WORD => {
+            BinTag::SET_WORD => {
                 let value = self.read_string()?;
                 Ok(Value::SetWord(SmolStr::new(value)))
             },
             
-            TAG_BLOCK => {
+            BinTag::BLOCK => {
                 let len = self.read_varint()?;
                 if len < 0 {
                     return Err(BinaryDeserializerError::DeserializeError("Invalid block length".into()));
@@ -391,7 +395,7 @@ mod tests {
     fn test_serialize_none() {
         let value = Value::None;
         let bytes = to_bytes(&value).unwrap();
-        assert_eq!(bytes, vec![Tag::TAG_NONE as u8]);
+        assert_eq!(bytes, vec![BinTag::NONE]);
     }
 
     #[test]
@@ -399,12 +403,12 @@ mod tests {
         let value = Value::Int(42);
         let bytes = to_bytes(&value).unwrap();
         // Tag (integer) followed by the varint-encoded 42
-        assert_eq!(bytes, vec![Tag::TAG_INT as u8, 42]);
+        assert_eq!(bytes, vec![BinTag::INT, 42]);
 
         let value = Value::Int(-1);
         let bytes = to_bytes(&value).unwrap();
         // Tag (integer) followed by the varint-encoded -1
-        assert_eq!(bytes, vec![Tag::TAG_INT as u8, 0x80]);
+        assert_eq!(bytes, vec![BinTag::INT, 0x80]);
     }
 
     #[test]
@@ -412,7 +416,7 @@ mod tests {
         let value = Value::String("hello".into());
         let bytes = to_bytes(&value).unwrap();
         // Tag (string), length 5, "hello"
-        assert_eq!(bytes, vec![Tag::TAG_INLINE_STRING as u8, 5, b'h', b'e', b'l', b'l', b'o']);
+        assert_eq!(bytes, vec![BinTag::INLINE_STRING, 5, b'h', b'e', b'l', b'l', b'o']);
     }
 
     #[test]
@@ -420,7 +424,7 @@ mod tests {
         let value = Value::Word("test".into());
         let bytes = to_bytes(&value).unwrap();
         // Tag (word), length 4, "test"
-        assert_eq!(bytes, vec![Tag::TAG_WORD as u8, 4, b't', b'e', b's', b't']);
+        assert_eq!(bytes, vec![BinTag::WORD, 4, b't', b'e', b's', b't']);
     }
 
     #[test]
@@ -428,7 +432,7 @@ mod tests {
         let value = Value::SetWord("x".into());
         let bytes = to_bytes(&value).unwrap();
         // Tag (set word), length 1, "x"
-        assert_eq!(bytes, vec![Tag::TAG_SET_WORD as u8, 1, b'x']);
+        assert_eq!(bytes, vec![BinTag::SET_WORD, 1, b'x']);
     }
 
     #[test]
@@ -436,7 +440,7 @@ mod tests {
         let value = Value::Block(Box::new([]));
         let bytes = to_bytes(&value).unwrap();
         // Tag (block), length 0
-        assert_eq!(bytes, vec![Tag::TAG_BLOCK as u8, 0]);
+        assert_eq!(bytes, vec![BinTag::BLOCK, 0]);
     }
 
     #[test]
@@ -451,10 +455,10 @@ mod tests {
         // - Second item: Tag (integer), varint-encoded 2
         // - Third item: Tag (integer), varint-encoded 3
         assert_eq!(bytes, vec![
-            Tag::TAG_BLOCK as u8, 3, 
-            Tag::TAG_INT as u8, 1, 
-            Tag::TAG_INT as u8, 2, 
-            Tag::TAG_INT as u8, 3
+            BinTag::BLOCK, 3, 
+            BinTag::INT, 1, 
+            BinTag::INT, 2, 
+            BinTag::INT, 3
         ]);
     }
 
@@ -466,31 +470,31 @@ mod tests {
         // This complex test primarily verifies that serialization doesn't panic
         // and produces a reasonable output length
         assert!(bytes.len() > 15);
-        assert_eq!(bytes[0], Tag::TAG_BLOCK as u8); // Block tag
+        assert_eq!(bytes[0], BinTag::BLOCK); // Block tag
         assert_eq!(bytes[1], 5); // Length 5 (for 5 items in the block)
     }
     
     #[test]
     fn test_deserialize_none() {
-        let bytes = [Tag::TAG_NONE as u8];
+        let bytes = [BinTag::NONE];
         let value = from_bytes(&bytes).unwrap();
         assert!(matches!(value, Value::None));
     }
     
     #[test]
     fn test_deserialize_integer() {
-        let bytes = [Tag::TAG_INT as u8, 42];
+        let bytes = [BinTag::INT, 42];
         let value = from_bytes(&bytes).unwrap();
         assert!(matches!(value, Value::Int(42)));
         
-        let bytes = [Tag::TAG_INT as u8, 0x80]; // -1 in varint encoding
+        let bytes = [BinTag::INT, 0x80]; // -1 in varint encoding
         let value = from_bytes(&bytes).unwrap();
         assert!(matches!(value, Value::Int(-1)));
     }
     
     #[test]
     fn test_deserialize_string() {
-        let bytes = [Tag::TAG_INLINE_STRING as u8, 5, b'h', b'e', b'l', b'l', b'o'];
+        let bytes = [BinTag::INLINE_STRING, 5, b'h', b'e', b'l', b'l', b'o'];
         let value = from_bytes(&bytes).unwrap();
         if let Value::String(s) = value {
             assert_eq!(s, "hello");
@@ -501,7 +505,7 @@ mod tests {
     
     #[test]
     fn test_deserialize_word() {
-        let bytes = [Tag::TAG_WORD as u8, 4, b't', b'e', b's', b't'];
+        let bytes = [BinTag::WORD, 4, b't', b'e', b's', b't'];
         let value = from_bytes(&bytes).unwrap();
         if let Value::Word(w) = value {
             assert_eq!(w, "test");
@@ -512,7 +516,7 @@ mod tests {
     
     #[test]
     fn test_deserialize_set_word() {
-        let bytes = [Tag::TAG_SET_WORD as u8, 1, b'x'];
+        let bytes = [BinTag::SET_WORD, 1, b'x'];
         let value = from_bytes(&bytes).unwrap();
         if let Value::SetWord(w) = value {
             assert_eq!(w, "x");
@@ -523,7 +527,7 @@ mod tests {
     
     #[test]
     fn test_deserialize_empty_block() {
-        let bytes = [Tag::TAG_BLOCK as u8, 0];
+        let bytes = [BinTag::BLOCK, 0];
         let value = from_bytes(&bytes).unwrap();
         if let Value::Block(block) = value {
             assert_eq!(block.len(), 0);
@@ -535,10 +539,10 @@ mod tests {
     #[test]
     fn test_deserialize_simple_block() {
         let bytes = [
-            Tag::TAG_BLOCK as u8, 3, 
-            Tag::TAG_INT as u8, 1, 
-            Tag::TAG_INT as u8, 2, 
-            Tag::TAG_INT as u8, 3
+            BinTag::BLOCK, 3, 
+            BinTag::INT, 1, 
+            BinTag::INT, 2, 
+            BinTag::INT, 3
         ];
         let value = from_bytes(&bytes).unwrap();
         
@@ -586,17 +590,17 @@ mod tests {
     #[test]
     fn test_deserialize_truncated_data() {
         // Truncated integer
-        let bytes = [Tag::TAG_INT as u8]; // Tag for integer but no data
+        let bytes = [BinTag::INT]; // Tag for integer but no data
         let result = from_bytes(&bytes);
         assert!(matches!(result, Err(BinaryDeserializerError::IoError(_))));
         
         // Truncated string
-        let bytes = [Tag::TAG_INLINE_STRING as u8, 5, b'h', b'e']; // Tag for string, length 5, but only 2 chars
+        let bytes = [BinTag::INLINE_STRING, 5, b'h', b'e']; // Tag for string, length 5, but only 2 chars
         let result = from_bytes(&bytes);
         assert!(matches!(result, Err(BinaryDeserializerError::IoError(_))));
         
         // Truncated block
-        let bytes = [Tag::TAG_BLOCK as u8, 3, Tag::TAG_INT as u8, 1]; // Tag for block, length 3, but only one item
+        let bytes = [BinTag::BLOCK, 3, BinTag::INT, 1]; // Tag for block, length 3, but only one item
         let result = from_bytes(&bytes);
         assert!(matches!(result, Err(BinaryDeserializerError::IoError(_))));
     }
