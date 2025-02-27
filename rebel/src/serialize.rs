@@ -282,9 +282,15 @@ pub enum BinaryDeserializerError {
     #[error("I/O error: {0}")]
     IoError(#[from] io::Error),
 
-    #[error("Deserialization error: {0}")]
-    DeserializeError(String),
-
+    #[error("Invalid integer encoding")]
+    InvalidIntegerEncoding,
+    
+    #[error("Invalid UTF-8 data")]
+    InvalidUtf8,
+    
+    #[error("Negative length value")]
+    NegativeLength,
+    
     #[error("Invalid tag: {0}")]
     InvalidTag(u8),
 
@@ -345,7 +351,7 @@ impl<R: Read> BinaryDeserializer<R> {
         
         // Decode the value
         let (value, _) = encoding::decode_i32(&buffer)
-            .ok_or_else(|| BinaryDeserializerError::DeserializeError("Failed to decode integer".into()))?;
+            .ok_or(BinaryDeserializerError::InvalidIntegerEncoding)?;
             
         Ok(value)
     }
@@ -355,7 +361,7 @@ impl<R: Read> BinaryDeserializer<R> {
         // Read the length
         let len = self.read_varint()?;
         if len < 0 {
-            return Err(BinaryDeserializerError::DeserializeError("Invalid string length".into()));
+            return Err(BinaryDeserializerError::NegativeLength);
         }
         
         // Read the string data
@@ -364,7 +370,7 @@ impl<R: Read> BinaryDeserializer<R> {
         
         // Convert to UTF-8 string
         String::from_utf8(buffer)
-            .map_err(|e| BinaryDeserializerError::DeserializeError(format!("Invalid UTF-8: {}", e)))
+            .map_err(|_| BinaryDeserializerError::InvalidUtf8)
     }
 
     /// Read a single value from the reader
@@ -397,7 +403,7 @@ impl<R: Read> BinaryDeserializer<R> {
             BinTag::BLOCK => {
                 let len = self.read_varint()?;
                 if len < 0 {
-                    return Err(BinaryDeserializerError::DeserializeError("Invalid block length".into()));
+                    return Err(BinaryDeserializerError::NegativeLength);
                 }
                 
                 // Read each value in the block
@@ -412,7 +418,7 @@ impl<R: Read> BinaryDeserializer<R> {
             BinTag::CONTEXT => {
                 let len = self.read_varint()?;
                 if len < 0 {
-                    return Err(BinaryDeserializerError::DeserializeError("Invalid context length".into()));
+                    return Err(BinaryDeserializerError::NegativeLength);
                 }
                 
                 // Read each key-value pair in the context
