@@ -36,15 +36,28 @@ cargo clippy
 
 ## RebelDB VM Builders
 
-### Context Creation
-The recommended way to create contexts in RebelDB is using the `ContextBuilder` API:
+### Module as the Main Entry Point
+The recommended way to interact with the RebelDB VM is through the `Module` type, which provides factory methods for creating builders:
 
 ```rust
-use rebel::{ContextBuilder, Value, BlockOffset, WordRef};
+use rebel::{Module, Value};
 
-// Basic value types use automatic type inference 
-// The context size is calculated automatically based on the values added
-let ctx_value = ContextBuilder::new(heap)
+// Create a module
+let mut module = Module::init(memory)?;
+
+// Create context and block builders from the module
+let context_builder = module.context_builder();
+let block_builder = module.block_builder();
+```
+
+### Context Creation
+Create contexts using the Module's context builder methods:
+
+```rust
+use rebel::{Module, Value, BlockOffset, WordRef};
+
+// Get a context builder from the module (no direct heap access)
+let ctx_value = module.context_builder()
     .with("age", 42)                        // i32 -> Int
     .with("name", "Test User")              // &str -> String
     .with("active", true)                   // bool -> Bool
@@ -52,7 +65,7 @@ let ctx_value = ContextBuilder::new(heap)
     .build()?;                              // Returns Value::Context
 
 // You can specify an explicit capacity if needed
-let ctx_value = ContextBuilder::with_capacity(heap, 20)
+let ctx_value = module.context_builder_with_capacity(20)
     .with("age", 42)
     .build()?;
 
@@ -63,9 +76,9 @@ match ctx_value {
 }
 
 // For references to other VM objects, use wrapper types:
-let parent_ctx_value = ContextBuilder::new(heap).with("x", 100).build()?;
+let parent_ctx_value = module.context_builder().with("x", 100).build()?;
 
-let ctx_value = ContextBuilder::new(heap)
+let ctx_value = module.context_builder()
     // Block references need BlockOffset wrapper
     .with("code", BlockOffset(block_offset))
     // Context references can use Value::Context directly
@@ -76,13 +89,13 @@ let ctx_value = ContextBuilder::new(heap)
 ```
 
 ### Block Creation
-For creating blocks, use the `BlockBuilder` API:
+Create blocks using the Module's block builder method:
 
 ```rust
-use rebel::{BlockBuilder, Value, BlockOffset, WordRef};
+use rebel::{Module, Value, BlockOffset, WordRef};
 
-// Create a simple block with values
-let block_value = BlockBuilder::new(heap)
+// Get a block builder from the module (no direct heap access)
+let block_value = module.block_builder()
     .with_int(42)
     .with_string("Hello") 
     .with_bool(true)
@@ -96,13 +109,13 @@ match block_value {
 }
 
 // Create nested blocks
-let inner_block_value = BlockBuilder::new(heap)
+let inner_block_value = module.block_builder()
     .with_int(10)
     .with_string("Inner")
     .build()?;
     
 // Outer block that references the inner block
-let outer_block_value = BlockBuilder::new(heap)
+let outer_block_value = module.block_builder()
     .with_int(42)
     .with(inner_block_value)         // Pass Value directly 
     .with(ctx_value)                 // Pass Value directly
