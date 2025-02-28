@@ -178,6 +178,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "rebel-macro"
+version = "0.1.0"
+
+[[package]]
 name = "rebel-sh"
 version = "0.1.0"
 dependencies = [
