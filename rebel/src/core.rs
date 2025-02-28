@@ -3,6 +3,7 @@
 use crate::boot::core_package;
 use crate::mem::{Context, Heap, Offset, Stack, Symbol, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
+use crate::value::Value;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -43,6 +44,8 @@ pub enum VmValue {
     None,
     Int(i32),
     String(Offset),
+    Block(Offset),
+    Context(Offset),
     Word(Symbol),
     SetWord(Symbol),
 }
@@ -67,6 +70,8 @@ impl VmValue {
             VmValue::String(offset) => [Self::TAG_INLINE_STRING, *offset],
             VmValue::Word(symbol) => [Self::TAG_WORD, *symbol],
             VmValue::SetWord(symbol) => [Self::TAG_SET_WORD, *symbol],
+            VmValue::Block(offset) => [Self::TAG_BLOCK, *offset],
+            VmValue::Context(offset) => [Self::TAG_CONTEXT, *offset],
         }
     }
 }
@@ -200,6 +205,10 @@ where
     pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Option<Offset> {
         self.get_symbols_mut()?
             .get_or_insert(inline_string(symbol)?)
+    }
+
+    pub fn alloc_value(&mut self, value: Value) -> Option<VmValue> {
+        None // TODO: implement
     }
 }
 
