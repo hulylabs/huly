@@ -929,6 +929,268 @@ mod tests {
     use super::*;
 
     #[test]
+    fn test_value_constructors() {
+        let none = Value::none();
+        let num = Value::int(42);
+        let s = Value::string("hello");
+        let w = Value::word("print");
+        let sw = Value::set_word("count");
+        let b = Value::boolean(true);
+
+        assert_eq!(none, Value::None);
+        assert_eq!(num, Value::Int(42));
+        assert_eq!(s, Value::String("hello".into()));
+        assert_eq!(w, Value::Word("print".into()));
+        assert_eq!(sw, Value::SetWord("count".into()));
+        assert_eq!(b, Value::Int(1));
+    }
+
+    #[test]
+    fn test_collection_constructors() {
+        // Create a block from a vector
+        let block = Value::block(vec![Value::int(1), Value::string("two"), Value::none()]);
+
+        // Create a context from pairs
+        let context = Value::context(vec![
+            ("name", Value::string("John")),
+            ("age", Value::int(30)),
+        ]);
+
+        // Check block values
+        if let Value::Block(items) = &block {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Value::Int(1));
+            assert_eq!(items[1], Value::String("two".into()));
+            assert_eq!(items[2], Value::None);
+        } else {
+            panic!("Not a block!");
+        }
+
+        // Check context values
+        if let Value::Context(pairs) = &context {
+            assert_eq!(pairs.len(), 2);
+            assert_eq!(pairs[0].0, "name");
+            assert_eq!(pairs[0].1, Value::String("John".into()));
+            assert_eq!(pairs[1].0, "age");
+            assert_eq!(pairs[1].1, Value::Int(30));
+        } else {
+            panic!("Not a context!");
+        }
+    }
+
+    #[test]
+    fn test_builder_patterns() {
+        // Using the block builder
+        let block = Value::block_builder()
+            .push(Value::int(1))
+            .push("hello") // Conversion from &str
+            .push(42) // Conversion from i32
+            .build();
+
+        // Using the context builder
+        let user = Value::context_builder()
+            .insert("name", "Alice") // Key and value are converted
+            .insert("age", 30) // Key is &str, value is i32
+            .insert("active", true) // Value is bool
+            .build();
+
+        // Using the object constructor (shorthand for context builder)
+        let config = Value::object()
+            .insert("debug", true)
+            .insert("timeout", 5000)
+            .insert("server", "example.com")
+            .build();
+
+        // Verify block
+        assert_eq!(block.len(), 3);
+        assert_eq!(block.at(0), Some(&Value::Int(1)));
+
+        // Verify user context
+        assert!(user.has_key("name"));
+        assert_eq!(user.get("age"), Some(&Value::Int(30)));
+
+        // Verify config
+        assert_eq!(config.get("timeout"), Some(&Value::Int(5000)));
+    }
+
+    #[test]
+    fn test_type_checking() {
+        let int_val = Value::int(42);
+        let str_val = Value::string("hello");
+        let none_val = Value::none();
+        let bool_val = Value::boolean(true);
+
+        assert!(int_val.is_int());
+        assert!(!int_val.is_string());
+
+        assert!(str_val.is_string());
+        assert!(!str_val.is_int());
+
+        assert!(none_val.is_none());
+
+        assert!(bool_val.is_int());
+        assert!(bool_val.is_boolean());
+        assert_eq!(bool_val.as_boolean(), Some(true));
+    }
+
+    #[test]
+    fn test_context_operations() {
+        // Create a context
+        let mut user = Value::object()
+            .insert("name", "Bob")
+            .insert("age", 25)
+            .build();
+
+        // Get values
+        assert_eq!(user.get("name"), Some(&Value::String("Bob".into())));
+
+        // Modify a value
+        if let Some(age) = user.get_mut("age") {
+            *age = Value::int(26);
+        }
+        assert_eq!(user.get("age"), Some(&Value::Int(26)));
+
+        // Insert a new key (returning a new context)
+        let user = user.insert("email", "bob@example.com");
+        assert!(user.has_key("email"));
+
+        // Remove a key
+        let user = user.remove("age");
+        assert!(!user.has_key("age"));
+
+        // Get keys and values
+        let keys = user.keys();
+        if let Value::Block(items) = keys {
+            assert_eq!(items.len(), 2);
+            // Keys should include "name" and "email" (order may vary)
+        }
+    }
+
+    #[test]
+    fn test_block_operations() {
+        // Create a block
+        let block = Value::block(vec![Value::int(1), Value::int(2), Value::int(3)]);
+
+        // Test length
+        assert_eq!(block.len(), 3);
+
+        // Access items
+        assert_eq!(block.at(1), Some(&Value::Int(2)));
+
+        // Push a value (returns a new block)
+        let block = block.push(Value::int(4));
+        assert_eq!(block.len(), 4);
+
+        // Pop a value
+        let (block, popped) = block.pop();
+        assert_eq!(block.len(), 3);
+        assert_eq!(popped, Some(Value::Int(4)));
+
+        // Map operation
+        let doubled = block.map(|v| {
+            if let Value::Int(n) = v {
+                Value::Int(n * 2)
+            } else {
+                v
+            }
+        });
+
+        if let Value::Block(items) = doubled {
+            assert_eq!(items[0], Value::Int(2));
+            assert_eq!(items[1], Value::Int(4));
+            assert_eq!(items[2], Value::Int(6));
+        }
+
+        // Filter operation
+        let block = Value::block(vec![
+            Value::int(1),
+            Value::int(2),
+            Value::int(3),
+            Value::int(4),
+        ]);
+
+        let evens = block.filter(|v| {
+            if let Value::Int(n) = v {
+                n % 2 == 0
+            } else {
+                false
+            }
+        });
+
+        if let Value::Block(items) = evens {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0], Value::Int(2));
+            assert_eq!(items[1], Value::Int(4));
+        }
+    }
+
+    #[test]
+    fn test_path_operations() {
+        // Create a nested context
+        let data = Value::object()
+            .insert(
+                "user",
+                Value::object()
+                    .insert(
+                        "profile",
+                        Value::object()
+                            .insert("name", "Charlie")
+                            .insert("email", "charlie@example.com")
+                            .build(),
+                    )
+                    .insert(
+                        "settings",
+                        Value::object()
+                            .insert("theme", "dark")
+                            .insert("notifications", true)
+                            .build(),
+                    )
+                    .build(),
+            )
+            .build();
+
+        // Get a value using path
+        let name = data.get_path(["user", "profile", "name"]);
+        assert_eq!(name, Some(&Value::String("Charlie".into())));
+
+        // Set a value using path (returns a new value)
+        let updated = data
+            .clone()
+            .set_path(["user", "settings", "language"], "en");
+
+        // Verify the update
+        let language = updated.get_path(["user", "settings", "language"]);
+        assert_eq!(language, Some(&Value::String("en".into())));
+
+        // Create a deep path that doesn't exist yet
+        let with_new_path = data
+            .clone()
+            .set_path(["user", "preferences", "colors", "primary"], "#3366FF");
+
+        // Verify the deep path was created
+        let color = with_new_path.get_path(["user", "preferences", "colors", "primary"]);
+        assert_eq!(color, Some(&Value::String("#3366FF".into())));
+    }
+
+    #[test]
+    fn test_conversions() {
+        // String conversions
+        let int_val = Value::int(42);
+        let int_as_str = int_val.to_string_value();
+        assert_eq!(int_as_str, Value::String("42".into()));
+
+        // Int conversions
+        let str_val = Value::string("42");
+        let str_as_int = str_val.to_int_value();
+        assert_eq!(str_as_int, Value::Int(42));
+
+        // Invalid conversion
+        let bad_str = Value::string("hello");
+        let bad_int = bad_str.to_int_value();
+        assert_eq!(bad_int, Value::None);
+    }
+
+    #[test]
     fn test_none_value() {
         let v = rebel!(none);
         assert_eq!(v, Value::None);
@@ -1180,7 +1442,7 @@ mod tests {
         });
 
         // Validate the structure
-        if let Value::Context(items) = &complex {
+        if let Value::Context(_items) = &complex {
             // Check id
             let id = complex.get("id").unwrap();
             assert_eq!(*id, Value::Int(1001));
@@ -1196,7 +1458,7 @@ mod tests {
                 assert_eq!(variants.len(), 2);
 
                 // First variant
-                if let Value::Context(v1) = &variants[0] {
+                if let Value::Context(_v1) = &variants[0] {
                     let sku = variants[0].get("sku").unwrap();
                     assert_eq!(*sku, Value::String("ABC-123".into()));
 
