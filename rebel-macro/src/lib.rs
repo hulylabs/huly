@@ -199,7 +199,7 @@ mod tests {
         let b = rebel4!([ alpha "hello" x: [a b] ]);
         match b {
             Value::Block(items) => {
-                assert_eq!(items.len(), 3);
+                assert_eq!(items.len(), 4);
                 assert_eq!(items[0], Value::Word("alpha".into()));
                 assert_eq!(items[1], Value::String("hello".into()));
 
