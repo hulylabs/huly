@@ -51,11 +51,203 @@ impl fmt::Display for Value {
     }
 }
 
-// Fix conflicting implementations by using trait objects instead of generic parameters
-// for indexing contexts with strings
 impl Value {
-    // Access methods with explicit types
-    pub fn get<S: AsRef<str>>(&self, key: S) -> Option<&Value> {
+    //==================================================================
+    // CONSTRUCTORS
+    //==================================================================
+
+    /// Create a None value
+    pub fn none() -> Self {
+        Value::None
+    }
+
+    /// Create an Int value
+    pub fn int(value: i32) -> Self {
+        Value::Int(value)
+    }
+
+    /// Create a String value
+    pub fn string<S: Into<SmolStr>>(value: S) -> Self {
+        Value::String(value.into())
+    }
+
+    /// Create a Word value
+    pub fn word<S: Into<SmolStr>>(value: S) -> Self {
+        Value::Word(value.into())
+    }
+
+    /// Create a SetWord value
+    pub fn set_word<S: Into<SmolStr>>(value: S) -> Self {
+        Value::SetWord(value.into())
+    }
+
+    /// Create a Block value from any iterable of Values
+    pub fn block<I: IntoIterator<Item = Value>>(values: I) -> Self {
+        Value::Block(values.into_iter().collect::<Vec<_>>().into_boxed_slice())
+    }
+
+    /// Create a Context (object) value from any iterable of key-value pairs
+    pub fn context<K: Into<SmolStr>, I: IntoIterator<Item = (K, Value)>>(pairs: I) -> Self {
+        Value::Context(
+            pairs
+                .into_iter()
+                .map(|(k, v)| (k.into(), v))
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
+    }
+
+    /// Create a Context from a series of key-values using a builder pattern
+    pub fn object() -> ContextBuilder {
+        ContextBuilder::new()
+    }
+
+    /// Create a boolean value (as an Int with value 1 or 0)
+    pub fn boolean(value: bool) -> Self {
+        Value::Int(if value { 1 } else { 0 })
+    }
+
+    //==================================================================
+    // TYPE CHECKING
+    //==================================================================
+
+    /// Check if value is None
+    pub fn is_none(&self) -> bool {
+        matches!(self, Value::None)
+    }
+
+    /// Check if value is Int
+    pub fn is_int(&self) -> bool {
+        matches!(self, Value::Int(_))
+    }
+
+    /// Check if value is String
+    pub fn is_string(&self) -> bool {
+        matches!(self, Value::String(_))
+    }
+
+    /// Check if value is Word
+    pub fn is_word(&self) -> bool {
+        matches!(self, Value::Word(_))
+    }
+
+    /// Check if value is SetWord
+    pub fn is_set_word(&self) -> bool {
+        matches!(self, Value::SetWord(_))
+    }
+
+    /// Check if value is Block
+    pub fn is_block(&self) -> bool {
+        matches!(self, Value::Block(_))
+    }
+
+    /// Check if value is Context
+    pub fn is_context(&self) -> bool {
+        matches!(self, Value::Context(_))
+    }
+
+    /// Check if value represents a boolean (Int with value 0 or 1)
+    pub fn is_boolean(&self) -> bool {
+        match self {
+            Value::Int(0 | 1) => true,
+            _ => false,
+        }
+    }
+
+    /// Check if value is truthy (anything except None, Int(0), or empty Block/Context)
+    pub fn is_truthy(&self) -> bool {
+        match self {
+            Value::None => false,
+            Value::Int(0) => false,
+            Value::Block(block) => !block.is_empty(),
+            Value::Context(context) => !context.is_empty(),
+            _ => true,
+        }
+    }
+
+    //==================================================================
+    // VALUE EXTRACTION
+    //==================================================================
+
+    /// Extract an i32 value if this is an Int
+    pub fn as_int(&self) -> Option<i32> {
+        match self {
+            Value::Int(n) => Some(*n),
+            _ => None,
+        }
+    }
+
+    /// Extract a string reference if this is a String
+    pub fn as_string(&self) -> Option<&SmolStr> {
+        match self {
+            Value::String(s) => Some(s),
+            _ => None,
+        }
+    }
+
+    /// Extract a word reference if this is a Word
+    pub fn as_word(&self) -> Option<&SmolStr> {
+        match self {
+            Value::Word(w) => Some(w),
+            _ => None,
+        }
+    }
+
+    /// Extract a setword reference if this is a SetWord
+    pub fn as_set_word(&self) -> Option<&SmolStr> {
+        match self {
+            Value::SetWord(w) => Some(w),
+            _ => None,
+        }
+    }
+
+    /// Extract a boolean if this is an Int(0) or Int(1)
+    pub fn as_boolean(&self) -> Option<bool> {
+        match self {
+            Value::Int(0) => Some(false),
+            Value::Int(1) => Some(true),
+            _ => None,
+        }
+    }
+
+    /// Extract a block slice if this is a Block
+    pub fn as_block(&self) -> Option<&[Value]> {
+        match self {
+            Value::Block(block) => Some(block),
+            _ => None,
+        }
+    }
+
+    /// Extract a mutable block slice if this is a Block
+    pub fn as_block_mut(&mut self) -> Option<&mut [Value]> {
+        match self {
+            Value::Block(block) => Some(block),
+            _ => None,
+        }
+    }
+
+    /// Extract a context slice if this is a Context
+    pub fn as_context(&self) -> Option<&[(SmolStr, Value)]> {
+        match self {
+            Value::Context(pairs) => Some(pairs),
+            _ => None,
+        }
+    }
+
+    /// Extract a mutable context slice if this is a Context
+    pub fn as_context_mut(&mut self) -> Option<&mut [(SmolStr, Value)]> {
+        match self {
+            Value::Context(pairs) => Some(pairs),
+            _ => None,
+        }
+    }
+
+    //==================================================================
+    // CONTEXT OPERATIONS
+    //==================================================================
+
+    /// Get a value from a Context using a string key
+    pub fn get<K: AsRef<str>>(&self, key: K) -> Option<&Value> {
         match self {
             Value::Context(pairs) => {
                 let key_ref = key.as_ref();
@@ -67,11 +259,11 @@ impl Value {
         }
     }
 
-    pub fn get_mut<S: AsRef<str>>(&mut self, key: S) -> Option<&mut Value> {
+    /// Get a mutable value from a Context using a string key
+    pub fn get_mut<K: AsRef<str>>(&mut self, key: K) -> Option<&mut Value> {
         match self {
             Value::Context(pairs) => {
                 let key_ref = key.as_ref();
-                // We need to get a mutable reference to the boxed slice
                 let pairs_slice = &mut **pairs;
                 for (k, v) in pairs_slice.iter_mut() {
                     if k == key_ref {
@@ -84,7 +276,81 @@ impl Value {
         }
     }
 
-    // Get a value at a numeric index from a Block
+    /// Insert a key-value pair into a Context, creating a new Context value
+    pub fn insert<K: Into<SmolStr>, V: Into<Value>>(self, key: K, value: V) -> Self {
+        match self {
+            Value::Context(pairs) => {
+                let mut pairs_vec = pairs.to_vec();
+                let key = key.into();
+                let value = value.into();
+
+                // See if we need to update an existing key
+                if let Some(pos) = pairs_vec.iter().position(|(k, _)| k == &key) {
+                    pairs_vec[pos] = (key, value);
+                } else {
+                    pairs_vec.push((key, value));
+                }
+
+                Value::Context(pairs_vec.into_boxed_slice())
+            }
+            // If not a context, create a new one with this key-value pair
+            _ => {
+                let key = key.into();
+                let value = value.into();
+                Value::Context(Box::new([(key, value)]))
+            }
+        }
+    }
+
+    /// Remove a key from a Context, returning a new Context value
+    pub fn remove<K: AsRef<str>>(self, key: K) -> Self {
+        match self {
+            Value::Context(pairs) => {
+                let key_ref = key.as_ref();
+                let mut pairs_vec = pairs.to_vec();
+                pairs_vec.retain(|(k, _)| k != key_ref);
+                Value::Context(pairs_vec.into_boxed_slice())
+            }
+            // If not a context, return as-is
+            _ => self,
+        }
+    }
+
+    /// Check if a Context contains a specific key
+    pub fn has_key<K: AsRef<str>>(&self, key: K) -> bool {
+        self.get(key).is_some()
+    }
+
+    /// Get all keys from a Context as a Block value
+    pub fn keys(&self) -> Value {
+        match self {
+            Value::Context(pairs) => {
+                let keys = pairs
+                    .iter()
+                    .map(|(k, _)| Value::String(k.clone()))
+                    .collect::<Vec<_>>();
+                Value::Block(keys.into_boxed_slice())
+            }
+            _ => Value::Block(Box::new([])),
+        }
+    }
+
+    /// Get all values from a Context as a Block value
+    pub fn values(&self) -> Value {
+        match self {
+            Value::Context(pairs) => {
+                let values = pairs.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>();
+                Value::Block(values.into_boxed_slice())
+            }
+            _ => Value::Block(Box::new([])),
+        }
+    }
+
+    //==================================================================
+    // BLOCK OPERATIONS
+    //==================================================================
+
+    /// Get a value at a specific index from a Block
     pub fn at(&self, index: usize) -> Option<&Value> {
         match self {
             Value::Block(block) => block.get(index),
@@ -92,6 +358,7 @@ impl Value {
         }
     }
 
+    /// Get a mutable value at a specific index from a Block
     pub fn at_mut(&mut self, index: usize) -> Option<&mut Value> {
         match self {
             Value::Block(block) => {
@@ -102,29 +369,233 @@ impl Value {
         }
     }
 
-    // Method to convert a Rust i32 to a Value::Int
-    pub fn from_int(i: i32) -> Self {
-        Value::Int(i)
+    /// Get the length of a Block or Context
+    pub fn len(&self) -> usize {
+        match self {
+            Value::Block(block) => block.len(),
+            Value::Context(pairs) => pairs.len(),
+            _ => 0,
+        }
     }
 
-    // Method to convert a Rust string to a Value::String
-    pub fn from_string<S: Into<SmolStr>>(s: S) -> Self {
-        Value::String(s.into())
+    /// Check if a Block or Context is empty
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
-    // Method to convert a Rust string to a Value::Word
-    pub fn from_word<S: Into<SmolStr>>(s: S) -> Self {
-        Value::Word(s.into())
+    /// Push a value to a Block, returning a new Block value
+    pub fn push(self, value: Value) -> Self {
+        match self {
+            Value::Block(block) => {
+                let mut block_vec = block.to_vec();
+                block_vec.push(value);
+                Value::Block(block_vec.into_boxed_slice())
+            }
+            // If not a block, create a new one with this value
+            _ => Value::Block(Box::new([value])),
+        }
     }
 
-    // Method to convert a Rust string to a Value::SetWord
-    pub fn from_set_word<S: Into<SmolStr>>(s: S) -> Self {
-        Value::SetWord(s.into())
+    /// Pop a value from a Block, returning a tuple of (new_block, popped_value)
+    pub fn pop(self) -> (Self, Option<Value>) {
+        match self {
+            Value::Block(block) => {
+                let mut block_vec = block.to_vec();
+                let popped = block_vec.pop();
+                (Value::Block(block_vec.into_boxed_slice()), popped)
+            }
+            // If not a block, return as-is with None
+            _ => (self, None),
+        }
     }
 
-    // Method to convert a Rust bool to a Value::Int (since we don't have a Boolean type)
-    pub fn from_bool(b: bool) -> Self {
-        Value::Int(if b { 1 } else { 0 })
+    /// Map a function over a Block, returning a new Block value
+    pub fn map<F>(self, f: F) -> Self
+    where
+        F: FnMut(Value) -> Value,
+    {
+        match self {
+            Value::Block(block) => {
+                let mapped = block.to_vec().into_iter().map(f).collect::<Vec<_>>();
+                Value::Block(mapped.into_boxed_slice())
+            }
+            // If not a block, return as-is
+            _ => self,
+        }
+    }
+
+    /// Filter a Block with a predicate, returning a new Block value
+    pub fn filter<F>(self, f: F) -> Self
+    where
+        F: FnMut(&Value) -> bool,
+    {
+        match self {
+            Value::Block(block) => {
+                let filtered = block.to_vec().into_iter().filter(f).collect::<Vec<_>>();
+                Value::Block(filtered.into_boxed_slice())
+            }
+            // If not a block, return as-is
+            _ => self,
+        }
+    }
+
+    //==================================================================
+    // PATH OPERATIONS
+    //==================================================================
+
+    /// Get a value from a nested path of keys (for Contexts)
+    pub fn get_path<I, K>(&self, path: I) -> Option<&Value>
+    where
+        I: IntoIterator<Item = K>,
+        K: AsRef<str>,
+    {
+        let mut current = self;
+        let mut iter = path.into_iter();
+
+        // Process all path segments except the last one
+        while let Some(key) = iter.next() {
+            if let Some(next) = current.get(key) {
+                if let Some(next_key) = iter.next() {
+                    // If there are more segments, continue traversing
+                    current = next;
+                    match current {
+                        Value::Context(_) => {
+                            if let Some(next_value) = current.get(next_key) {
+                                current = next_value;
+                            } else {
+                                return None; // Key not found at this level
+                            }
+                        }
+                        _ => return None, // Not a context, can't traverse further
+                    }
+                } else {
+                    // Last segment, return the value
+                    return Some(next);
+                }
+            } else {
+                return None; // Key not found
+            }
+        }
+
+        // If the path is empty, return self
+        Some(current)
+    }
+
+    /// Set a value at a nested path of keys, creating intermediate contexts as needed
+    pub fn set_path<I, K, V>(mut self, path: I, value: V) -> Self
+    where
+        I: IntoIterator<Item = K>,
+        K: AsRef<str> + Into<SmolStr>,
+        V: Into<Value>,
+    {
+        let path_vec: Vec<K> = path.into_iter().collect();
+        if path_vec.is_empty() {
+            return value.into(); // If path is empty, return the value directly
+        }
+
+        set_path_value(&mut self, &path_vec, value.into())
+    }
+
+    //==================================================================
+    // CONVERSION UTILITIES
+    //==================================================================
+
+    /// Convert value to a string representation
+    pub fn to_string_value(&self) -> Value {
+        match self {
+            Value::None => Value::String("none".into()),
+            Value::Int(n) => Value::String(n.to_string().into()),
+            Value::String(s) => Value::String(s.clone()),
+            Value::Word(w) => Value::String(w.clone()),
+            Value::SetWord(w) => Value::String(format!("{}:", w).into()),
+            Value::Block(_) => Value::String(format!("{}", self).into()),
+            Value::Context(_) => Value::String(format!("{}", self).into()),
+        }
+    }
+
+    /// Convert a value to an integer if possible
+    pub fn to_int_value(&self) -> Value {
+        match self {
+            Value::Int(n) => Value::Int(*n),
+            Value::String(s) => {
+                if let Ok(n) = s.parse::<i32>() {
+                    Value::Int(n)
+                } else {
+                    Value::None
+                }
+            }
+            _ => Value::None,
+        }
+    }
+
+    /// Parse a string into a structured value
+    pub fn parse<S: AsRef<str>>(s: S) -> Value {
+        // A simple parser could be implemented here
+        // For now, just return the string
+        Value::String(s.as_ref().into())
+    }
+}
+
+//==================================================================
+// BUILDER PATTERNS
+//==================================================================
+
+/// Builder for creating Context values in a fluent style
+pub struct ContextBuilder {
+    pairs: Vec<(SmolStr, Value)>,
+}
+
+impl ContextBuilder {
+    /// Create a new empty ContextBuilder
+    pub fn new() -> Self {
+        ContextBuilder { pairs: Vec::new() }
+    }
+
+    /// Add a key-value pair to the context
+    pub fn insert<K: Into<SmolStr>, V: Into<Value>>(mut self, key: K, value: V) -> Self {
+        self.pairs.push((key.into(), value.into()));
+        self
+    }
+
+    /// Build the final Context value
+    pub fn build(self) -> Value {
+        Value::Context(self.pairs.into_boxed_slice())
+    }
+}
+
+/// Builder for creating Block values in a fluent style
+pub struct BlockBuilder {
+    values: Vec<Value>,
+}
+
+impl BlockBuilder {
+    /// Create a new empty BlockBuilder
+    pub fn new() -> Self {
+        BlockBuilder { values: Vec::new() }
+    }
+
+    /// Add a value to the block
+    pub fn push<V: Into<Value>>(mut self, value: V) -> Self {
+        self.values.push(value.into());
+        self
+    }
+
+    /// Build the final Block value
+    pub fn build(self) -> Value {
+        Value::Block(self.values.into_boxed_slice())
+    }
+}
+
+// Extensions to Value for builders
+impl Value {
+    /// Start building a block
+    pub fn block_builder() -> BlockBuilder {
+        BlockBuilder::new()
+    }
+
+    /// Start building a context
+    pub fn context_builder() -> ContextBuilder {
+        ContextBuilder::new()
     }
 }
 
