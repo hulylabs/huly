@@ -322,11 +322,28 @@ impl<T> SymbolTable<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get(&mut self, symbol: Symbol) -> Option<[u32; 8]> {
+    pub fn get(&self, symbol: Symbol) -> Option<[u32; 8]> {
+        // Symbol IDs start at 1, so return None for symbol 0
+        if symbol == 0 {
+            return None;
+        }
+        
         let (_, data) = self.0.split_first()?;
         let symbols = data.len() / 9;
+        
+        // Check if symbol is out of bounds
+        if symbol > *self.0.0.as_ref().first()? {
+            return None;
+        }
+        
         let offset = symbols + (symbol - 1) as usize * 8;
-        data.get(offset..symbols + 8)
+        
+        // Ensure offset is within bounds
+        if offset + 8 > data.len() {
+            return None;
+        }
+        
+        data.get(offset..offset + 8)
             .and_then(|bytes| bytes.try_into().ok())
     }
 }
@@ -356,7 +373,11 @@ where
             if pos == 0 {
                 *count += 1;
                 let pos = *count;
-                data.get_mut(index).map(|slot| *slot = pos);
+                
+                // If we can't get the slot, something is fundamentally wrong
+                let slot = data.get_mut(index)?;
+                *slot = pos;
+                
                 let offset = symbols + (pos - 1) as usize * 8;
                 let value = data.get_mut(offset..offset + 8)?;
                 value.iter_mut().zip(sym.iter()).for_each(|(dst, src)| {
@@ -366,7 +387,9 @@ where
             } else {
                 let offset = symbols + (pos - 1) as usize * 8;
                 let value = data.get_mut(offset..offset + 8)?;
-                if value == &sym {
+                
+                // Fix for clippy::op_ref
+                if value == sym {
                     return Some(pos);
                 }
             }
@@ -598,3 +621,101 @@ where
 // ) -> Result<Symbol, CoreError> {
 //     table.get_or_insert(sym)
 // }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_symbol_table_init_get_insert() {
+        // Create a buffer large enough for the symbol table (9 slots per symbol)
+        let mut buffer = vec![0u32; 100];
+        let mut table = SymbolTable::new(buffer.as_mut_slice());
+        
+        // Initialize the table
+        table.init().expect("Failed to initialize symbol table");
+        
+        // Insert a new symbol
+        let sym1 = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        let symbol1 = table.get_or_insert(sym1).expect("Failed to insert symbol");
+        
+        // Verify we can retrieve it
+        let retrieved = table.get(symbol1).expect("Failed to get inserted symbol");
+        assert_eq!(retrieved, sym1, "Retrieved symbol doesn't match inserted symbol");
+        
+        // Insert another symbol
+        let sym2 = [10u32, 20, 30, 40, 50, 60, 70, 80];
+        let symbol2 = table.get_or_insert(sym2).expect("Failed to insert second symbol");
+        
+        // Verify we can retrieve both symbols correctly
+        let retrieved1 = table.get(symbol1).expect("Failed to get first symbol");
+        let retrieved2 = table.get(symbol2).expect("Failed to get second symbol");
+        assert_eq!(retrieved1, sym1, "First retrieved symbol doesn't match");
+        assert_eq!(retrieved2, sym2, "Second retrieved symbol doesn't match");
+        assert_ne!(symbol1, symbol2, "Different symbols should get different IDs");
+        
+        // Verify that inserting an existing symbol returns the same ID
+        let symbol1_again = table.get_or_insert(sym1).expect("Failed to re-insert first symbol");
+        assert_eq!(symbol1, symbol1_again, "Re-inserting same symbol should return same ID");
+    }
+    
+    #[test]
+    fn test_symbol_table_collision_handling() {
+        // Create a buffer with limited size to force collisions
+        // Use a small prime number (11) for the hash table size for better testing of collision handling
+        let mut buffer = vec![0u32; 11 * 9 + 1]; // 11 slots + overhead for symbol storage
+        let mut table = SymbolTable::new(buffer.as_mut_slice());
+        
+        table.init().expect("Failed to initialize symbol table");
+        
+        // Insert multiple symbols to test collision handling
+        let mut symbols = Vec::new();
+        let mut symbol_ids = Vec::new();
+        
+        // Create and insert 8 different symbols
+        for i in 0..8 {
+            let sym = [i+1, i+2, i+3, i+4, i+5, i+6, i+7, i+8];
+            symbols.push(sym);
+            let id = table.get_or_insert(sym).expect("Failed to insert symbol");
+            symbol_ids.push(id);
+        }
+        
+        // Verify all symbols can be retrieved correctly
+        for (i, &id) in symbol_ids.iter().enumerate() {
+            let retrieved = table.get(id).expect("Failed to get symbol");
+            assert_eq!(retrieved, symbols[i], "Symbol {} not retrieved correctly", i);
+        }
+        
+        // Verify that reinserting returns the same ID
+        for (i, &sym) in symbols.iter().enumerate() {
+            let id = table.get_or_insert(sym).expect("Failed to reinsert symbol");
+            assert_eq!(id, symbol_ids[i], "Reinserting symbol returned different ID");
+        }
+    }
+    
+    #[test]
+    fn test_symbol_table_error_conditions() {
+        // Test with invalid symbol ID
+        let mut buffer = vec![0u32; 100];
+        let mut table = SymbolTable::new(buffer.as_mut_slice());
+        
+        // Initialize the table
+        table.init().expect("Failed to initialize symbol table");
+        
+        // Try to get a symbol that doesn't exist
+        assert!(table.get(999).is_none(), "Getting non-existent symbol should return None");
+        
+        // Symbol index 0 should be invalid (symbols start at 1)
+        assert!(table.get(0).is_none(), "Getting symbol with ID 0 should return None");
+        
+        // Test empty buffer scenario - a buffer that's technically big enough but too small to be practical
+        // A proper symbol table needs at least 1 slot in the hash table + space for the symbol
+        let mut small_buffer = vec![0u32; 1]; // Header only, no space for symbols
+        let mut small_table = SymbolTable::new(small_buffer.as_mut_slice());
+        small_table.init().expect("Failed to initialize small table");
+        
+        let sym = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        assert!(small_table.get_or_insert(sym).is_none(), 
+                "Inserting into table without enough space should return None");
+    }
+}
