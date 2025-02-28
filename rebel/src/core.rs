@@ -39,7 +39,7 @@ pub enum MemoryError {
 
 // V A L U E
 
-pub enum Tag {
+pub enum VmValue {
     None,
     Int(i32),
     String(Offset),
@@ -47,7 +47,7 @@ pub enum Tag {
     SetWord(Symbol),
 }
 
-impl Tag {
+impl VmValue {
     pub const TAG_NONE: Word = 0;
     pub const TAG_INT: Word = 1;
     pub const TAG_BLOCK: Word = 2;
@@ -62,11 +62,11 @@ impl Tag {
 
     pub fn vm_repr(&self) -> [Word; 2] {
         match self {
-            Tag::None => [Self::TAG_NONE, 0],
-            Tag::Int(value) => [Self::TAG_INT, *value as u32],
-            Tag::String(offset) => [Self::TAG_INLINE_STRING, *offset],
-            Tag::Word(symbol) => [Self::TAG_WORD, *symbol],
-            Tag::SetWord(symbol) => [Self::TAG_SET_WORD, *symbol],
+            VmValue::None => [Self::TAG_NONE, 0],
+            VmValue::Int(value) => [Self::TAG_INT, *value as u32],
+            VmValue::String(offset) => [Self::TAG_INLINE_STRING, *offset],
+            VmValue::Word(symbol) => [Self::TAG_WORD, *symbol],
+            VmValue::SetWord(symbol) => [Self::TAG_SET_WORD, *symbol],
         }
     }
 }
@@ -147,7 +147,7 @@ where
             .heap
             .get_block_mut(self.system_words)
             .map(Context::new)?;
-        words.put(id, [Tag::TAG_NATIVE_FN, index])
+        words.put(id, [VmValue::TAG_NATIVE_FN, index])
     }
 
     pub fn eval(&mut self, block: Offset) -> Option<[Word; 2]> {
@@ -190,11 +190,11 @@ where
         Ok(result[1])
     }
 
-    pub fn alloc_string(&mut self, string: &str) -> Option<Tag> {
+    pub fn alloc_string(&mut self, string: &str) -> Option<VmValue> {
         let transmuted = unsafe { std::mem::transmute::<&[u8], &[u32]>(string.as_bytes()) };
         self.heap
             .alloc_block(transmuted)
-            .map(|addr| Tag::String(addr))
+            .map(|addr| VmValue::String(addr))
     }
 
     pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Option<Offset> {
@@ -359,10 +359,10 @@ where
 
     fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
         let [tag, word] = value;
-        if tag == Tag::TAG_WORD {
+        if tag == VmValue::TAG_WORD {
             let resolved = self.find_word(word);
             match resolved {
-                Some([Tag::TAG_STACK_VALUE, index]) => self
+                Some([VmValue::TAG_STACK_VALUE, index]) => self
                     .base
                     .peek()
                     .and_then(|[bp]| self.stack.get(bp + index * 2)),
@@ -378,11 +378,13 @@ where
             let value = self.get_value(cmd)?;
 
             if let Some((op, arity)) = match value[0] {
-                Tag::TAG_NATIVE_FN => {
+                VmValue::TAG_NATIVE_FN => {
                     Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
                 }
-                Tag::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-                Tag::TAG_FUNC => Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0])),
+                VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
+                VmValue::TAG_FUNC => {
+                    Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
+                }
                 _ => None,
             } {
                 let sp = self.stack.len()?;
@@ -403,7 +405,7 @@ where
                 match stack_len - self.base_ptr {
                     2 => {}
                     0 => {
-                        self.stack.push([Tag::TAG_NONE, 0])?;
+                        self.stack.push([VmValue::TAG_NONE, 0])?;
                     }
                     _ => {
                         let result = self.stack.pop::<2>()?;
@@ -450,7 +452,7 @@ where
                         }
                         Op::CONTEXT => {
                             let ctx = self.pop_context()?;
-                            self.stack.push([Tag::TAG_CONTEXT, ctx])?;
+                            self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
                         }
                         _ => {
                             return None;
@@ -462,7 +464,7 @@ where
             }
         }
 
-        self.stack.pop::<2>().or(Some([Tag::TAG_NONE, 0]))
+        self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
     }
 }
 
@@ -502,8 +504,8 @@ where
             .get_or_insert_symbol(word)
             .and_then(|id| {
                 let value = match kind {
-                    WordKind::Word => Tag::Word(id),
-                    WordKind::SetWord => Tag::SetWord(id),
+                    WordKind::Word => VmValue::Word(id),
+                    WordKind::SetWord => VmValue::SetWord(id),
                 };
                 self.parse.push(value.vm_repr())
             })
@@ -512,7 +514,7 @@ where
 
     fn integer(&mut self, value: i32) -> Result<(), MemoryError> {
         self.parse
-            .push([Tag::TAG_INT, value as u32])
+            .push([VmValue::TAG_INT, value as u32])
             .ok_or(MemoryError::OutOfMemory)
     }
 
@@ -532,7 +534,7 @@ where
             .alloc_block(block_data)
             .ok_or(MemoryError::OutOfMemory)?;
         self.parse
-            .push([Tag::TAG_BLOCK, offset])
+            .push([VmValue::TAG_BLOCK, offset])
             .ok_or(MemoryError::OutOfMemory)
     }
 }
@@ -563,14 +565,14 @@ mod tests {
     #[test]
     fn test_whitespace_1() -> Result<(), CoreError> {
         let result = eval("  \t\n  ")?;
-        assert_eq!(Tag::TAG_NONE, result[0]);
+        assert_eq!(VmValue::TAG_NONE, result[0]);
         Ok(())
     }
 
     #[test]
     fn test_string_1() -> Result<(), CoreError> {
         let result = eval(" \"hello\"  ")?;
-        assert_eq!(Tag::TAG_INLINE_STRING, result[0]);
+        assert_eq!(VmValue::TAG_INLINE_STRING, result[0]);
         Ok(())
     }
 
@@ -578,7 +580,7 @@ mod tests {
     fn test_word_1() -> Result<(), CoreError> {
         let input = "42 \"world\" x: 5 x\n ";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 5], result);
+        assert_eq!([VmValue::TAG_INT, 5], result);
         Ok(())
     }
 
@@ -586,7 +588,7 @@ mod tests {
     fn test_add_1() -> Result<(), CoreError> {
         let input = "add 7 8";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 15], result);
+        assert_eq!([VmValue::TAG_INT, 15], result);
         Ok(())
     }
 
@@ -594,7 +596,7 @@ mod tests {
     fn test_add_2() -> Result<(), CoreError> {
         let input = "add 1 add 2 3";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 6], result[0..2]);
+        assert_eq!([VmValue::TAG_INT, 6], result[0..2]);
         Ok(())
     }
 
@@ -602,7 +604,7 @@ mod tests {
     fn test_add_3() -> Result<(), CoreError> {
         let input = "add add 3 4 5";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 12], result[0..2]);
+        assert_eq!([VmValue::TAG_INT, 12], result[0..2]);
         Ok(())
     }
 
@@ -610,7 +612,7 @@ mod tests {
     fn test_context_0() -> Result<(), CoreError> {
         let input = "context [x: 8]";
         let result = eval(input)?;
-        assert_eq!(Tag::TAG_CONTEXT, result[0]);
+        assert_eq!(VmValue::TAG_CONTEXT, result[0]);
         Ok(())
     }
 
@@ -618,7 +620,7 @@ mod tests {
     fn test_func_1() -> Result<(), CoreError> {
         let input = "f: func [a b] [add a b] f 1 77";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 78], result);
+        assert_eq!([VmValue::TAG_INT, 78], result);
         Ok(())
     }
 
@@ -626,7 +628,7 @@ mod tests {
     fn test_func_2() -> Result<(), CoreError> {
         let input = "f: func [a b] [add a add b b] f 1 2";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 5], result);
+        assert_eq!([VmValue::TAG_INT, 5], result);
         Ok(())
     }
 
@@ -634,7 +636,7 @@ mod tests {
     fn test_either_1() -> Result<(), CoreError> {
         let input = "either lt 1 2 [1] [2]";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 1], result);
+        assert_eq!([VmValue::TAG_INT, 1], result);
         Ok(())
     }
 
@@ -642,7 +644,7 @@ mod tests {
     fn test_either_2() -> Result<(), CoreError> {
         let input = "either lt 2 1 [1] [2]";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 2], result);
+        assert_eq!([VmValue::TAG_INT, 2], result);
         Ok(())
     }
 
@@ -650,7 +652,7 @@ mod tests {
     fn test_do_1() -> Result<(), CoreError> {
         let input = "do [add 1 2]";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 3], result);
+        assert_eq!([VmValue::TAG_INT, 3], result);
         Ok(())
     }
 
@@ -658,7 +660,7 @@ mod tests {
     fn test_func_3() -> Result<(), CoreError> {
         let input = "f: func [n] [either lt n 2 [n] [add 1 f add n -1]] f 20";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 20], result);
+        assert_eq!([VmValue::TAG_INT, 20], result);
         Ok(())
     }
 
@@ -666,7 +668,7 @@ mod tests {
     fn test_func_fib() -> Result<(), CoreError> {
         let input = "fib: func [n] [either lt n 2 [n] [add fib add n -1 fib add n -2]] fib 10";
         let result = eval(input)?;
-        assert_eq!([Tag::TAG_INT, 55], result);
+        assert_eq!([VmValue::TAG_INT, 55], result);
         Ok(())
     }
 }

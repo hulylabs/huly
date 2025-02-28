@@ -53,7 +53,7 @@
 //! 2. Implement the required methods to handle each value type
 //! 3. Use the `ValueSerialize` trait to serialize values
 
-use crate::core::Tag;
+use crate::core::VmValue;
 use crate::encoding;
 use crate::value::Value;
 use smol_str::SmolStr;
@@ -63,13 +63,13 @@ use std::io::{self, Read, Write};
 pub struct BinTag;
 
 impl BinTag {
-    pub const NONE: u8 = Tag::TAG_NONE as u8;
-    pub const INT: u8 = Tag::TAG_INT as u8;
-    pub const BLOCK: u8 = Tag::TAG_BLOCK as u8;
-    pub const CONTEXT: u8 = Tag::TAG_CONTEXT as u8;
-    pub const INLINE_STRING: u8 = Tag::TAG_INLINE_STRING as u8;
-    pub const WORD: u8 = Tag::TAG_WORD as u8;
-    pub const SET_WORD: u8 = Tag::TAG_SET_WORD as u8;
+    pub const NONE: u8 = VmValue::TAG_NONE as u8;
+    pub const INT: u8 = VmValue::TAG_INT as u8;
+    pub const BLOCK: u8 = VmValue::TAG_BLOCK as u8;
+    pub const CONTEXT: u8 = VmValue::TAG_CONTEXT as u8;
+    pub const INLINE_STRING: u8 = VmValue::TAG_INLINE_STRING as u8;
+    pub const WORD: u8 = VmValue::TAG_WORD as u8;
+    pub const SET_WORD: u8 = VmValue::TAG_SET_WORD as u8;
 }
 
 // ============================================================================

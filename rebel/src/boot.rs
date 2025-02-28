@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{Exec, Module, Op, Tag};
+use crate::core::{Exec, Module, Op, VmValue};
 use crate::mem::{Offset, Word};
 
 fn add<T>(module: &mut Exec<T>) -> Option<()>
@@ -8,9 +8,9 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
-        [Tag::TAG_INT, a, Tag::TAG_INT, b] => {
+        [VmValue::TAG_INT, a, VmValue::TAG_INT, b] => {
             let result = (a as i32) + (b as i32);
-            module.push([Tag::TAG_INT, result as Word])
+            module.push([VmValue::TAG_INT, result as Word])
         }
         _ => None,
     }
@@ -21,9 +21,9 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
-        [Tag::TAG_INT, a, Tag::TAG_INT, b] => {
+        [VmValue::TAG_INT, a, VmValue::TAG_INT, b] => {
             let result = if (a as i32) < (b as i32) { 1 } else { 0 };
-            module.push([Tag::TAG_BOOL, result])
+            module.push([VmValue::TAG_BOOL, result])
         }
         _ => None,
     }
@@ -34,7 +34,7 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
-        [Tag::TAG_BLOCK, block] => module.call(block),
+        [VmValue::TAG_BLOCK, block] => module.call(block),
         _ => None,
     }
 }
@@ -44,7 +44,7 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
-        [Tag::TAG_BLOCK, block] => {
+        [VmValue::TAG_BLOCK, block] => {
             module.new_context(64)?;
             module.push_op(Op::CONTEXT, 0, 2)?;
             module.call(block)
@@ -58,22 +58,22 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
-        [Tag::TAG_BLOCK, params, Tag::TAG_BLOCK, body] => {
+        [VmValue::TAG_BLOCK, params, VmValue::TAG_BLOCK, body] => {
             let args = module.get_block_len(params)?;
             let arity = args as Offset / 2;
             module.new_context(arity)?;
             for i in 0..arity {
                 let param = module.get_block::<2>(params, i * 2)?;
                 match param {
-                    [Tag::TAG_WORD, symbol] => {
-                        module.put_context(symbol, [Tag::TAG_STACK_VALUE, i as Offset])?
+                    [VmValue::TAG_WORD, symbol] => {
+                        module.put_context(symbol, [VmValue::TAG_STACK_VALUE, i as Offset])?
                     }
                     _ => return None,
                 }
             }
             let ctx = module.pop_context()?;
             let func = module.alloc([arity, ctx, body])?;
-            module.push([Tag::TAG_FUNC, func])
+            module.push([VmValue::TAG_FUNC, func])
         }
         _ => None,
     }
@@ -84,7 +84,7 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
-        [Tag::TAG_BOOL, cond, Tag::TAG_BLOCK, if_true, Tag::TAG_BLOCK, if_false] => {
+        [VmValue::TAG_BOOL, cond, VmValue::TAG_BLOCK, if_true, VmValue::TAG_BLOCK, if_false] => {
             let block = if cond != 0 { if_true } else { if_false };
             module.call(block)
         }
