@@ -29,7 +29,12 @@ cargo clippy
 - **Imports**: Group standard lib, external deps, then internal imports with a blank line between groups
 - **Error Handling**: Use `thiserror` for defining error types, implement `Error` trait for custom errors
 - **Naming**: Use snake_case for functions/variables, CamelCase for types, SCREAMING_CASE for constants
-- **Tests**: Write unit tests in a `tests` module at the bottom of each file
+- **Tests**: 
+  - Write unit tests in a `tests` module at the bottom of each file
+  - Tests may return `()` directly or `Result<(), Error>` as needed
+  - Prefer using `.expect()` with meaningful messages over `.unwrap()`
+  - Avoid using `println!` in tests, use assertions to validate behavior
+  - Follow the arrange-act-assert pattern for test structure
 - **Documentation**: Document public APIs with clear descriptions and examples
 - **Types**: Use Rust's strong type system; avoid raw pointers when possible
 - **Error Propagation**: Use `?` operator for error propagation, not `.unwrap()` or `.expect()`

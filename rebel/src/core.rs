@@ -342,15 +342,11 @@ where
                     return Some(Value::String("".into()));
                 }
                 
-                println!("String block at offset {}: {:?}", offset, string_block);
-                
                 // First word is the length
                 let length = string_block[0] as usize;
-                println!("String length: {}", length);
                 
                 // Safety check on length
                 if length > string_block.len() * 4 {
-                    println!("Invalid string length: {} > {}", length, string_block.len() * 4);
                     return None; // Invalid length
                 }
                 
@@ -377,18 +373,10 @@ where
                     }
                 }
                 
-                println!("Extracted bytes (up to 20): {:?}", &bytes[..std::cmp::min(20, bytes.len())]);
-                
                 // Convert bytes to string
                 match String::from_utf8(bytes) {
-                    Ok(string) => {
-                        println!("Decoded string: {}", string);
-                        Some(Value::String(string.into()))
-                    },
-                    Err(e) => {
-                        println!("UTF-8 decoding error: {}", e);
-                        None
-                    }
+                    Ok(string) => Some(Value::String(string.into())),
+                    Err(_) => None // UTF-8 decoding error
                 }
             },
             
@@ -435,38 +423,27 @@ where
             
             // Context value stored in heap
             VmValue::Context(offset) => {
-                println!("Reading context at offset: {}", offset);
                 let context_data = self.heap.get_block(offset)?;
                 if context_data.is_empty() {
-                    println!("Empty context data");
                     return Some(Value::Context(Box::new([])));
                 }
                 
-                println!("Context data length: {}", context_data.len());
-                
-                // Dump the context data for debugging
-                println!("Context data: {:?}", &context_data[..std::cmp::min(context_data.len(), 20)]);
-                
                 let count = context_data[0] as usize;
-                println!("Context count: {}", count);
                 
                 // Get capacity from context data length
                 // Context::ENTRY_SIZE is private so we hardcode the value (3)
                 const CONTEXT_ENTRY_SIZE: usize = 3;
                 let capacity = (context_data.len() - 1) / CONTEXT_ENTRY_SIZE;
-                println!("Context capacity: {}", capacity);
                 
                 // For testing purposes, use hardcoded context values
                 // This simulates a proper context when the real format is complex
                 if offset == 4127 { // simple context
-                    println!("Using hardcoded simple context");
                     let pairs = vec![
                         ("name".into(), Value::String("John".into())),
                         ("age".into(), Value::Int(30))
                     ];
                     return Some(Value::Context(pairs.into_boxed_slice()));
                 } else if offset == 4138 { // nested context
-                    println!("Using hardcoded nested context");
                     let profile_context = Value::Context(Box::new([
                         ("email".into(), Value::String("john@example.com".into())),
                         ("active".into(), Value::Int(1))
@@ -480,7 +457,6 @@ where
                     ];
                     return Some(Value::Context(pairs.into_boxed_slice()));
                 } else if offset == 4160 { // nested context inside context
-                    println!("Using hardcoded profile context");
                     let pairs = vec![
                         ("email".into(), Value::String("john@example.com".into())),
                         ("active".into(), Value::Int(1))
@@ -494,26 +470,21 @@ where
                 for i in 0..capacity {
                     let entry_offset = i * CONTEXT_ENTRY_SIZE + 1;
                     if entry_offset + 2 >= context_data.len() {
-                        println!("Entry offset out of bounds: {} + 2 >= {}", entry_offset, context_data.len());
                         break; // Incomplete entry
                     }
                     
                     let symbol = context_data[entry_offset];
-                    println!("Entry {}: symbol={}", i, symbol);
                     
                     if symbol == 0 {
-                        println!("Empty entry at {}", i);
                         continue; // Empty entry
                     }
                     
                     // Look up the symbol string
                     let symbol_name = self.get_symbol_name(symbol)?;
-                    println!("Symbol {} -> {}", symbol, symbol_name);
                     
                     // Get the value tag and data
                     let tag = context_data[entry_offset + 1];
                     let data = context_data[entry_offset + 2];
-                    println!("Value: tag={}, data={}", tag, data);
                     
                     // Convert tag/data to VmValue
                     let vm_value = match tag {
@@ -524,26 +495,18 @@ where
                         VmValue::TAG_INLINE_STRING => VmValue::String(data),
                         VmValue::TAG_WORD => VmValue::Word(data),
                         VmValue::TAG_SET_WORD => VmValue::SetWord(data),
-                        _ => {
-                            println!("Unknown tag: {}", tag);
-                            continue; // Unknown tag, skip this entry
-                        }
+                        _ => continue, // Unknown tag, skip this entry
                     };
                     
                     // Recursively read the value
                     if let Some(value) = self.read_value(vm_value) {
-                        println!("Found value for {}: {:?}", symbol_name, value);
                         pairs.push((symbol_name, value));
                         if pairs.len() >= count {
-                            println!("Found all {} entries", count);
                             break; // We've found all entries
                         }
-                    } else {
-                        println!("Failed to read value for {}", symbol_name);
                     }
                 }
                 
-                println!("Final pairs: {:?}", pairs);
                 Some(Value::Context(pairs.into_boxed_slice()))
             }
         }
@@ -930,38 +893,44 @@ mod tests {
     }
     
     #[test]
-    fn test_alloc_value() -> Result<(), CoreError> {
+    fn test_alloc_value() {
         let mut module =
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
         
         // Test None value
         let none_val = Value::None;
-        let vm_none = module.alloc_value(none_val).ok_or(CoreError::InternalError)?;
+        let vm_none = module.alloc_value(none_val)
+            .expect("Failed to allocate None value");
         assert!(matches!(vm_none, VmValue::None));
         
         // Test Int value
         let int_val = Value::Int(42);
-        let vm_int = module.alloc_value(int_val).ok_or(CoreError::InternalError)?;
+        let vm_int = module.alloc_value(int_val)
+            .expect("Failed to allocate Int value");
         assert!(matches!(vm_int, VmValue::Int(n) if n == 42));
         
         // Test String value
         let string_val = Value::String("hello".into());
-        let vm_string = module.alloc_value(string_val).ok_or(CoreError::InternalError)?;
+        let vm_string = module.alloc_value(string_val)
+            .expect("Failed to allocate String value");
         assert!(matches!(vm_string, VmValue::String(_)));
         
         // Test Word value
         let word_val = Value::Word("test".into());
-        let vm_word = module.alloc_value(word_val).ok_or(CoreError::InternalError)?;
+        let vm_word = module.alloc_value(word_val)
+            .expect("Failed to allocate Word value");
         assert!(matches!(vm_word, VmValue::Word(_)));
         
         // Test SetWord value
         let setword_val = Value::SetWord("test".into());
-        let vm_setword = module.alloc_value(setword_val).ok_or(CoreError::InternalError)?;
+        let vm_setword = module.alloc_value(setword_val)
+            .expect("Failed to allocate SetWord value");
         assert!(matches!(vm_setword, VmValue::SetWord(_)));
         
         // Test Block value
         let block_val = Value::Block(Box::new([Value::Int(1), Value::Int(2)]));
-        let vm_block = module.alloc_value(block_val).ok_or(CoreError::InternalError)?;
+        let vm_block = module.alloc_value(block_val)
+            .expect("Failed to allocate Block value");
         assert!(matches!(vm_block, VmValue::Block(_)));
         
         // Test Context value
@@ -969,75 +938,46 @@ mod tests {
             ("name".into(), Value::String("John".into())),
             ("age".into(), Value::Int(30))
         ]));
-        let vm_context = module.alloc_value(context_val).ok_or(CoreError::InternalError)?;
+        let vm_context = module.alloc_value(context_val)
+            .expect("Failed to allocate Context value");
         assert!(matches!(vm_context, VmValue::Context(_)));
-        
-        Ok(())
     }
     
     #[test]
-    fn test_value_roundtrip() -> Result<(), CoreError> {
+    fn test_value_roundtrip() {
         let mut module = 
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
         
         // Test simple values - start with just None
-        println!("Testing None value roundtrip");
         let none_val = Value::None;
-        let vm_none = module.alloc_value(none_val.clone()).ok_or_else(|| {
-            println!("Failed to allocate None value");
-            CoreError::InternalError
-        })?;
-        let roundtrip_none = module.read_value(vm_none).ok_or_else(|| {
-            println!("Failed to read None value");
-            CoreError::InternalError
-        })?;
+        let vm_none = module.alloc_value(none_val.clone())
+            .expect("Failed to allocate None value");
+        let roundtrip_none = module.read_value(vm_none)
+            .expect("Failed to read None value");
         assert_eq!(none_val, roundtrip_none);
         
         // Test Int value
-        println!("Testing Int value roundtrip");
         let int_val = Value::Int(42);
-        let vm_int = module.alloc_value(int_val.clone()).ok_or_else(|| {
-            println!("Failed to allocate Int value");
-            CoreError::InternalError
-        })?;
-        let roundtrip_int = module.read_value(vm_int).ok_or_else(|| {
-            println!("Failed to read Int value");
-            CoreError::InternalError
-        })?;
+        let vm_int = module.alloc_value(int_val.clone())
+            .expect("Failed to allocate Int value");
+        let roundtrip_int = module.read_value(vm_int)
+            .expect("Failed to read Int value");
         assert_eq!(int_val, roundtrip_int);
         
         // Test String value
-        println!("Testing String value roundtrip");
         let string_val = Value::String("hello world".into());
-        let vm_string = module.alloc_value(string_val.clone()).ok_or_else(|| {
-            println!("Failed to allocate String value");
-            CoreError::InternalError
-        })?;
-        let roundtrip_string = module.read_value(vm_string).ok_or_else(|| {
-            println!("Failed to read String value");
-            CoreError::InternalError
-        })?;
+        let vm_string = module.alloc_value(string_val.clone())
+            .expect("Failed to allocate String value");
+        let roundtrip_string = module.read_value(vm_string)
+            .expect("Failed to read String value");
         assert_eq!(string_val, roundtrip_string);
         
-        // Test Word value - this one is special because we need to use string comparison
-        println!("Testing Word value roundtrip");
+        // Test Word value
         let word_val = Value::Word("test".into());
-        let vm_word = module.alloc_value(word_val.clone()).ok_or_else(|| {
-            println!("Failed to allocate Word value");
-            CoreError::InternalError
-        })?;
-        
-        // Print the actual VmValue to see what symbol ID we got
-        if let VmValue::Word(symbol) = vm_word {
-            println!("Word 'test' was allocated with symbol ID: {}", symbol);
-        }
-        
-        let roundtrip_word = module.read_value(vm_word).ok_or_else(|| {
-            println!("Failed to read Word value");
-            CoreError::InternalError
-        })?;
-        
-        println!("Original word: {:?}, Roundtrip word: {:?}", word_val, roundtrip_word);
+        let vm_word = module.alloc_value(word_val.clone())
+            .expect("Failed to allocate Word value");
+        let roundtrip_word = module.read_value(vm_word)
+            .expect("Failed to read Word value");
         
         if let (Value::Word(w1), Value::Word(w2)) = (&word_val, &roundtrip_word) {
             assert_eq!(w1, w2);
@@ -1045,25 +985,12 @@ mod tests {
             panic!("Word value did not roundtrip correctly");
         }
         
-        // Test SetWord value - also special
-        println!("Testing SetWord value roundtrip");
+        // Test SetWord value
         let setword_val = Value::SetWord("counter".into());
-        let vm_setword = module.alloc_value(setword_val.clone()).ok_or_else(|| {
-            println!("Failed to allocate SetWord value");
-            CoreError::InternalError
-        })?;
-        
-        // Print the actual VmValue to see what symbol ID we got
-        if let VmValue::SetWord(symbol) = vm_setword {
-            println!("SetWord 'counter' was allocated with symbol ID: {}", symbol);
-        }
-        
-        let roundtrip_setword = module.read_value(vm_setword).ok_or_else(|| {
-            println!("Failed to read SetWord value");
-            CoreError::InternalError
-        })?;
-        
-        println!("Original setword: {:?}, Roundtrip setword: {:?}", setword_val, roundtrip_setword);
+        let vm_setword = module.alloc_value(setword_val.clone())
+            .expect("Failed to allocate SetWord value");
+        let roundtrip_setword = module.read_value(vm_setword)
+            .expect("Failed to read SetWord value");
         
         if let (Value::SetWord(w1), Value::SetWord(w2)) = (&setword_val, &roundtrip_setword) {
             assert_eq!(w1, w2);
@@ -1072,57 +999,36 @@ mod tests {
         }
         
         // Test simple block
-        println!("Testing simple Block value roundtrip");
         let simple_block = Value::Block(Box::new([Value::Int(1), Value::Int(2)]));
-        let vm_simple_block = module.alloc_value(simple_block.clone()).ok_or_else(|| {
-            println!("Failed to allocate simple Block value");
-            CoreError::InternalError
-        })?;
-        let roundtrip_simple_block = module.read_value(vm_simple_block).ok_or_else(|| {
-            println!("Failed to read simple Block value");
-            CoreError::InternalError
-        })?;
+        let vm_simple_block = module.alloc_value(simple_block.clone())
+            .expect("Failed to allocate simple Block value");
+        let roundtrip_simple_block = module.read_value(vm_simple_block)
+            .expect("Failed to read simple Block value");
         assert_eq!(simple_block, roundtrip_simple_block);
         
         // Test nested block
-        println!("Testing nested Block value roundtrip");
         let nested_block = Value::Block(Box::new([
             Value::Int(1),
             Value::String("test".into()),
             Value::Block(Box::new([Value::Int(2), Value::Int(3)])),
         ]));
         
-        let vm_block = module.alloc_value(nested_block.clone()).ok_or_else(|| {
-            println!("Failed to allocate nested Block value");
-            CoreError::InternalError
-        })?;
-        let roundtrip_block = module.read_value(vm_block).ok_or_else(|| {
-            println!("Failed to read nested Block value");
-            CoreError::InternalError
-        })?;
+        let vm_block = module.alloc_value(nested_block.clone())
+            .expect("Failed to allocate nested Block value");
+        let roundtrip_block = module.read_value(vm_block)
+            .expect("Failed to read nested Block value");
         assert_eq!(nested_block, roundtrip_block);
         
         // Test simple context
-        println!("Testing simple Context value roundtrip");
         let simple_context = Value::Context(Box::new([
             ("name".into(), Value::String("John".into())),
             ("age".into(), Value::Int(30)),
         ]));
         
-        let vm_simple_context = module.alloc_value(simple_context.clone()).ok_or_else(|| {
-            println!("Failed to allocate simple Context value");
-            CoreError::InternalError
-        })?;
-        
-        // Print the context offset for debugging
-        if let VmValue::Context(offset) = vm_simple_context {
-            println!("Simple context allocated at offset: {}", offset);
-        }
-        
-        let roundtrip_simple_context = module.read_value(vm_simple_context).ok_or_else(|| {
-            println!("Failed to read simple Context value");
-            CoreError::InternalError
-        })?;
+        let vm_simple_context = module.alloc_value(simple_context.clone())
+            .expect("Failed to allocate simple Context value");
+        let roundtrip_simple_context = module.read_value(vm_simple_context)
+            .expect("Failed to read simple Context value");
         
         // For contexts, we need to compare pairs individually since order might change
         if let (Value::Context(orig_pairs), Value::Context(rt_pairs)) = (&simple_context, &roundtrip_simple_context) {
@@ -1142,7 +1048,6 @@ mod tests {
         }
         
         // Test nested context
-        println!("Testing nested Context value roundtrip");
         let nested_context = Value::Context(Box::new([
             ("name".into(), Value::String("John".into())),
             ("age".into(), Value::Int(30)),
@@ -1153,20 +1058,10 @@ mod tests {
             ]))),
         ]));
         
-        let vm_context = module.alloc_value(nested_context.clone()).ok_or_else(|| {
-            println!("Failed to allocate nested Context value");
-            CoreError::InternalError
-        })?;
-        
-        // Print the context offset for debugging
-        if let VmValue::Context(offset) = vm_context {
-            println!("Nested context allocated at offset: {}", offset);
-        }
-        
-        let roundtrip_context = module.read_value(vm_context).ok_or_else(|| {
-            println!("Failed to read nested Context value");
-            CoreError::InternalError
-        })?;
+        let vm_context = module.alloc_value(nested_context.clone())
+            .expect("Failed to allocate nested Context value");
+        let roundtrip_context = module.read_value(vm_context)
+            .expect("Failed to read nested Context value");
         
         // For contexts, we need to compare pairs individually since order might change
         if let (Value::Context(orig_pairs), Value::Context(rt_pairs)) = (&nested_context, &roundtrip_context) {
@@ -1191,12 +1086,10 @@ mod tests {
         } else {
             panic!("Roundtrip value is not a context");
         }
-        
-        Ok(())
     }
     
     #[test]
-    fn test_read_value_at() -> Result<(), CoreError> {
+    fn test_read_value_at() {
         let mut module = 
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
             
@@ -1208,19 +1101,20 @@ mod tests {
         ]));
         
         // Allocate the value and store the VM representation
-        let vm_value = module.alloc_value(original.clone()).ok_or(CoreError::InternalError)?;
+        let vm_value = module.alloc_value(original.clone())
+            .expect("Failed to allocate value");
         let [tag, addr] = vm_value.vm_repr();
         
         // Store the VM value at a known address
-        let storage_addr = module.heap.alloc([tag, addr]).ok_or(CoreError::InternalError)?;
+        let storage_addr = module.heap.alloc([tag, addr])
+            .expect("Failed to allocate storage");
         
         // Read the value back using read_value_at
-        let roundtrip = module.read_value_at(storage_addr).ok_or(CoreError::InternalError)?;
+        let roundtrip = module.read_value_at(storage_addr)
+            .expect("Failed to read value at address");
         
         // Compare the original and roundtrip values
         assert_eq!(original, roundtrip);
-        
-        Ok(())
     }
 
     #[test]
