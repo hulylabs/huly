@@ -9,4 +9,3 @@ mod mem;
 pub mod parse;
 pub mod serialize;
 pub mod value;
-pub mod vm_serialize;

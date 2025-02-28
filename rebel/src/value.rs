@@ -11,8 +11,6 @@ pub enum Value {
     String(SmolStr),
     Word(SmolStr),
     SetWord(SmolStr),
-    /// Context represents key-value pairs in a REBOL-inspired structure
-    /// Keys are stored as SmolStr and values can be any Value type
     Context(Box<[(SmolStr, Value)]>),
 }
 
@@ -35,7 +33,7 @@ impl fmt::Display for Value {
                     write!(f, "{}", item)?;
                 }
                 write!(f, "]")
-            },
+            }
             Value::Context(pairs) => {
                 write!(f, "#(")?;
                 let mut first = true;
