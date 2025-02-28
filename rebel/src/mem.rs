@@ -307,11 +307,27 @@ where
 
 // S Y M B O L   T A B L E
 
+/// Symbol table for storing and retrieving symbols
+/// Symbols are [u32; 8] values stored starting at symbol_table.len() / 9 offset
+/// First symbol_table.len() / 9 words is lookup table for symbol values
 pub struct SymbolTable<T>(Memory<T>);
 
 impl<T> SymbolTable<T> {
     pub fn new(data: T) -> Self {
         Self(Memory(data))
+    }
+}
+
+impl<T> SymbolTable<T>
+where
+    T: AsRef<[Word]>,
+{
+    pub fn get(&mut self, symbol: Symbol) -> Option<[u32; 8]> {
+        let (_, data) = self.0.split_first()?;
+        let symbols = data.len() / 9;
+        let offset = symbols + (symbol - 1) as usize * 8;
+        data.get(offset..symbols + 8)
+            .and_then(|bytes| bytes.try_into().ok())
     }
 }
 
@@ -324,43 +340,42 @@ where
     }
 
     pub fn get_or_insert(&mut self, sym: [u32; 8]) -> Option<Symbol> {
-        // println!("[symbol table]: add {:?}", sym);
-
         let (count, data) = self.0.split_first_mut()?;
 
-        const ENTRY_SIZE: usize = 9;
-        let capacity = data.len() / ENTRY_SIZE;
-        if capacity == 0 {
+        let symbols = data.len() / 9;
+        if symbols == 0 {
             return None;
         }
 
         let h = hash_u32x8(sym) as usize;
-        let mut index = h % capacity;
+        let mut index = h % symbols;
+        let mut probe = 0;
 
-        for _probe in 0..capacity {
-            let offset = index * ENTRY_SIZE;
-            if let Some(symbol) = data.get_mut(offset..offset + ENTRY_SIZE).and_then(|entry| {
-                entry.split_first_mut().and_then(|(symbol, value)| {
-                    if *symbol == 0 {
-                        *count += 1;
-                        *symbol = *count;
-                        value.iter_mut().zip(sym.iter()).for_each(|(dst, src)| {
-                            *dst = *src;
-                        });
-                        Some(*symbol)
-                    } else if value == sym {
-                        Some(*symbol)
-                    } else {
-                        None
-                    }
-                })
-            }) {
-                return Some(symbol);
+        loop {
+            let pos = data.get(index).copied()?;
+            if pos == 0 {
+                *count += 1;
+                let pos = *count;
+                data.get_mut(index).map(|slot| *slot = pos);
+                let offset = symbols + (pos - 1) as usize * 8;
+                let value = data.get_mut(offset..offset + 8)?;
+                value.iter_mut().zip(sym.iter()).for_each(|(dst, src)| {
+                    *dst = *src;
+                });
+                return Some(pos);
+            } else {
+                let offset = symbols + (pos - 1) as usize * 8;
+                let value = data.get_mut(offset..offset + 8)?;
+                if value == &sym {
+                    return Some(pos);
+                }
             }
-            index = (index + 1) % capacity;
+            index = (index + 1) % symbols;
+            probe += 1;
+            if probe >= symbols {
+                return None;
+            }
         }
-
-        None
     }
 }
 
