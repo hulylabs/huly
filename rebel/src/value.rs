@@ -482,18 +482,74 @@ impl Value {
     }
 
     /// Set a value at a nested path of keys, creating intermediate contexts as needed
-    pub fn set_path<I, K, V>(mut self, path: I, value: V) -> Self
+    pub fn set_path<I, K, V>(self, path: I, value: V) -> Self
     where
         I: IntoIterator<Item = K>,
-        K: AsRef<str> + Into<SmolStr>,
+        K: AsRef<str>,
         V: Into<Value>,
     {
-        let path_vec: Vec<K> = path.into_iter().collect();
+        let value = value.into();
+        let path_vec: Vec<_> = path.into_iter()
+            .map(|k| k.as_ref().to_string())
+            .collect();
+            
         if path_vec.is_empty() {
-            return value.into(); // If path is empty, return the value directly
+            return value; // If path is empty, return the value directly
         }
 
-        set_path_value(&mut self, &path_vec, value.into())
+        // Helper function that works with string slices
+        fn set_path_inner(ctx: Value, keys: &[String], value: Value) -> Value {
+            if keys.len() == 1 {
+                // Single path segment
+                if let Value::Context(pairs) = ctx {
+                    let key = &keys[0];
+                    let mut pairs_vec = pairs.to_vec();
+                    
+                    // Find existing or add new
+                    if let Some(pos) = pairs_vec.iter().position(|(k, _)| k == key) {
+                        pairs_vec[pos].1 = value;
+                    } else {
+                        pairs_vec.push((key.clone().into(), value));
+                    }
+                    
+                    Value::Context(pairs_vec.into_boxed_slice())
+                } else {
+                    // Create new context
+                    let mut pairs = Vec::new();
+                    pairs.push((keys[0].clone().into(), value));
+                    Value::Context(pairs.into_boxed_slice())
+                }
+            } else {
+                // Multiple path segments - handle recursively
+                if let Value::Context(pairs) = ctx {
+                    let first_key = &keys[0];
+                    let mut pairs_vec = pairs.to_vec();
+                    
+                    if let Some(pos) = pairs_vec.iter().position(|(k, _)| k == first_key) {
+                        // Key exists - update recursively
+                        let next_ctx = set_path_inner(
+                            pairs_vec[pos].1.clone(),
+                            &keys[1..],
+                            value
+                        );
+                        pairs_vec[pos].1 = next_ctx;
+                    } else {
+                        // Key doesn't exist - create new context
+                        let inner_ctx = Value::Context(Box::new([]));
+                        let updated = set_path_inner(inner_ctx, &keys[1..], value);
+                        pairs_vec.push((first_key.clone().into(), updated));
+                    }
+                    
+                    Value::Context(pairs_vec.into_boxed_slice())
+                } else {
+                    // Start with a new context
+                    let ctx = Value::Context(Box::new([]));
+                    set_path_inner(ctx, keys, value)
+                }
+            }
+        }
+        
+        set_path_inner(self, &path_vec, value)
     }
 
     //==================================================================
@@ -639,290 +695,220 @@ impl From<Vec<Value>> for Value {
 // The kitchen sink macro with improved type handling
 #[macro_export]
 macro_rules! rebel {
-    //=============================================
-    // NONE
-    //=============================================
+    //===========================================================
+    // 1) Top-level: [ ... ] => Block
+    //===========================================================
+    ([ $($inner:tt)* ]) => {{
+        let items = rebel!(@parse_block [] $($inner)*);
+        Value::Block(items.into_boxed_slice())
+    }};
+
+    //===========================================================
+    // 2) Top-level: { ... } => Context with => syntax
+    //===========================================================
+    ({ $($inner:tt)* }) => {{
+        let pairs = rebel!(@parse_context [] $($inner)*);
+        Value::Context(pairs.into_boxed_slice())
+    }};
+
+    //===========================================================
+    // 3) Special case for None
+    //===========================================================
     (none) => {
-        $crate::value::Value::None
+        Value::None
     };
 
-    //=============================================
-    // LITERAL HANDLING (numbers, strings, booleans)
-    //=============================================
-    // Match literals directly to handle special cases explicitly
-    ($i:literal) => {{
-        const LITERAL_VAL: &'static str = stringify!($i);
-        // Special case for true/false literals
-        if LITERAL_VAL == "true" {
-            $crate::value::Value::Int(1)
-        } else if LITERAL_VAL == "false" {
-            $crate::value::Value::Int(0)
-        }
-        // Handle integer literals
-        else if let Ok(n) = LITERAL_VAL.parse::<i32>() {
-            $crate::value::Value::Int(n)
-        }
-        // Handle string literals by removing the quotes
-        else if LITERAL_VAL.starts_with('"') && LITERAL_VAL.ends_with('"') && LITERAL_VAL.len() >= 2 {
-            $crate::value::Value::String(LITERAL_VAL[1..LITERAL_VAL.len()-1].into())
-        }
-        // Other literals
-        else {
-            $crate::value::Value::String(LITERAL_VAL.into())
-        }
+    //===========================================================
+    // 4) Fallback single-expr => Value::from(expr)
+    //===========================================================
+    ($expr:expr) => {
+        Value::from($expr)
+    };
+
+    //===========================================================
+    // BLOCK PARSER: @parse_block [acc] tokens...
+    //===========================================================
+    // 0) If tokens run out, produce Vec
+    (@parse_block [$($items:expr),*]) => (
+        vec![$($items),*]
+    );
+
+    // 1) optional comma => skip
+    (@parse_block [$($items:expr),*] , $($rest:tt)*) => {{
+        rebel!(@parse_block [$($items),*] $($rest)*)
     }};
 
-    //=============================================
-    // EXPLICIT TYPES
-    //=============================================
-    // Explicit int
-    (int: $i:expr) => {
-        $crate::value::Value::Int($i)
-    };
-
-    // Explicit string - make sure to handle quoted strings properly
-    (string: $s:expr) => {{
-        let s = $s;
-        let s_str = s.to_string(); // Convert any type to String
-        $crate::value::Value::String(s_str.into())
+    // 2) sub-block => [ ... ]
+    (@parse_block [$($items:expr),*] [ $($b:tt)* ] $($rest:tt)*) => {{
+        let sub = rebel!([ $($b)* ]);
+        rebel!(@parse_block [$($items,)* sub] $($rest)*)
     }};
 
-    // Explicit word
-    (word: $w:expr) => {
-        $crate::value::Value::Word($w.into())
-    };
+    // 3) set-word => ident:
+    (@parse_block [$($items:expr),*] $name:ident : $($rest:tt)*) => {{
+        let sw = Value::SetWord(stringify!($name).into());
+        rebel!(@parse_block [$($items,)* sw] $($rest)*)
+    }};
 
-    // Explicit setword
-    (set: $w:expr) => {
-        $crate::value::Value::SetWord($w.into())
-    };
-
-    //=============================================
-    // WORD SYNTAX
-    //=============================================
-    // Word with identifier (bare identifier for word)
-    ($w:ident) => {
-        $crate::value::Value::Word(stringify!($w).into())
-    };
-
-    // SetWord with identifier (using set() function-like syntax)
-    (set($w:ident)) => {
-        $crate::value::Value::SetWord(stringify!($w).into())
-    };
-
-    // Word with explicit type (still keep this for compatibility)
-    (word: $w:expr) => {
-        $crate::value::Value::Word($w.into())
-    };
-
-    // SetWord with explicit type (still keep this for compatibility)
-    (set: $w:expr) => {
-        $crate::value::Value::SetWord($w.into())
-    };
-
-    //=============================================
-    // BLOCK
-    //=============================================
-    // Empty block
-    ([]) => {
-        $crate::value::Value::Block(Box::new([]))
-    };
-
-    // Block with values (manually handle each element type)
-    ([ $($val:tt),* $(,)? ]) => {
-        {
-            let mut values = Vec::new();
-            $(
-                values.push(rebel!(@handle_value $val));
-            )*
-            $crate::value::Value::Block(values.into_boxed_slice())
-        }
-    };
-
-    //=============================================
-    // CONTEXT
-    //=============================================
-    // Empty context
-    ({}) => {
-        $crate::value::Value::Context(Box::new([]))
-    };
-
-    // Context with key-value pairs (string keys)
-    ({ $($key:expr => $val:tt),* $(,)? }) => {
-        {
-            let mut pairs = Vec::new();
-            $(
-                // Handle quoted string keys
-                let k_str = stringify!($key);
-                let k = if k_str.starts_with('"') && k_str.ends_with('"') && k_str.len() >= 2 {
-                    k_str[1..k_str.len()-1].into()
-                } else {
-                    $key.into()
-                };
-                let v = rebel!(@handle_value $val);
-                pairs.push((k, v));
-            )*
-            $crate::value::Value::Context(pairs.into_boxed_slice())
-        }
-    };
-
-    // Context with key-value pairs (identifier keys)
-    ({ $($key:ident: $val:tt),* $(,)? }) => {
-        {
-            let mut pairs = Vec::new();
-            $(
-                let k = stringify!($key).into();
-                let v = rebel!(@handle_value $val);
-                pairs.push((k, v));
-            )*
-            $crate::value::Value::Context(pairs.into_boxed_slice())
-        }
-    };
-
-    //=============================================
-    // ADVANCED FEATURES
-    //=============================================
-    // Template with substitution
-    (template: $template:expr, { $($key:ident => $val:tt),* $(,)? }) => {
-        {
-            let mut template = $template.to_string();
-            $(
-                let placeholder = format!("{{{}}}", stringify!($key));
-                // Convert the value to string without extra quotes
-                let value = match rebel!(@handle_value $val) {
-                    $crate::value::Value::String(s) => s.to_string(),
-                    $crate::value::Value::Int(i) => i.to_string(),
-                    $crate::value::Value::None => "none".to_string(),
-                    $crate::value::Value::Word(w) => w.to_string(),
-                    $crate::value::Value::SetWord(w) => format!("{}:", w),
-                    v => format!("{}", v),
-                };
-                template = template.replace(&placeholder, &value);
-            )*
-            $crate::value::Value::String(template.into())
-        }
-    };
-
-    // Path-based update (simplified to work more reliably)
-    (path: $base:expr, [$($key:expr),+] = $val:tt) => {
-        {
-            let mut ctx = $base.clone();
-            // Handle string literals in the keys
-            let keys: Vec<String> = vec![$(
-                {
-                    let k_str = stringify!($key);
-                    if k_str.starts_with('"') && k_str.ends_with('"') && k_str.len() >= 2 {
-                        k_str[1..k_str.len()-1].to_string()
-                    } else {
-                        $key.to_string()
+    // 4) string literal
+    (@parse_block [$($items:expr),*] $lit:literal $($rest:tt)*) => {{
+        let val = match stringify!($lit) {
+            s if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                Value::String(s[1..s.len()-1].into())
+            },
+            s => match s.parse::<i32>() {
+                Ok(n) => Value::Int(n),
+                Err(_) => {
+                    match s {
+                        "true" => Value::Int(1),
+                        "false" => Value::Int(0),
+                        _ => Value::String(s.into())
                     }
                 }
-            ),+];
-            let value = rebel!(@handle_value $val);
-
-            // Use a helper function for the path update
-            $crate::value::set_path_value(&mut ctx, &keys, value)
-        }
-    };
-
-    //=============================================
-    // INTERNAL HELPERS
-    //=============================================
-    // Handle different value types internally
-    (@handle_value none) => { $crate::value::Value::None };
-    (@handle_value true) => { $crate::value::Value::Int(1) };
-    (@handle_value false) => { $crate::value::Value::Int(0) };
-    (@handle_value $i:literal) => {{
-        const LITERAL_VAL: &'static str = stringify!($i);
-        // Special case for true/false literals
-        if LITERAL_VAL == "true" {
-            $crate::value::Value::Int(1)
-        } else if LITERAL_VAL == "false" {
-            $crate::value::Value::Int(0)
-        }
-        // Handle integer literals
-        else if let Ok(n) = LITERAL_VAL.parse::<i32>() {
-            $crate::value::Value::Int(n)
-        }
-        // Handle string literals by removing the quotes
-        else if LITERAL_VAL.starts_with('"') && LITERAL_VAL.ends_with('"') && LITERAL_VAL.len() >= 2 {
-            $crate::value::Value::String(LITERAL_VAL[1..LITERAL_VAL.len()-1].into())
-        }
-        // Other literals
-        else {
-            $crate::value::Value::String(LITERAL_VAL.into())
-        }
-    }};
-    (@handle_value $w:ident) => { $crate::value::Value::Word(stringify!($w).into()) };
-    (@handle_value set($w:ident)) => { $crate::value::Value::SetWord(stringify!($w).into()) };
-    (@handle_value [ $($val:tt),* $(,)? ]) => { rebel!([ $($val),* ]) };
-    (@handle_value { $($key:expr => $val:tt),* $(,)? }) => { rebel!({ $($key => $val),* }) };
-    (@handle_value { $($key:ident: $val:tt),* $(,)? }) => { rebel!({ $($key: $val),* }) };
-    (@handle_value $other:expr) => { $crate::value::Value::from($other) };
-
-    //=============================================
-    // FALLTHROUGH
-    //=============================================
-    // For direct expressions with explicit type conversion
-    ($expr:expr) => {
-        $crate::value::Value::from($expr)
-    };
-}
-
-// Standalone helper function to support path updates
-pub fn set_path_value(ctx: &mut Value, keys: &[impl AsRef<str>], value: Value) -> Value {
-    // Top level context handling
-    if keys.len() == 1 {
-        if let Value::Context(pairs) = ctx {
-            let key = keys[0].as_ref();
-            let mut pairs_vec = pairs.to_vec();
-
-            // Find existing or add new
-            let found = pairs_vec.iter_mut().position(|(k, _)| k == key);
-            if let Some(pos) = found {
-                pairs_vec[pos].1 = value;
-            } else {
-                pairs_vec.push((key.into(), value));
             }
+        };
+        rebel!(@parse_block [$($items,)* val] $($rest)*)
+    }};
 
-            *ctx = Value::Context(pairs_vec.into_boxed_slice());
-            return ctx.clone();
-        } else {
-            // Create new context if current value is not a context
-            let mut pairs = Vec::new();
-            pairs.push((keys[0].as_ref().into(), value));
-            return Value::Context(pairs.into_boxed_slice());
-        }
-    }
+    // 5) parenthesized expression => ( ... )
+    (@parse_block [$($items:expr),*] ( $($expr:tt)* ) $($rest:tt)*) => {{
+        let val_expr = rebel!($($expr)*);
+        rebel!(@parse_block [$($items,)* val_expr] $($rest)*)
+    }};
 
-    // Handle nested paths
-    if let Value::Context(pairs) = ctx {
-        let first_key = keys[0].as_ref();
-        let mut pairs_vec = pairs.to_vec();
+    // 6) none keyword
+    (@parse_block [$($items:expr),*] none $($rest:tt)*) => {{
+        let none_val = Value::None;
+        rebel!(@parse_block [$($items,)* none_val] $($rest)*)
+    }};
 
-        // Find or create the nested context
-        let found = pairs_vec.iter_mut().position(|(k, _)| k == first_key);
-        if let Some(pos) = found {
-            // Update the existing path
-            let next_keys = &keys[1..];
-            let mut next_ctx = pairs_vec[pos].1.clone();
-            pairs_vec[pos].1 = set_path_value(&mut next_ctx, next_keys, value);
-        } else {
-            // Create a new nested path
-            let mut inner_ctx = Value::Context(Box::new([]));
-            inner_ctx = set_path_value(&mut inner_ctx, &keys[1..], value);
-            pairs_vec.push((first_key.into(), inner_ctx));
-        }
+    // 7) bare ident => Word
+    (@parse_block [$($items:expr),*] $ident:ident $($rest:tt)*) => {{
+        let w = Value::Word(stringify!($ident).into());
+        rebel!(@parse_block [$($items,)* w] $($rest)*)
+    }};
 
-        *ctx = Value::Context(pairs_vec.into_boxed_slice());
-        return ctx.clone();
-    } else {
-        // Create a new context structure
-        let mut current = Value::Context(Box::new([]));
-        current = set_path_value(&mut current, keys, value);
-        return current;
-    }
+    //===========================================================
+    // CONTEXT PARSER: @parse_context [pairs] tokens...
+    //===========================================================
+    // 0) if tokens exhausted => produce pairs
+    (@parse_context [$($pairs:expr),*]) => (
+        vec![$($pairs),*]
+    );
+
+    // 1) optional comma => skip
+    (@parse_context [$($pairs:expr),*] , $($rest:tt)*) => {{
+        rebel!(@parse_context [$($pairs),*] $($rest)*)
+    }};
+
+    // 2) sub-block
+    (@parse_context [$($pairs:expr),*] $key:ident => [ $($b:tt)* ] $($rest:tt)*) => {{
+        let sub_block = rebel!([ $($b)* ]);
+        let pair = (stringify!($key).into(), sub_block);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+    (@parse_context [$($pairs:expr),*] $key:literal => [ $($b:tt)* ] $($rest:tt)*) => {{
+        let sub_block = rebel!([ $($b)* ]);
+        let key_str = match stringify!($key) {
+            s if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                s[1..s.len()-1].into()
+            },
+            s => s.into()
+        };
+        let pair = (key_str, sub_block);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+
+    // 3) sub-context
+    (@parse_context [$($pairs:expr),*] $key:ident => { $($inner:tt)* } $($rest:tt)*) => {{
+        let sub_ctx = rebel!({ $($inner)* });
+        let pair = (stringify!($key).into(), sub_ctx);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+    (@parse_context [$($pairs:expr),*] $key:literal => { $($inner:tt)* } $($rest:tt)*) => {{
+        let sub_ctx = rebel!({ $($inner)* });
+        let key_str = match stringify!($key) {
+            s if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                s[1..s.len()-1].into()
+            },
+            s => s.into()
+        };
+        let pair = (key_str, sub_ctx);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+
+    // 4) key => ( expr ) => parse
+    (@parse_context [$($pairs:expr),*] $key:ident => ( $($expr:tt)* ) $($rest:tt)*) => {{
+        let val_expr = rebel!($($expr)*);
+        let pair = (stringify!($key).into(), val_expr);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+    (@parse_context [$($pairs:expr),*] $key:literal => ( $($expr:tt)* ) $($rest:tt)*) => {{
+        let val_expr = rebel!($($expr)*);
+        let key_str = match stringify!($key) {
+            s if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                s[1..s.len()-1].into()
+            },
+            s => s.into()
+        };
+        let pair = (key_str, val_expr);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+
+    // 5) none value
+    (@parse_context [$($pairs:expr),*] $key:ident => none $($rest:tt)*) => {{
+        let pair = (stringify!($key).into(), Value::None);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+    (@parse_context [$($pairs:expr),*] $key:literal => none $($rest:tt)*) => {{
+        let key_str = match stringify!($key) {
+            s if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                s[1..s.len()-1].into()
+            },
+            s => s.into()
+        };
+        let pair = (key_str, Value::None);
+        rebel!(@parse_context [$($pairs,)* pair] $($rest)*)
+    }};
+
+    // 6) fallback expr, splitting into two arms:
+    //    (a) key => $val:expr , $($rest:tt)*  => parse next
+    //    (b) key => $val:expr               => final pair
+    (@parse_context [$($pairs:expr),*] $key:ident => $val:expr , $($rest:tt)*) => {{
+        let new_pair = (stringify!($key).into(), Value::from($val));
+        rebel!(@parse_context [$($pairs,)* new_pair] $($rest)*)
+    }};
+    (@parse_context [$($pairs:expr),*] $key:ident => $val:expr) => {{
+        let new_pair = (stringify!($key).into(), Value::from($val));
+        let mut v = vec![$($pairs),*];
+        v.push(new_pair);
+        v
+    }};
+
+    (@parse_context [$($pairs:expr),*] $key:literal => $val:expr , $($rest:tt)*) => {{
+        let key_str = match stringify!($key) {
+            s if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                s[1..s.len()-1].into()
+            },
+            s => s.into()
+        };
+        let new_pair = (key_str, Value::from($val));
+        rebel!(@parse_context [$($pairs,)* new_pair] $($rest)*)
+    }};
+    (@parse_context [$($pairs:expr),*] $key:literal => $val:expr) => {{
+        let key_str = match stringify!($key) {
+            s if s.starts_with('"') && s.ends_with('"') && s.len() >= 2 => {
+                s[1..s.len()-1].into()
+            },
+            s => s.into()
+        };
+        let new_pair = (key_str, Value::from($val));
+        let mut v = vec![$($pairs),*];
+        v.push(new_pair);
+        v
+    }};
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -1202,18 +1188,27 @@ mod tests {
         let v1: Value = rebel!(42);
         assert_eq!(v1, Value::Int(42));
 
-        // Negative integer
+        // Negative integer - requires parentheses
         let v2: Value = rebel!(-42);
         assert_eq!(v2, Value::Int(-42));
 
-        // Explicit type
-        let v3: Value = rebel!(int: 42);
-        assert_eq!(v3, Value::Int(42));
-
         // Expression
         let num = 42;
-        let v4: Value = rebel!(int: num);
-        assert_eq!(v4, Value::Int(42));
+        let v3: Value = rebel!(num);
+        assert_eq!(v3, Value::Int(42));
+        
+        // Integers in a block
+        let v4 = rebel!([ 1 2 3 -4 -5 ]);
+        if let Value::Block(items) = v4 {
+            assert_eq!(items.len(), 5);
+            assert_eq!(items[0], Value::Int(1));
+            assert_eq!(items[1], Value::Int(2));
+            assert_eq!(items[2], Value::Int(3));
+            assert_eq!(items[3], Value::Int(-4));
+            assert_eq!(items[4], Value::Int(-5));
+        } else {
+            panic!("Expected block");
+        }
     }
 
     #[test]
@@ -1222,33 +1217,167 @@ mod tests {
         let v1: Value = rebel!("hello");
         assert_eq!(v1, Value::String("hello".into()));
 
-        // Explicit string
-        let v2: Value = rebel!(string: "world");
-        assert_eq!(v2, Value::String("world".into()));
-
-        // String with explicit type conversion
+        // String from variable
         let s = "test".to_string();
-        let v3: Value = rebel!(string: s);
-        assert_eq!(v3, Value::String("test".into()));
+        let v2: Value = rebel!(s);
+        assert_eq!(v2, Value::String("test".into()));
+        
+        // String in a block
+        let v3 = rebel!([ "hello" "world" ]);
+        if let Value::Block(items) = v3 {
+            assert_eq!(items.len(), 2);
+            assert_eq!(items[0], Value::String("hello".into()));
+            assert_eq!(items[1], Value::String("world".into()));
+        } else {
+            panic!("Expected block");
+        }
     }
 
     #[test]
     fn test_word_values() {
-        // Word with explicit type
-        let v1: Value = rebel!(word: "apple");
-        assert_eq!(v1, Value::Word("apple".into()));
+        // Word in a block
+        let v1 = rebel!([ alpha beta gamma ]);
+        if let Value::Block(items) = v1 {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Value::Word("alpha".into()));
+            assert_eq!(items[1], Value::Word("beta".into())); 
+            assert_eq!(items[2], Value::Word("gamma".into()));
+        } else {
+            panic!("Expected block");
+        }
 
-        // Word with bare identifier
-        let v2: Value = rebel!(apple);
-        assert_eq!(v2, Value::Word("apple".into()));
+        // SetWord in a block
+        let v2 = rebel!([ x: y: z: ]);
+        if let Value::Block(items) = v2 {
+            assert_eq!(items.len(), 3);
+            assert_eq!(items[0], Value::SetWord("x".into()));
+            assert_eq!(items[1], Value::SetWord("y".into()));
+            assert_eq!(items[2], Value::SetWord("z".into()));
+        } else {
+            panic!("Expected block");
+        }
 
-        // SetWord with explicit type
-        let v3: Value = rebel!(set: "apple");
-        assert_eq!(v3, Value::SetWord("apple".into()));
+        // Direct Value construction
+        let v3 = Value::Word("apple".into());
+        assert_eq!(v3, Value::Word("apple".into()));
+        
+        let v4 = Value::SetWord("banana".into());
+        assert_eq!(v4, Value::SetWord("banana".into()));
+    }
+    
+    // Tests migrated from the rebel4 macro:
+    
+    #[test]
+    fn test_new_block_basics() {
+        // Word, string, setword, nested block
+        let b = rebel!([ alpha "hello" x: [a b] ]);
+        match b {
+            Value::Block(items) => {
+                assert_eq!(items.len(), 4);
+                assert_eq!(items[0], Value::Word("alpha".into()));
+                assert_eq!(items[1], Value::String("hello".into()));
 
-        // SetWord with function-like syntax
-        let v4: Value = rebel!(set(apple));
-        assert_eq!(v4, Value::SetWord("apple".into()));
+                // x:
+                if let Value::SetWord(sw) = &items[2] {
+                    assert_eq!(sw, "x");
+                } else if let Value::Block(_) = &items[2] {
+                    panic!("We must check carefully. Maybe the nested block is item #2?");
+                } else {
+                    panic!("expected setword or block");
+                }
+            }
+            _ => panic!("expected block"),
+        }
+    }
+
+    #[test]
+    fn test_new_block_negative() {
+        // Must do ( -5 )
+        let b = rebel!([ foo ( -5 ) bar ]);
+        match b {
+            Value::Block(items) => {
+                assert_eq!(items.len(), 3);
+                assert_eq!(items[0], Value::Word("foo".into()));
+                assert_eq!(items[1], Value::Int(-5));
+                assert_eq!(items[2], Value::Word("bar".into()));
+            }
+            _ => panic!("expected block"),
+        }
+    }
+
+    #[test]
+    fn test_new_context_no_commas() {
+        let name = "Alice";
+        let c = rebel!({
+            user => name,
+            count => 42,
+            nested => [ x y z ]
+        });
+        match c {
+            Value::Context(pairs) => {
+                assert_eq!(pairs.len(), 3);
+                assert_eq!(pairs[0].0, "user");
+                assert_eq!(pairs[0].1, Value::String("Alice".into()));
+                assert_eq!(pairs[1].0, "count");
+                assert_eq!(pairs[1].1, Value::Int(42));
+                if let Value::Block(b) = &pairs[2].1 {
+                    assert_eq!(b.len(), 3);
+                } else {
+                    panic!("expected block");
+                }
+            }
+            _ => panic!("expected context"),
+        }
+    }
+
+    #[test]
+    fn test_new_context_comma() {
+        let c = rebel!({
+            one => 1,
+            two => 2,
+        });
+        match c {
+            Value::Context(pairs) => {
+                assert_eq!(pairs.len(), 2);
+            }
+            _ => panic!("expected context"),
+        }
+    }
+
+    #[test]
+    fn test_new_context_negative_expr() {
+        // negative => -999
+        let base = 40;
+        let c = rebel!({
+            answer => (base + 2),
+            negative => -999
+        });
+        match c {
+            Value::Context(pairs) => {
+                assert_eq!(pairs.len(), 2);
+                assert_eq!(pairs[0].0, "answer");
+                assert_eq!(pairs[0].1, Value::Int(42));
+                assert_eq!(pairs[1].0, "negative");
+                assert_eq!(pairs[1].1, Value::Int(-999));
+            }
+            _ => panic!("expected context"),
+        }
+    }
+
+    #[test]
+    fn test_new_fallback_expr() {
+        let x = rebel!(10 + 5);
+        assert_eq!(x, Value::Int(15));
+
+        let s = "hi";
+        let val2 = rebel!(s);
+        assert_eq!(val2, Value::String("hi".into()));
+    }
+
+    #[test]
+    fn test_new_fallback_negative() {
+        let v = rebel!(-5);
+        assert_eq!(v, Value::Int(-5));
     }
 
     #[test]
@@ -1294,7 +1423,7 @@ mod tests {
             panic!("Not a context");
         }
 
-        // Context with standard syntax
+        // Context with standard arrow syntax
         let v2: Value = rebel!({ "name" => "John", "age" => 42 });
         if let Value::Context(items) = v2 {
             assert_eq!(items.len(), 2);
@@ -1306,8 +1435,8 @@ mod tests {
             panic!("Not a context");
         }
 
-        // Context with object-like syntax
-        let v3: Value = rebel!({ name: "John", age: 42 });
+        // Context with identifier keys
+        let v3: Value = rebel!({ name => "John", age => 42 });
         if let Value::Context(items) = v3 {
             assert_eq!(items.len(), 2);
             assert_eq!(items[0].0, "name");
@@ -1322,7 +1451,7 @@ mod tests {
     #[test]
     fn test_nested_structures() {
         // Nested blocks
-        let v1: Value = rebel!([1, [2, 3], 4]);
+        let v1: Value = rebel!([ 1 [2 3] 4 ]);
         if let Value::Block(items) = v1 {
             assert_eq!(items.len(), 3);
             assert_eq!(items[0], Value::Int(1));
@@ -1341,10 +1470,10 @@ mod tests {
 
         // Nested contexts
         let v2: Value = rebel!({
-            user: {
-                name: "John",
-                profile: {
-                    age: 42
+            user => {
+                name => "John",
+                profile => {
+                    age => 42
                 }
             }
         });
@@ -1366,40 +1495,64 @@ mod tests {
     }
 
     #[test]
-    fn test_template_syntax() {
-        let v1: Value = rebel!(template: "Hello, {name}!", {
-            name => "World"
-        });
-
+    fn test_string_formatting() {
+        // We can use format! directly with Value::from
+        let name = "World";
+        let v1 = Value::String(format!("Hello, {}!", name).into());
         assert_eq!(v1, Value::String("Hello, World!".into()));
 
-        let v2: Value = rebel!(template: "Count: {count}", {
-            count => 42
-        });
-
+        let count = 42;
+        let v2 = Value::String(format!("Count: {}", count).into());
         assert_eq!(v2, Value::String("Count: 42".into()));
     }
 
     #[test]
-    fn test_path_expressions() {
-        // Start with a simple context
-        let base: Value = rebel!({ user: { name: "John" } });
+    fn test_nested_contexts() {
+        // Create a context with nested structure
+        let user_info = rebel!({
+            user => { 
+                name => "John",
+                email => "john@example.com",
+                settings => {
+                    theme => "dark",
+                    notifications => true
+                }
+            }
+        });
 
-        // Update existing path
-        let v1 = rebel!(path: base, ["user", "name"] = "Jane");
-
-        if let Value::Context(pairs) = &v1 {
-            let user = pairs[0].1.get("name").unwrap();
-            assert_eq!(user, &Value::String("Jane".into()));
+        // Check values at various levels
+        if let Value::Context(pairs) = &user_info {
+            assert_eq!(pairs.len(), 1);
+            assert_eq!(pairs[0].0, "user");
+            
+            // Get user context
+            if let Value::Context(user) = &pairs[0].1 {
+                // Check first level properties
+                assert_eq!(user.len(), 3);
+                
+                let name = user[0].1.clone();
+                let email = user[1].1.clone();
+                
+                assert_eq!(name, Value::String("John".into()));
+                assert_eq!(email, Value::String("john@example.com".into()));
+                
+                // Check settings
+                if let Value::Context(settings) = &user[2].1 {
+                    assert_eq!(settings[0].0, "theme");
+                    assert_eq!(settings[0].1, Value::String("dark".into()));
+                    
+                    assert_eq!(settings[1].0, "notifications");
+                    assert_eq!(settings[1].1, Value::Int(1)); // true becomes 1
+                }
+            }
         }
-
-        // Add new path
-        let v2 = rebel!(path: base, ["user", "email"] = "john@example.com");
-
-        if let Value::Context(pairs) = &v2 {
-            let user = pairs[0].1.get("email").unwrap();
-            assert_eq!(user, &Value::String("john@example.com".into()));
-        }
+        
+        // Use get_path (existing functionality) to traverse paths
+        let name = user_info.get_path(["user", "name"]);
+        assert_eq!(name, Some(&Value::String("John".into())));
+        
+        let theme = user_info.get_path(["user", "settings", "theme"]);
+        assert_eq!(theme, Some(&Value::String("dark".into())));
     }
 
     #[test]
@@ -1412,7 +1565,7 @@ mod tests {
         assert_eq!(v2, Value::Int(0));
 
         // In contexts
-        let v3: Value = rebel!({ active: true });
+        let v3: Value = rebel!({ active => true });
         if let Value::Context(items) = v3 {
             assert_eq!(items[0].1, Value::Int(1));
         } else {
@@ -1422,23 +1575,26 @@ mod tests {
 
     #[test]
     fn test_complex_example() {
-        let complex: Value = rebel!({
-            id: 1001,
-            name: "Product",
-            tags: [ electronics, sale ],
-            variants: [
-                {
-                    id: 1,
-                    sku: "ABC-123",
-                    inStock: true,
-                    features: [ "wireless", "bluetooth" ]
-                },
-                {
-                    id: 2,
-                    sku: "ABC-456",
-                    inStock: false
-                }
-            ]
+        // Create subcontexts first
+        let variant1 = rebel!({
+            id => 1,
+            sku => "ABC-123",
+            inStock => true,
+            features => [ "wireless", "bluetooth" ]
+        });
+        
+        let variant2 = rebel!({
+            id => 2,
+            sku => "ABC-456",
+            inStock => false
+        });
+        
+        // Create main context with the variants as a block
+        let complex = rebel!({
+            id => 1001,
+            name => "Product",
+            tags => [ electronics, sale ],
+            variants => (Value::block(vec![variant1, variant2]))
         });
 
         // Validate the structure
@@ -1465,7 +1621,7 @@ mod tests {
                     // Features
                     if let Some(Value::Block(features)) = variants[0].get("features") {
                         assert_eq!(features.len(), 2);
-                        assert_eq!(features[0], "wireless".into());
+                        assert_eq!(features[0], Value::String("wireless".into()));
                     }
                 }
             }
@@ -1516,51 +1672,48 @@ mod tests {
         // 1. DIRECT VARIABLE USAGE
         //==============================================================
 
-        // Direct variable reference - creates Word values with variable name
-        let v1 = rebel!(name);
-        let v2 = rebel!(age);
-        let v3 = rebel!(is_active);
-
-        // Variables become Words with the variable's name, not their value
-        assert_eq!(v1, Value::Word("name".into()));
-        assert_eq!(v2, Value::Word("age".into()));
-        assert_eq!(v3, Value::Word("is_active".into()));
+        // Direct variable reference in a block - creates Word values with variable name
+        let block_with_words = rebel!([ name age is_active ]);
+        
+        // Extract and check the words
+        if let Value::Block(items) = block_with_words {
+            assert_eq!(items[0], Value::Word("name".into()));
+            assert_eq!(items[1], Value::Word("age".into()));
+            assert_eq!(items[2], Value::Word("is_active".into()));
+        }
 
         // To use the variable's value directly, convert it to a string or use an expression
         let v4 = Value::string(name); // Now this uses the variable value
         assert_eq!(v4, Value::String(name.into()));
 
         //==============================================================
-        // 2. CONTEXT WITH IDENTIFIER KEYS
+        // 2. CONTEXT WITH IDENTIFIER KEYS AND ARROW SYNTAX
         //==============================================================
 
-        // Using identifier syntax (key: value) creates Word values from identifiers
+        // Using arrow syntax
         let user1 = rebel!({
-            name: name,        // Creates key "name" with value Word("name")
-            age: age,          // Creates key "age" with value Word("age")
-            active: is_active  // Creates key "active" with value Word("is_active")
+            name => "name",
+            age => "age",
+            active => "is_active"
         });
 
-        // The keys are correct, but values are Words matching identifiers
-        assert_eq!(user1.get("name"), Some(&Value::Word("name".into())));
-        assert_eq!(user1.get("age"), Some(&Value::Word("age".into())));
-        assert_eq!(user1.get("active"), Some(&Value::Word("is_active".into())));
+        // Check the keys and values
+        assert_eq!(user1.get("name"), Some(&Value::String("name".into())));
+        assert_eq!(user1.get("age"), Some(&Value::String("age".into())));
+        assert_eq!(user1.get("active"), Some(&Value::String("is_active".into())));
 
         //==============================================================
         // 3. USING EXTERNAL VARIABLES WITH VALUES
         //==============================================================
-
-        // Pre-convert string variables to use their values
-        let name_val = name.to_string();
 
         // Convert variables to Values directly
         let age_val = Value::int(age);
         let active_val = Value::boolean(is_active);
 
         let user2 = rebel!({
-            name: (name_val),     // Now uses the string value
-            age: (age_val),       // Uses the int value
-            active: (active_val)  // Uses the boolean value
+            name => (name.to_string()),  // Convert directly here
+            age => (age_val),            // Uses the int value
+            active => (active_val)       // Uses the boolean value
         });
 
         assert_eq!(user2.get("name"), Some(&Value::String(name.into())));
@@ -1575,8 +1728,8 @@ mod tests {
         let tag_block = Value::block(vec![Value::string(tags[0]), Value::string(tags[1])]);
 
         let user3 = rebel!({
-            name: name_val,
-            tags: (tag_block)   // Pre-created Block works correctly
+            name => (name.to_string()),
+            tags => (tag_block)   // Pre-created Block works correctly
         });
 
         if let Some(Value::Block(block)) = user3.get("tags") {
@@ -1591,8 +1744,8 @@ mod tests {
         let tag_vec: Vec<Value> = tags.iter().map(|&t| Value::string(t)).collect();
 
         let user4 = rebel!({
-            name: name_val,
-            tags: (tag_vec)    // Vec<Value> works correctly
+            name => (name.to_string()),
+            tags => (tag_vec)    // Vec<Value> works correctly
         });
 
         if let Some(Value::Block(block)) = user4.get("tags") {
@@ -1605,8 +1758,8 @@ mod tests {
 
         // 4.3 Direct literals work fine (when variables not needed)
         let user5 = rebel!({
-            name: name_val,
-            tags: ["user", "premium"]   // String literals work directly
+            name => (name.to_string()),
+            tags => [ "user", "premium" ]   // String literals work directly
         });
 
         if let Some(Value::Block(block)) = user5.get("tags") {
@@ -1628,8 +1781,8 @@ mod tests {
             .build();
 
         let basket = rebel!({
-            customer: (name.to_string()),
-            item: (product.clone())    // Using a Value directly works
+            customer => (name.to_string()),
+            item => (product.clone())    // Using a Value directly works
         });
 
         assert_eq!(basket.get("customer"), Some(&Value::String(name.into())));
