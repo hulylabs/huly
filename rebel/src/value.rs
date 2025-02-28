@@ -1471,4 +1471,168 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn test_minimal_external_variables() {
+        let name_str = "Alice";
+        let age_num = 30;
+
+        // Direct variable use - forces expression pattern
+        let v1 = Value::string(name_str);
+        let v2 = rebel!(name_str.to_string()); // Method call is an expression
+
+        assert_eq!(v1, Value::String("Alice".into()));
+        assert_eq!(v2, Value::String("Alice".into()));
+
+        // In context
+        let ctx1 = rebel!({
+            "key1" => (name_str),  // Parentheses force expression pattern
+            "key2" => (age_num)    // Parentheses force expression pattern
+        });
+
+        assert_eq!(ctx1.get("key1"), Some(&Value::String("Alice".into())));
+        assert_eq!(ctx1.get("key2"), Some(&Value::Int(30)));
+
+        // Pre-built values always work
+        let tag_values = Value::block(vec![Value::string("user"), Value::string("premium")]);
+
+        let ctx2 = rebel!({
+            "name" => (name_str),
+            "tags" => (tag_values)
+        });
+
+        assert_eq!(ctx2.get("name"), Some(&Value::String("Alice".into())));
+    }
+
+    #[test]
+    fn test_comprehensive_external_variables() {
+        // Define test variables of different types
+        let name = "Alice";
+        let age = 30;
+        let is_active = true;
+        let tags = vec!["user", "premium"];
+
+        //==============================================================
+        // 1. DIRECT VARIABLE USAGE
+        //==============================================================
+
+        // Direct variable reference - creates Word values with variable name
+        let v1 = rebel!(name);
+        let v2 = rebel!(age);
+        let v3 = rebel!(is_active);
+
+        // Variables become Words with the variable's name, not their value
+        assert_eq!(v1, Value::Word("name".into()));
+        assert_eq!(v2, Value::Word("age".into()));
+        assert_eq!(v3, Value::Word("is_active".into()));
+
+        // To use the variable's value directly, convert it to a string or use an expression
+        let v4 = Value::string(name); // Now this uses the variable value
+        assert_eq!(v4, Value::String(name.into()));
+
+        //==============================================================
+        // 2. CONTEXT WITH IDENTIFIER KEYS
+        //==============================================================
+
+        // Using identifier syntax (key: value) creates Word values from identifiers
+        let user1 = rebel!({
+            name: name,        // Creates key "name" with value Word("name")
+            age: age,          // Creates key "age" with value Word("age")
+            active: is_active  // Creates key "active" with value Word("is_active")
+        });
+
+        // The keys are correct, but values are Words matching identifiers
+        assert_eq!(user1.get("name"), Some(&Value::Word("name".into())));
+        assert_eq!(user1.get("age"), Some(&Value::Word("age".into())));
+        assert_eq!(user1.get("active"), Some(&Value::Word("is_active".into())));
+
+        //==============================================================
+        // 3. USING EXTERNAL VARIABLES WITH VALUES
+        //==============================================================
+
+        // Pre-convert string variables to use their values
+        let name_val = name.to_string();
+
+        // Convert variables to Values directly
+        let age_val = Value::int(age);
+        let active_val = Value::boolean(is_active);
+
+        let user2 = rebel!({
+            name: (name_val),     // Now uses the string value
+            age: (age_val),       // Uses the int value
+            active: (active_val)  // Uses the boolean value
+        });
+
+        assert_eq!(user2.get("name"), Some(&Value::String(name.into())));
+        assert_eq!(user2.get("age"), Some(&Value::Int(age)));
+        assert_eq!(user2.get("active"), Some(&Value::Int(1)));
+
+        //==============================================================
+        // 4. HANDLING COLLECTIONS/ARRAYS
+        //==============================================================
+
+        // 4.1 Pre-create a Block Value (recommended approach)
+        let tag_block = Value::block(vec![Value::string(tags[0]), Value::string(tags[1])]);
+
+        let user3 = rebel!({
+            name: name_val,
+            tags: (tag_block)   // Pre-created Block works correctly
+        });
+
+        if let Some(Value::Block(block)) = user3.get("tags") {
+            assert_eq!(block.len(), 2);
+            assert_eq!(block[0], Value::String(tags[0].into()));
+            assert_eq!(block[1], Value::String(tags[1].into()));
+        } else {
+            panic!("Tags should be a block");
+        }
+
+        // 4.2 Convert to Vec<Value> (alternative approach)
+        let tag_vec: Vec<Value> = tags.iter().map(|&t| Value::string(t)).collect();
+
+        let user4 = rebel!({
+            name: name_val,
+            tags: (tag_vec)    // Vec<Value> works correctly
+        });
+
+        if let Some(Value::Block(block)) = user4.get("tags") {
+            assert_eq!(block.len(), 2);
+            assert_eq!(block[0], Value::String(tags[0].into()));
+            assert_eq!(block[1], Value::String(tags[1].into()));
+        } else {
+            panic!("Tags should be a block");
+        }
+
+        // 4.3 Direct literals work fine (when variables not needed)
+        let user5 = rebel!({
+            name: name_val,
+            tags: ["user", "premium"]   // String literals work directly
+        });
+
+        if let Some(Value::Block(block)) = user5.get("tags") {
+            assert_eq!(block.len(), 2);
+            assert_eq!(block[0], Value::String("user".into()));
+            assert_eq!(block[1], Value::String("premium".into()));
+        } else {
+            panic!("Tags should be a block");
+        }
+
+        //==============================================================
+        // 5. ADVANCED PATTERNS
+        //==============================================================
+
+        // Using a function result directly works
+        let product = Value::object()
+            .insert("name", "Product")
+            .insert("price", 1999)
+            .build();
+
+        let basket = rebel!({
+            customer: (name.to_string()),
+            item: (product.clone())    // Using a Value directly works
+        });
+
+        assert_eq!(basket.get("customer"), Some(&Value::String(name.into())));
+        assert_eq!(basket.get("item"), Some(&product));
+    }
 }
