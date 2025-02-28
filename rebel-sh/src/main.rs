@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use colored::*;
-use rebel::core::{CoreError, Module};
+use rebel::core::{MemoryError, Module};
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 fn main() -> Result<()> {
@@ -14,7 +14,7 @@ fn main() -> Result<()> {
     println!("Type {} or press Ctrl+D to exit\n", ":quit".red().bold());
 
     let mut module =
-        Module::init(vec![0; 0x10000].into_boxed_slice()).ok_or(CoreError::OutOfMemory)?;
+        Module::init(vec![0; 0x10000].into_boxed_slice()).ok_or(MemoryError::OutOfMemory)?;
 
     let mut rl = DefaultEditor::new()?;
 

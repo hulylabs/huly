@@ -17,29 +17,35 @@ pub enum CoreError {
     BoundsCheckFailed,
     #[error("symbol table full")]
     SymbolTableFull,
-    #[error("out of memory")]
-    OutOfMemory,
     #[error("word not found")]
     WordNotFound,
     #[error("stack underflow")]
     StackUnderflow,
-    #[error("unexpected character: `{0}`")]
-    UnexpectedChar(char),
-    #[error("unexpected end of input")]
-    EndOfInput,
-    #[error("integer overflow")]
-    IntegerOverflow,
     #[error("bad arguments")]
     BadArguments,
     #[error(transparent)]
     TryFromSliceError(#[from] std::array::TryFromSliceError),
-    #[error("parse collector error")]
-    ParseCollectorError,
+    #[error(transparent)]
+    ParserError(#[from] crate::parse::ParserError<MemoryError>),
+}
+
+#[derive(Debug, Error)]
+pub enum MemoryError {
+    #[error("out of memory")]
+    OutOfMemory,
+    #[error("unexpected error")]
+    UnexpectedError,
 }
 
 // V A L U E
 
-pub struct Tag;
+pub enum Tag {
+    None,
+    Int(i32),
+    String(Offset),
+    Word(Symbol),
+    SetWord(Symbol),
+}
 
 impl Tag {
     pub const TAG_NONE: Word = 0;
@@ -53,6 +59,16 @@ impl Tag {
     pub const TAG_STACK_VALUE: Word = 8;
     pub const TAG_FUNC: Word = 9;
     pub const TAG_BOOL: Word = 10;
+
+    pub fn vm_repr(&self) -> [Word; 2] {
+        match self {
+            Tag::None => [Self::TAG_NONE, 0],
+            Tag::Int(value) => [Self::TAG_INT, *value as u32],
+            Tag::String(offset) => [Self::TAG_INLINE_STRING, *offset],
+            Tag::Word(symbol) => [Self::TAG_WORD, *symbol],
+            Tag::SetWord(symbol) => [Self::TAG_SET_WORD, *symbol],
+        }
+    }
 }
 
 fn inline_string(string: &str) -> Option<[u32; 8]> {
@@ -169,15 +185,21 @@ where
 
     pub fn parse(&mut self, code: &str) -> Result<Offset, CoreError> {
         let mut collector = ParseCollector::new(self);
-        collector
-            .begin_block()
-            .ok_or(CoreError::ParseCollectorError)?;
-        Parser::new(code, &mut collector).parse()?;
-        collector
-            .end_block()
-            .ok_or(CoreError::ParseCollectorError)?;
+        Parser::new(code, &mut collector).parse_block()?;
         let result = collector.parse.pop::<2>().ok_or(CoreError::InternalError)?;
         Ok(result[1])
+    }
+
+    pub fn alloc_string(&mut self, string: &str) -> Option<Tag> {
+        let transmuted = unsafe { std::mem::transmute::<&[u8], &[u32]>(string.as_bytes()) };
+        self.heap
+            .alloc_block(transmuted)
+            .map(|addr| Tag::String(addr))
+    }
+
+    pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Option<Offset> {
+        self.get_symbols_mut()?
+            .get_or_insert(inline_string(symbol)?)
     }
 }
 
@@ -466,34 +488,52 @@ impl<T> Collector for ParseCollector<'_, T>
 where
     T: AsMut<[Word]>,
 {
-    fn string(&mut self, string: &str) -> Option<()> {
-        let offset = self.module.heap.alloc(inline_string(string)?)?;
-        self.parse.push([Tag::TAG_INLINE_STRING, offset])
+    type Error = MemoryError;
+
+    fn string(&mut self, string: &str) -> Result<(), Self::Error> {
+        self.module
+            .alloc_string(string)
+            .and_then(|value| self.parse.push(value.vm_repr()))
+            .ok_or(MemoryError::OutOfMemory)
     }
 
-    fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
-        let symbol = inline_string(word)?;
-        let id = self.module.get_symbols_mut()?.get_or_insert(symbol)?;
-        let tag = match kind {
-            WordKind::Word => Tag::TAG_WORD,
-            WordKind::SetWord => Tag::TAG_SET_WORD,
-        };
-        self.parse.push([tag, id])
+    fn word(&mut self, kind: WordKind, word: &str) -> Result<(), Self::Error> {
+        self.module
+            .get_or_insert_symbol(word)
+            .and_then(|id| {
+                let value = match kind {
+                    WordKind::Word => Tag::Word(id),
+                    WordKind::SetWord => Tag::SetWord(id),
+                };
+                self.parse.push(value.vm_repr())
+            })
+            .ok_or(MemoryError::OutOfMemory)
     }
 
-    fn integer(&mut self, value: i32) -> Option<()> {
-        self.parse.push([Tag::TAG_INT, value as u32])
+    fn integer(&mut self, value: i32) -> Result<(), MemoryError> {
+        self.parse
+            .push([Tag::TAG_INT, value as u32])
+            .ok_or(MemoryError::OutOfMemory)
     }
 
-    fn begin_block(&mut self) -> Option<()> {
-        self.ops.push([self.parse.len()?])
+    fn begin_block(&mut self) -> Result<(), MemoryError> {
+        self.parse
+            .len()
+            .and_then(|len| self.ops.push([len]))
+            .ok_or(MemoryError::OutOfMemory)
     }
 
-    fn end_block(&mut self) -> Option<()> {
-        let [bp] = self.ops.pop()?;
-        let block_data = self.parse.pop_all(bp)?;
-        let offset = self.module.heap.alloc_block(block_data)?;
-        self.parse.push([Tag::TAG_BLOCK, offset])
+    fn end_block(&mut self) -> Result<(), MemoryError> {
+        let [bp] = self.ops.pop().ok_or(MemoryError::UnexpectedError)?;
+        let block_data = self.parse.pop_all(bp).ok_or(MemoryError::UnexpectedError)?;
+        let offset = self
+            .module
+            .heap
+            .alloc_block(block_data)
+            .ok_or(MemoryError::OutOfMemory)?;
+        self.parse
+            .push([Tag::TAG_BLOCK, offset])
+            .ok_or(MemoryError::OutOfMemory)
     }
 }
 
