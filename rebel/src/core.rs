@@ -727,13 +727,55 @@ where
         }
     }
 
-    // fn eval2(&mut self) -> Option<MemValue> {
-    //     loop {
-    //         if let Some((op, word)) = self.next_op() {
-    //             if op != Op::NONE {
-    //                 self.do_op(op, word)?;
-    //             }
+    fn eval(&mut self) -> Option<MemValue> {
+        while let Some((op, word)) = self.next_op() {
+            self.do_op(op, word)?;
+        }
+        self.stack.pop()
+    }
 
+    // fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
+    //     let [tag, word] = value;
+    //     if tag == VmValue::TAG_WORD {
+    //         let resolved = self.find_word(word);
+    //         match resolved {
+    //             Some([VmValue::TAG_STACK_VALUE, index]) => self
+    //                 .base
+    //                 .peek()
+    //                 .and_then(|[bp]| self.stack.get(bp + index * 2)),
+    //             _ => resolved,
+    //         }
+    //     } else {
+    //         Some(value)
+    //     }
+    // }
+
+    // fn next_value(&mut self) -> Option<[Word; 2]> {
+    //     while let Some(cmd) = self.ip.next(self.module) {
+    //         let value = self.get_value(cmd)?;
+
+    //         if let Some((op, arity)) = match value[0] {
+    //             VmValue::TAG_NATIVE_FN => {
+    //                 Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
+    //             }
+    //             VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
+    //             VmValue::TAG_FUNC => {
+    //                 Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
+    //             }
+    //             _ => None,
+    //         } {
+    //             let sp = self.stack.len()?;
+    //             self.arity.push([op, value[1], sp, arity * 2])?;
+    //         } else {
+    //             return Some(value);
+    //         }
+    //     }
+    //     None
+    // }
+
+    // fn eval(&mut self) -> Option<[Word; 2]> {
+    //     loop {
+    //         if let Some(value) = self.next_value() {
     //             self.stack.alloc(value)?;
     //         } else {
     //             let stack_len = self.stack.len()?;
@@ -801,116 +843,6 @@ where
 
     //     self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
     // }
-
-    fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
-        let [tag, word] = value;
-        if tag == VmValue::TAG_WORD {
-            let resolved = self.find_word(word);
-            match resolved {
-                Some([VmValue::TAG_STACK_VALUE, index]) => self
-                    .base
-                    .peek()
-                    .and_then(|[bp]| self.stack.get(bp + index * 2)),
-                _ => resolved,
-            }
-        } else {
-            Some(value)
-        }
-    }
-
-    fn next_value(&mut self) -> Option<[Word; 2]> {
-        while let Some(cmd) = self.ip.next(self.module) {
-            let value = self.get_value(cmd)?;
-
-            if let Some((op, arity)) = match value[0] {
-                VmValue::TAG_NATIVE_FN => {
-                    Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
-                }
-                VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-                VmValue::TAG_FUNC => {
-                    Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
-                }
-                _ => None,
-            } {
-                let sp = self.stack.len()?;
-                self.arity.push([op, value[1], sp, arity * 2])?;
-            } else {
-                return Some(value);
-            }
-        }
-        None
-    }
-
-    fn eval(&mut self) -> Option<[Word; 2]> {
-        loop {
-            if let Some(value) = self.next_value() {
-                self.stack.alloc(value)?;
-            } else {
-                let stack_len = self.stack.len()?;
-                match stack_len - self.base_ptr {
-                    2 => {}
-                    0 => {
-                        self.stack.push([VmValue::TAG_NONE, 0])?;
-                    }
-                    _ => {
-                        let result = self.stack.pop::<2>()?;
-                        self.stack.set_len(self.base_ptr)?;
-                        self.stack.push(result)?;
-                    }
-                }
-                let [block, ip] = self.blocks.pop()?;
-                if block != 0 {
-                    self.ip = IP::new(block, ip);
-                } else {
-                    break;
-                }
-            }
-
-            while let Some([bp, arity]) = self.arity.peek() {
-                let sp = self.stack.len()?;
-                if sp == bp + arity {
-                    let [op, value, _, _] = self.arity.pop()?;
-                    match op {
-                        Op::SET_WORD => {
-                            let result = self.stack.pop()?;
-                            self.put_context(value, result)?;
-                        }
-                        Op::CALL_NATIVE => {
-                            let native_fn = self.module.get_func(value)?;
-                            (native_fn.func)(self)?;
-                        }
-                        Op::CALL_FUNC => {
-                            let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
-                            self.env.push([ctx])?;
-                            self.base.push([bp])?;
-                            self.arity.push([Op::LEAVE, 0, sp, 2])?;
-                            self.call(blk)?;
-                            break;
-                        }
-                        Op::LEAVE => {
-                            self.env.pop::<1>()?;
-                            let [stack] = self.base.pop::<1>()?;
-                            let result = self.stack.pop::<2>()?;
-                            self.stack.set_len(stack)?;
-                            self.stack.push(result)?;
-                            self.base_ptr = stack;
-                        }
-                        Op::CONTEXT => {
-                            let ctx = self.pop_context()?;
-                            self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
-                        }
-                        _ => {
-                            return None;
-                        }
-                    };
-                } else {
-                    break;
-                }
-            }
-        }
-
-        self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
-    }
 }
 
 // P A R S E  C O L L E C T O R
@@ -1045,9 +977,12 @@ mod tests {
         // A single call to next_op should process all values and return None
         // as there are no operations to execute and we've reached the end of the block
         let result = exec.next_op();
-        
+
         // With the updated implementation, next_op should return None when finished
-        assert!(result.is_none(), "next_op should return None at end of block");
+        assert!(
+            result.is_none(),
+            "next_op should return None at end of block"
+        );
 
         // Check the stack now has exactly one value (the last value from the block)
         // Due to the VM ensuring blocks always return a single value
@@ -1092,7 +1027,7 @@ mod tests {
         // First call to next_op should encounter the set-word operation 'x:'
         // It will also push the value 1 onto the stack
         let op_result = exec.next_op();
-        
+
         // Should return a SET_WORD operation with the symbol for 'x'
         assert!(op_result.is_some(), "next_op should return an operation");
         let (op1, val1) = op_result.unwrap();
@@ -1143,9 +1078,12 @@ mod tests {
         // Next call should process the rest of the block (values 2 and 3)
         // With the updated next_op, it will process to the end of the block and return None
         let next_result = exec.next_op();
-        
+
         // Should return None since there are no more operations to execute
-        assert!(next_result.is_none(), "next_op should return None at end of block");
+        assert!(
+            next_result.is_none(),
+            "next_op should return None at end of block"
+        );
 
         // Stack should now have one value (the last value from the block, which is 3)
         // Due to the VM ensuring blocks always return a single value
@@ -1190,7 +1128,10 @@ mod tests {
         // First call to next_op should encounter the first set-word 'x:'
         // and push the value 1 onto the stack
         let op_result1 = exec.next_op();
-        assert!(op_result1.is_some(), "First next_op should return an operation");
+        assert!(
+            op_result1.is_some(),
+            "First next_op should return an operation"
+        );
         let (op1, val1) = op_result1.unwrap();
 
         // Should return SET_WORD operation
@@ -1225,7 +1166,10 @@ mod tests {
         // Second call to next_op should encounter the second set-word 'y:'
         // and push the value 2 onto the stack
         let op_result2 = exec.next_op();
-        assert!(op_result2.is_some(), "Second next_op should return an operation");
+        assert!(
+            op_result2.is_some(),
+            "Second next_op should return an operation"
+        );
         let (op2, val2) = op_result2.unwrap();
 
         // Should return SET_WORD operation
@@ -1260,7 +1204,10 @@ mod tests {
         // Third call to next_op should encounter the third set-word 'z:'
         // and push the value 3 onto the stack
         let op_result3 = exec.next_op();
-        assert!(op_result3.is_some(), "Third next_op should return an operation");
+        assert!(
+            op_result3.is_some(),
+            "Third next_op should return an operation"
+        );
         let (op3, val3) = op_result3.unwrap();
 
         // Should return SET_WORD operation
@@ -1294,9 +1241,12 @@ mod tests {
 
         // Fourth call should encounter end of block and return None
         let op_result4 = exec.next_op();
-        
+
         // With the updated implementation, next_op should return None at the end of the block
-        assert!(op_result4.is_none(), "Fourth next_op should return None at end of block");
+        assert!(
+            op_result4.is_none(),
+            "Fourth next_op should return None at end of block"
+        );
 
         // At this point, we've successfully executed all operations
         // and the context should contain the variables x, y, and z
@@ -2235,7 +2185,10 @@ mod tests {
 
         // There should be no more operations (next_op should return None)
         let next_result = exec.next_op();
-        assert!(next_result.is_none(), "next_op should return None at end of block");
+        assert!(
+            next_result.is_none(),
+            "next_op should return None at end of block"
+        );
 
         Ok(())
     }
@@ -2275,7 +2228,10 @@ mod tests {
         // In this case, it will process 'add', '1', 'add', '2', '3' before returning the
         // CALL_NATIVE operation for the inner 'add'.
         let op_result1 = exec.next_op();
-        assert!(op_result1.is_some(), "First next_op should return an operation");
+        assert!(
+            op_result1.is_some(),
+            "First next_op should return an operation"
+        );
         let (op1, value1) = op_result1.unwrap();
 
         // The first operation should be CALL_NATIVE for 'add' (the inner one)
@@ -2337,7 +2293,10 @@ mod tests {
 
         // Next call to next_op should identify the CALL_NATIVE operation for the outer 'add'
         let op_result2 = exec.next_op();
-        assert!(op_result2.is_some(), "Second next_op should return an operation");
+        assert!(
+            op_result2.is_some(),
+            "Second next_op should return an operation"
+        );
         let (op2, value2) = op_result2.unwrap();
 
         // The second operation should also be CALL_NATIVE for 'add' (the outer one)
@@ -2366,7 +2325,10 @@ mod tests {
 
         // There should be no more operations (next_op should return None)
         let next_result = exec.next_op();
-        assert!(next_result.is_none(), "next_op should return None at end of block");
+        assert!(
+            next_result.is_none(),
+            "next_op should return None at end of block"
+        );
 
         Ok(())
     }
