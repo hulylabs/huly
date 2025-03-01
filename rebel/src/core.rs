@@ -23,6 +23,8 @@ pub enum CoreError {
     WordNotFound,
     #[error("stack underflow")]
     StackUnderflow,
+    #[error("stack overflow")]
+    StackOverflow,
     #[error("bad arguments")]
     BadArguments,
     #[error(transparent)]
@@ -39,7 +41,9 @@ pub enum MemoryError {
     UnexpectedError,
 }
 
-// V A L U E
+// V M  V A L U E
+
+pub type MemValue = [Word; 2];
 
 pub enum VmValue {
     None,
@@ -462,11 +466,12 @@ where
 pub struct Op;
 
 impl Op {
-    const SET_WORD: u32 = 0;
-    const CALL_NATIVE: u32 = 1;
-    const CALL_FUNC: u32 = 2;
-    const LEAVE: u32 = 3;
-    pub const CONTEXT: u32 = 4;
+    const NONE: u32 = 0;
+    const SET_WORD: u32 = 1;
+    const CALL_NATIVE: u32 = 2;
+    const CALL_FUNC: u32 = 3;
+    const LEAVE: u32 = 4;
+    pub const CONTEXT: u32 = 5;
 }
 
 #[derive(Debug)]
@@ -609,6 +614,69 @@ where
 
     pub fn pop_context(&mut self) -> Option<Offset> {
         self.env.pop().map(|[addr]| addr)
+    }
+
+    fn resolve(&self, value: MemValue) -> Result<MemValue, CoreError> {
+        match value[0] {
+            VmValue::TAG_WORD => self
+                .find_word(value[1])
+                .and_then(|result| {
+                    if result[0] == VmValue::TAG_STACK_VALUE {
+                        self.stack.get(self.base_ptr + result[1])
+                    } else {
+                        Some(result)
+                    }
+                })
+                .ok_or(CoreError::WordNotFound),
+            _ => Ok(value),
+        }
+    }
+
+    fn op_arity(&self, value: MemValue) -> Result<(Word, Word), CoreError> {
+        match value[0] {
+            VmValue::TAG_NATIVE_FN => self
+                .module
+                .get_func(value[1])
+                .map(|native| (Op::CALL_NATIVE, native.arity * 2))
+                .ok_or(CoreError::FunctionNotFound),
+            VmValue::TAG_FUNC => self
+                .module
+                .get_array::<1>(value[1])
+                .map(|[arity]| (Op::CALL_FUNC, arity * 2))
+                .ok_or(CoreError::FunctionNotFound),
+            VmValue::TAG_SET_WORD => Ok((Op::SET_WORD, 2)),
+            _ => Ok((Op::NONE, 0)),
+        }
+    }
+
+    // fn do_op(&mut self, op: Word, word: Word) -> Result<(), CoreError> {}
+
+    fn next_op(&mut self) -> Result<(Word, Word), CoreError> {
+        loop {
+            // Check pending operations
+            if let Some([bp, arity]) = self.arity.peek() {
+                if self.stack.len().ok_or(CoreError::InternalError)? == bp + arity {
+                    let [op, word, _, _] = self.arity.pop().ok_or(CoreError::StackUnderflow)?;
+                    return Ok((op, word));
+                }
+            }
+            // Take next value
+            if let Some(value) = self.ip.next(self.module) {
+                let value = self.resolve(value)?;
+                let (op, arity) = self.op_arity(value)?;
+                if arity == 0 {
+                    if op == Op::NONE {
+                        self.stack.push(value).ok_or(CoreError::StackOverflow)?;
+                    } else {
+                        return Ok((op, value[1]));
+                    }
+                } else {
+                    self.push_op(op, value[1], arity);
+                }
+            } else {
+                return Ok((Op::NONE, 0));
+            }
+        }
     }
 
     fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
@@ -801,6 +869,10 @@ where
 
 pub fn eval(module: &mut Exec<&mut [Word]>) -> Option<[Word; 2]> {
     module.eval()
+}
+
+pub fn next_op(module: &mut Exec<&mut [Word]>) -> Result<(Word, Word), CoreError> {
+    module.next_op()
 }
 
 //
