@@ -546,12 +546,7 @@ where
         match result {
             Err(CoreError::WordNotFound) => {
                 if ctx != self.module.system_words {
-                    let system_words = self
-                        .module
-                        .heap
-                        .get_block(self.module.system_words)
-                        .map(Context::new)?;
-                    system_words.get(symbol).ok()
+                    self.module.get_system_words()?.get(symbol).ok()
                 } else {
                     result.ok()
                 }
@@ -559,7 +554,6 @@ where
             _ => result.ok(),
         }
     }
-
 
     // fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
     //     let envs = self.envs.peek_all(0)?;
