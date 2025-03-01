@@ -2038,6 +2038,227 @@ mod tests {
 
         Ok(())
     }
+    
+    /// Test the CALL_NATIVE operation with a simple program [add 7 8]
+    /// This test verifies that:
+    /// 1. The next_op method correctly identifies the CALL_NATIVE operation for the 'add' word
+    /// 2. The do_op method correctly executes the native function with the arguments
+    /// 3. The result is correctly pushed onto the stack
+    #[test]
+    fn test_call_native() -> Result<(), CoreError> {
+        // Initialize a module
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
+
+        // Create a program [add 7 8] using the rebel! macro
+        let program = rebel!([add 7 8]);
+
+        // Allocate the program in VM memory
+        let vm_block = module
+            .alloc_value(&program)
+            .expect("Failed to allocate block");
+
+        // Get the VM representation
+        let [_, block_addr] = vm_block.vm_repr();
+
+        // Create an execution context
+        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
+
+        // Call the block to set instruction pointer to it
+        exec.call(block_addr).expect("Failed to call block");
+
+        // First call to next_op should process the 'add' word and identify it as a CALL_NATIVE operation
+        // It will also push the arguments 7 and 8 onto the stack
+        let (op, value) = exec.next_op()?;
+
+        // Should return CALL_NATIVE operation
+        assert_eq!(op, Op::CALL_NATIVE, "First operation should be CALL_NATIVE");
+        
+        // The function index depends on the order functions are registered in boot.rs
+        // Looking at boot.rs, 'add' is the first registered function (index 0)
+        // We could test for the specific value, but that would make the test brittle if
+        // the order of function registration changes in boot.rs
+        assert_eq!(value, 0, "Expected 'add' function to be at index 0");
+
+        // Stack should have two values (7 and 8) pushed as pairs of [TAG_INT, value]
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            2 * 2,
+            "Stack should have 2 values (4 words total)"
+        );
+        
+        // Check that the values on stack are 7 and 8
+        let val1 = exec.stack.get::<2>(0).expect("Failed to get first value");
+        let val2 = exec.stack.get::<2>(2).expect("Failed to get second value");
+        
+        assert_eq!(val1, [VmValue::TAG_INT, 7], "First value should be 7");
+        assert_eq!(val2, [VmValue::TAG_INT, 8], "Second value should be 8");
+
+        // Execute the CALL_NATIVE operation using do_op
+        // This should pop the values 7 and 8 from the stack, add them, and push the result 15
+        exec.do_op(op, value).expect("do_op failed for CALL_NATIVE");
+        
+        // Stack should now have one value (the result)
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            1 * 2,
+            "Stack should have 1 value after do_op"
+        );
+        
+        // The result should be 15
+        let result = exec.stack.get::<2>(0).expect("Failed to get result");
+        assert_eq!(result, [VmValue::TAG_INT, 15], "Result should be 15");
+
+        // There should be no more operations
+        let (op2, val2) = exec.next_op()?;
+        assert_eq!(op2, Op::NONE, "There should be no more operations");
+        assert_eq!(val2, 0, "No operation value");
+
+        Ok(())
+    }
+    
+    /// Test the CALL_NATIVE operation with a nested expression [add 1 add 2 3]
+    /// This test verifies that:
+    /// 1. The VM can handle nested function calls correctly
+    /// 2. Each function's arguments are evaluated in the correct order
+    /// 3. Function results are properly passed as arguments to other functions
+    #[test]
+    fn test_call_native_nested() -> Result<(), CoreError> {
+        // Initialize a module
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
+
+        // Create a nested program [add 1 add 2 3] using the rebel! macro
+        // This should evaluate to 6 (1 + (2 + 3))
+        let program = rebel!([add 1 add 2 3]);
+
+        // Allocate the program in VM memory
+        let vm_block = module
+            .alloc_value(&program)
+            .expect("Failed to allocate block");
+
+        // Get the VM representation
+        let [_, block_addr] = vm_block.vm_repr();
+
+        // Create an execution context
+        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
+
+        // Call the block to set instruction pointer to it
+        exec.call(block_addr).expect("Failed to call block");
+
+        // The first call to next_op will process all values and operations in the program.
+        // This is because next_op keeps processing values until it finds an operation that
+        // needs to be executed, and it also pushes all values it encounters onto the stack.
+        // In this case, it will process 'add', '1', 'add', '2', '3' before returning the
+        // CALL_NATIVE operation for the inner 'add'.
+        let (op1, value1) = exec.next_op()?;
+        
+        // The first operation should be CALL_NATIVE for 'add' (the inner one)
+        assert_eq!(op1, Op::CALL_NATIVE, "First operation should be CALL_NATIVE");
+        assert_eq!(value1, 0, "Expected 'add' function to be at index 0");
+        
+        // At this point, the stack should have all three values (1, 2, 3)
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            3 * 2,
+            "Stack should have 3 values"
+        );
+        
+        // Check the values on stack (1, 2, 3)
+        let val1 = exec.stack.get::<2>(0).expect("Failed to get first value");
+        let val2 = exec.stack.get::<2>(2).expect("Failed to get second value");
+        let val3 = exec.stack.get::<2>(4).expect("Failed to get third value");
+        
+        assert_eq!(val1, [VmValue::TAG_INT, 1], "First value should be 1");
+        assert_eq!(val2, [VmValue::TAG_INT, 2], "Second value should be 2");
+        assert_eq!(val3, [VmValue::TAG_INT, 3], "Third value should be 3");
+        
+        // Execute the inner 'add' operation (add 2 3)
+        // This should pop 2 and 3, and push their sum (5)
+        exec.do_op(op1, value1).expect("do_op failed for inner CALL_NATIVE");
+        
+        // Now the stack should have 2 values: 1 and 5 (the result of inner add)
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            2 * 2,
+            "Stack should have 2 values after inner add"
+        );
+        
+        // Check the values on stack (1, 5)
+        let val1_after = exec.stack.get::<2>(0).expect("Failed to get first value after inner add");
+        let val2_after = exec.stack.get::<2>(2).expect("Failed to get result of inner add");
+        
+        assert_eq!(val1_after, [VmValue::TAG_INT, 1], "First value should still be 1");
+        assert_eq!(val2_after, [VmValue::TAG_INT, 5], "Result of inner add should be 5");
+        
+        // Next call to next_op should identify the CALL_NATIVE operation for the outer 'add'
+        let (op2, value2) = exec.next_op()?;
+        
+        // The second operation should also be CALL_NATIVE for 'add' (the outer one)
+        assert_eq!(op2, Op::CALL_NATIVE, "Second operation should be CALL_NATIVE");
+        assert_eq!(value2, 0, "Expected 'add' function to be at index 0");
+        
+        // Execute the outer 'add' operation (add 1 5)
+        // This should pop 1 and 5, and push their sum (6)
+        exec.do_op(op2, value2).expect("do_op failed for outer CALL_NATIVE");
+        
+        // Now the stack should have 1 value: 6 (the final result)
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            1 * 2,
+            "Stack should have 1 value after outer add"
+        );
+        
+        // Check the final result
+        let result = exec.stack.get::<2>(0).expect("Failed to get final result");
+        assert_eq!(result, [VmValue::TAG_INT, 6], "Final result should be 6");
+        
+        // There should be no more operations
+        let (op3, val3) = exec.next_op()?;
+        assert_eq!(op3, Op::NONE, "There should be no more operations");
+        assert_eq!(val3, 0, "No operation value");
+        
+        Ok(())
+    }
+    
+    /// Test a complete program with function definition and call
+    /// This test verifies that:
+    /// 1. The next_op method correctly processes different operation types
+    /// 2. The do_op method correctly executes each operation
+    /// 3. The VM correctly handles function definition and function calls
+    #[test]
+    fn test_call_func() -> Result<(), CoreError> {
+        // Initialize a module
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
+            
+        // Create a program that defines a function and calls it:
+        // [f: func [a b] [add a b] f 10 20]
+        let program = rebel!([f: func [a b] [add a b] f 10 20]);
+            
+        // Allocate the program in VM memory
+        let vm_block = module
+            .alloc_value(&program)
+            .expect("Failed to allocate block");
+            
+        // Get the VM representation
+        let [_, block_addr] = vm_block.vm_repr();
+            
+        // Create an execution context
+        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
+            
+        // Call the block to set instruction pointer to it
+        exec.call(block_addr).expect("Failed to call block");
+            
+        // Run the full program by calling eval() instead of testing each operation individually
+        // This is easier because the operation order in this program is more complex
+        let result = exec.eval().expect("Failed to evaluate program");
+        
+        // The final result should be 30 (10 + 20)
+        assert_eq!(result, [VmValue::TAG_INT, 30], "Final result should be 30");
+        
+        Ok(())
+    }
 }
 
 //
