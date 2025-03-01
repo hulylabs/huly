@@ -573,7 +573,7 @@ where
             Op::LEAVE_BLOCK,
             self.block,
             self.stack.len()?,
-            1000 + self.ip,
+            Self::LEAVE_MARKER + self.ip,
         ])?;
         self.block = block;
         self.ip = 0;
@@ -656,8 +656,12 @@ where
                 let bp = sp.checked_sub(arity * 2)?;
                 self.base.push([bp])?;
 
-                self.op_stack
-                    .push([Op::LEAVE_FUNC, self.block, bp, 1000 + self.ip])?;
+                self.op_stack.push([
+                    Op::LEAVE_FUNC,
+                    self.block,
+                    bp,
+                    Self::LEAVE_MARKER + self.ip,
+                ])?;
                 self.block = blk;
                 self.ip = 0;
 
@@ -728,7 +732,7 @@ where
                 };
 
                 self.block = block;
-                self.ip = ip - 1000;
+                self.ip = ip - Self::LEAVE_MARKER;
             }
         }
     }
