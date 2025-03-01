@@ -64,6 +64,31 @@ impl VmValue {
     pub const TAG_FUNC: Word = 9;
     pub const TAG_BOOL: Word = 10;
 
+    /// Convert a tag and data word into a VmValue
+    /// 
+    /// This helper method is used to convert a tag/data pair from memory into
+    /// a VmValue enum variant. It is used by both to_value and read_value methods.
+    /// 
+    /// # Arguments
+    /// * `tag` - The tag that identifies the value type
+    /// * `data` - The data word associated with the tag
+    /// 
+    /// # Returns
+    /// * `Some(VmValue)` - The constructed VmValue if the tag is recognized
+    /// * `None` - If the tag is not recognized
+    pub fn from_tag_data(tag: Word, data: Word) -> Option<Self> {
+        match tag {
+            Self::TAG_NONE => Some(VmValue::None),
+            Self::TAG_INT => Some(VmValue::Int(data as i32)),
+            Self::TAG_BLOCK => Some(VmValue::Block(data)),
+            Self::TAG_CONTEXT => Some(VmValue::Context(data)),
+            Self::TAG_INLINE_STRING => Some(VmValue::String(data)),
+            Self::TAG_WORD => Some(VmValue::Word(data)),
+            Self::TAG_SET_WORD => Some(VmValue::SetWord(data)),
+            _ => None, // Unknown tag
+        }
+    }
+
     pub fn vm_repr(&self) -> [Word; 2] {
         match self {
             VmValue::None => [Self::TAG_NONE, 0],
@@ -289,6 +314,7 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
+
     pub fn get_symbol(&self, symbol: Symbol) -> Option<SmolStr> {
         let addr = self.heap.get::<1>(Self::SYMBOLS).map(|[addr]| addr)?;
         let symbol_table = self.heap.get_block(addr).map(SymbolTable::new)?;
@@ -378,17 +404,8 @@ where
                     let tag = block_data[i];
                     let data = block_data[i + 1];
 
-                    // Convert tag/data to VmValue
-                    let vm_value = match tag {
-                        VmValue::TAG_NONE => VmValue::None,
-                        VmValue::TAG_INT => VmValue::Int(data as i32),
-                        VmValue::TAG_BLOCK => VmValue::Block(data),
-                        VmValue::TAG_CONTEXT => VmValue::Context(data),
-                        VmValue::TAG_INLINE_STRING => VmValue::String(data),
-                        VmValue::TAG_WORD => VmValue::Word(data),
-                        VmValue::TAG_SET_WORD => VmValue::SetWord(data),
-                        _ => return None, // Unknown tag
-                    };
+                    // Convert tag/data to VmValue using the helper method
+                    let vm_value = VmValue::from_tag_data(tag, data)?;
 
                     // Recursively read the value
                     if let Some(value) = self.to_value(vm_value) {
@@ -417,15 +434,8 @@ where
                     let symbol_name = self.get_symbol(symbol)?;
                     
                     // Convert the tag/data to a VmValue
-                    let vm_value = match tag {
-                        VmValue::TAG_NONE => VmValue::None,
-                        VmValue::TAG_INT => VmValue::Int(data as i32),
-                        VmValue::TAG_BLOCK => VmValue::Block(data),
-                        VmValue::TAG_CONTEXT => VmValue::Context(data),
-                        VmValue::TAG_INLINE_STRING => VmValue::String(data),
-                        VmValue::TAG_WORD => VmValue::Word(data),
-                        VmValue::TAG_SET_WORD => VmValue::SetWord(data),
-                        _ => continue, // Skip unknown tags
+                    let Some(vm_value) = VmValue::from_tag_data(tag, data) else {
+                        continue; // Skip unknown tags
                     };
                     
                     // Recursively convert to Value
@@ -443,17 +453,8 @@ where
         // Get the tag and data from the address
         let [tag, data] = self.heap.get::<2>(addr)?;
 
-        // Convert tag/data to VmValue
-        let vm_value = match tag {
-            VmValue::TAG_NONE => VmValue::None,
-            VmValue::TAG_INT => VmValue::Int(data as i32),
-            VmValue::TAG_BLOCK => VmValue::Block(data),
-            VmValue::TAG_CONTEXT => VmValue::Context(data),
-            VmValue::TAG_INLINE_STRING => VmValue::String(data),
-            VmValue::TAG_WORD => VmValue::Word(data),
-            VmValue::TAG_SET_WORD => VmValue::SetWord(data),
-            _ => return None, // Unknown tag
-        };
+        // Convert tag/data to VmValue using the helper method
+        let vm_value = VmValue::from_tag_data(tag, data)?;
 
         self.to_value(vm_value)
     }
