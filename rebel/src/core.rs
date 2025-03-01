@@ -682,33 +682,104 @@ where
         }
     }
 
-    fn next_op(&mut self) -> Result<(Word, Word), CoreError> {
+    fn next_op(&mut self) -> Option<(Word, Word)> {
         loop {
             // Check pending operations
             if let Some([bp, arity]) = self.arity.peek() {
-                if self.stack.len().ok_or(CoreError::InternalError)? == bp + arity {
-                    let [op, word, _, _] = self.arity.pop().ok_or(CoreError::StackUnderflow)?;
-                    return Ok((op, word));
+                if self.stack.len()? == bp + arity {
+                    let [op, word, _, _] = self.arity.pop()?;
+                    return Some((op, word));
                 }
             }
             // Take next value
             if let Some(value) = self.ip.next(self.module) {
-                let value = self.resolve(value)?;
-                let (op, arity) = self.op_arity(value)?;
+                let value = self.resolve(value).ok()?;
+                let (op, arity) = self.op_arity(value).ok()?;
                 if arity == 0 {
                     if op == Op::NONE {
-                        self.stack.push(value).ok_or(CoreError::StackOverflow)?;
+                        self.stack.push(value)?;
                     } else {
-                        return Ok((op, value[1]));
+                        return Some((op, value[1]));
                     }
                 } else {
                     self.push_op(op, value[1], arity);
                 }
             } else {
-                return Ok((Op::NONE, 0));
+                return Some((Op::NONE, 0));
             }
         }
     }
+
+    // fn eval(&mut self) -> Option<MemValue> {
+    //     loop {
+    //         if let Some((op, word)) = self.next_op() {
+    //             self.stack.alloc(value)?;
+    //         } else {
+    //             let stack_len = self.stack.len()?;
+    //             match stack_len - self.base_ptr {
+    //                 2 => {}
+    //                 0 => {
+    //                     self.stack.push([VmValue::TAG_NONE, 0])?;
+    //                 }
+    //                 _ => {
+    //                     let result = self.stack.pop::<2>()?;
+    //                     self.stack.set_len(self.base_ptr)?;
+    //                     self.stack.push(result)?;
+    //                 }
+    //             }
+    //             let [block, ip] = self.blocks.pop()?;
+    //             if block != 0 {
+    //                 self.ip = IP::new(block, ip);
+    //             } else {
+    //                 break;
+    //             }
+    //         }
+
+    //         while let Some([bp, arity]) = self.arity.peek() {
+    //             let sp = self.stack.len()?;
+    //             if sp == bp + arity {
+    //                 let [op, value, _, _] = self.arity.pop()?;
+    //                 match op {
+    //                     Op::SET_WORD => {
+    //                         let result = self.stack.pop()?;
+    //                         self.put_context(value, result)?;
+    //                     }
+    //                     Op::CALL_NATIVE => {
+    //                         let native_fn = self.module.get_func(value)?;
+    //                         (native_fn.func)(self)?;
+    //                     }
+    //                     Op::CALL_FUNC => {
+    //                         let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
+    //                         self.env.push([ctx])?;
+    //                         self.base.push([bp])?;
+    //                         self.arity.push([Op::LEAVE, 0, sp, 2])?;
+    //                         self.call(blk)?;
+    //                         break;
+    //                     }
+    //                     Op::LEAVE => {
+    //                         self.env.pop::<1>()?;
+    //                         let [stack] = self.base.pop::<1>()?;
+    //                         let result = self.stack.pop::<2>()?;
+    //                         self.stack.set_len(stack)?;
+    //                         self.stack.push(result)?;
+    //                         self.base_ptr = stack;
+    //                     }
+    //                     Op::CONTEXT => {
+    //                         let ctx = self.pop_context()?;
+    //                         self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
+    //                     }
+    //                     _ => {
+    //                         return None;
+    //                     }
+    //                 };
+    //             } else {
+    //                 break;
+    //             }
+    //         }
+    //     }
+
+    //     self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
+    // }
 
     fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
         let [tag, word] = value;
@@ -902,7 +973,7 @@ pub fn eval(module: &mut Exec<&mut [Word]>) -> Option<[Word; 2]> {
     module.eval()
 }
 
-pub fn next_op(module: &mut Exec<&mut [Word]>) -> Result<(Word, Word), CoreError> {
+pub fn next_op(module: &mut Exec<&mut [Word]>) -> Option<(Word, Word)> {
     module.next_op()
 }
 
@@ -953,7 +1024,7 @@ mod tests {
 
         // A single call to next_op should process all three values since they are
         // simple values without operations
-        let (op, val) = exec.next_op()?;
+        let (op, val) = exec.next_op().expect("next_op failed");
 
         // Since there are no operations to execute after processing the values,
         // next_op should return Op::NONE
@@ -1006,7 +1077,7 @@ mod tests {
 
         // First call to next_op should encounter the set-word operation 'x:'
         // It will also push the value 1 onto the stack
-        let (op1, val1) = exec.next_op()?;
+        let (op1, val1) = exec.next_op().expect("next_op failed");
 
         // Should return SET_WORD operation with the symbol for 'x'
         assert_eq!(op1, Op::SET_WORD, "First operation should be SET_WORD");
@@ -1024,20 +1095,24 @@ mod tests {
             1 * 2,
             "Stack should have 1 value"
         );
-        
+
         // We get the stack value but we don't need to compare it
         // since we're just testing that do_op works correctly
         let _stack_val1 = exec.stack.get::<2>(0).expect("Failed to get stack value");
-        
+
         // Execute the SET_WORD operation using do_op
         // This should pop the value 1 from the stack and put it in the context with key 'x'
         exec.do_op(op1, val1).expect("do_op failed for SET_WORD");
-        
+
         // Stack should now be empty after do_op consumed the value
-        assert_eq!(exec.stack.len().unwrap(), 0, "Stack should be empty after do_op");
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            0,
+            "Stack should be empty after do_op"
+        );
 
         // Next call should process values 2 and 3
-        let (op2, val2) = exec.next_op()?;
+        let (op2, val2) = exec.next_op().expect("next_op failed");
 
         // Should return NONE since there are no more operations
         assert_eq!(op2, Op::NONE, "Second operation should be NONE");
@@ -1087,7 +1162,7 @@ mod tests {
 
         // First call to next_op should encounter the first set-word 'x:'
         // and push the value 1 onto the stack
-        let (op1, val1) = exec.next_op()?;
+        let (op1, val1) = exec.next_op().expect("next_op failed");
 
         // Should return SET_WORD operation
         assert_eq!(op1, Op::SET_WORD, "First operation should be SET_WORD");
@@ -1108,14 +1183,19 @@ mod tests {
 
         // Execute the first SET_WORD operation using do_op
         // This should set x to 1 in the context
-        exec.do_op(op1, val1).expect("do_op failed for first SET_WORD");
-        
+        exec.do_op(op1, val1)
+            .expect("do_op failed for first SET_WORD");
+
         // Stack should be empty after do_op
-        assert_eq!(exec.stack.len().unwrap(), 0, "Stack should be empty after first do_op");
-        
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            0,
+            "Stack should be empty after first do_op"
+        );
+
         // Second call to next_op should encounter the second set-word 'y:'
         // and push the value 2 onto the stack
-        let (op2, val2) = exec.next_op()?;
+        let (op2, val2) = exec.next_op().expect("next_op failed");
 
         // Should return SET_WORD operation
         assert_eq!(op2, Op::SET_WORD, "Second operation should be SET_WORD");
@@ -1136,14 +1216,19 @@ mod tests {
 
         // Execute the second SET_WORD operation using do_op
         // This should set y to 2 in the context
-        exec.do_op(op2, val2).expect("do_op failed for second SET_WORD");
-        
+        exec.do_op(op2, val2)
+            .expect("do_op failed for second SET_WORD");
+
         // Stack should be empty after do_op
-        assert_eq!(exec.stack.len().unwrap(), 0, "Stack should be empty after second do_op");
-        
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            0,
+            "Stack should be empty after second do_op"
+        );
+
         // Third call to next_op should encounter the third set-word 'z:'
         // and push the value 3 onto the stack
-        let (op3, val3) = exec.next_op()?;
+        let (op3, val3) = exec.next_op().expect("next_op failed");
 
         // Should return SET_WORD operation
         assert_eq!(op3, Op::SET_WORD, "Third operation should be SET_WORD");
@@ -1164,18 +1249,23 @@ mod tests {
 
         // Execute the third SET_WORD operation using do_op
         // This should set z to 3 in the context
-        exec.do_op(op3, val3).expect("do_op failed for third SET_WORD");
-        
+        exec.do_op(op3, val3)
+            .expect("do_op failed for third SET_WORD");
+
         // Stack should be empty after do_op
-        assert_eq!(exec.stack.len().unwrap(), 0, "Stack should be empty after third do_op");
-        
+        assert_eq!(
+            exec.stack.len().unwrap(),
+            0,
+            "Stack should be empty after third do_op"
+        );
+
         // Fourth call should encounter end of block
-        let (op4, val4) = exec.next_op()?;
+        let (op4, val4) = exec.next_op().expect("next_op failed");
 
         // Should return NONE since there are no more instructions
         assert_eq!(op4, Op::NONE, "Fourth operation should be NONE");
         assert_eq!(val4, 0, "Fourth operation value should be 0");
-        
+
         // At this point, we've successfully executed all operations
         // and the context should contain the variables x, y, and z
         // We don't need to verify the exact values since we've already
@@ -2038,7 +2128,7 @@ mod tests {
 
         Ok(())
     }
-    
+
     /// Test the CALL_NATIVE operation with a simple program [add 7 8]
     /// This test verifies that:
     /// 1. The next_op method correctly identifies the CALL_NATIVE operation for the 'add' word
@@ -2069,11 +2159,11 @@ mod tests {
 
         // First call to next_op should process the 'add' word and identify it as a CALL_NATIVE operation
         // It will also push the arguments 7 and 8 onto the stack
-        let (op, value) = exec.next_op()?;
+        let (op, value) = exec.next_op().expect("next_op failed");
 
         // Should return CALL_NATIVE operation
         assert_eq!(op, Op::CALL_NATIVE, "First operation should be CALL_NATIVE");
-        
+
         // The function index depends on the order functions are registered in boot.rs
         // Looking at boot.rs, 'add' is the first registered function (index 0)
         // We could test for the specific value, but that would make the test brittle if
@@ -2086,37 +2176,37 @@ mod tests {
             2 * 2,
             "Stack should have 2 values (4 words total)"
         );
-        
+
         // Check that the values on stack are 7 and 8
         let val1 = exec.stack.get::<2>(0).expect("Failed to get first value");
         let val2 = exec.stack.get::<2>(2).expect("Failed to get second value");
-        
+
         assert_eq!(val1, [VmValue::TAG_INT, 7], "First value should be 7");
         assert_eq!(val2, [VmValue::TAG_INT, 8], "Second value should be 8");
 
         // Execute the CALL_NATIVE operation using do_op
         // This should pop the values 7 and 8 from the stack, add them, and push the result 15
         exec.do_op(op, value).expect("do_op failed for CALL_NATIVE");
-        
+
         // Stack should now have one value (the result)
         assert_eq!(
             exec.stack.len().unwrap(),
             1 * 2,
             "Stack should have 1 value after do_op"
         );
-        
+
         // The result should be 15
         let result = exec.stack.get::<2>(0).expect("Failed to get result");
         assert_eq!(result, [VmValue::TAG_INT, 15], "Result should be 15");
 
         // There should be no more operations
-        let (op2, val2) = exec.next_op()?;
+        let (op2, val2) = exec.next_op().expect("next_op failed");
         assert_eq!(op2, Op::NONE, "There should be no more operations");
         assert_eq!(val2, 0, "No operation value");
 
         Ok(())
     }
-    
+
     /// Test the CALL_NATIVE operation with a nested expression [add 1 add 2 3]
     /// This test verifies that:
     /// 1. The VM can handle nested function calls correctly
@@ -2151,76 +2241,100 @@ mod tests {
         // needs to be executed, and it also pushes all values it encounters onto the stack.
         // In this case, it will process 'add', '1', 'add', '2', '3' before returning the
         // CALL_NATIVE operation for the inner 'add'.
-        let (op1, value1) = exec.next_op()?;
-        
+        let (op1, value1) = exec.next_op().expect("next_op failed");
+
         // The first operation should be CALL_NATIVE for 'add' (the inner one)
-        assert_eq!(op1, Op::CALL_NATIVE, "First operation should be CALL_NATIVE");
+        assert_eq!(
+            op1,
+            Op::CALL_NATIVE,
+            "First operation should be CALL_NATIVE"
+        );
         assert_eq!(value1, 0, "Expected 'add' function to be at index 0");
-        
+
         // At this point, the stack should have all three values (1, 2, 3)
         assert_eq!(
             exec.stack.len().unwrap(),
             3 * 2,
             "Stack should have 3 values"
         );
-        
+
         // Check the values on stack (1, 2, 3)
         let val1 = exec.stack.get::<2>(0).expect("Failed to get first value");
         let val2 = exec.stack.get::<2>(2).expect("Failed to get second value");
         let val3 = exec.stack.get::<2>(4).expect("Failed to get third value");
-        
+
         assert_eq!(val1, [VmValue::TAG_INT, 1], "First value should be 1");
         assert_eq!(val2, [VmValue::TAG_INT, 2], "Second value should be 2");
         assert_eq!(val3, [VmValue::TAG_INT, 3], "Third value should be 3");
-        
+
         // Execute the inner 'add' operation (add 2 3)
         // This should pop 2 and 3, and push their sum (5)
-        exec.do_op(op1, value1).expect("do_op failed for inner CALL_NATIVE");
-        
+        exec.do_op(op1, value1)
+            .expect("do_op failed for inner CALL_NATIVE");
+
         // Now the stack should have 2 values: 1 and 5 (the result of inner add)
         assert_eq!(
             exec.stack.len().unwrap(),
             2 * 2,
             "Stack should have 2 values after inner add"
         );
-        
+
         // Check the values on stack (1, 5)
-        let val1_after = exec.stack.get::<2>(0).expect("Failed to get first value after inner add");
-        let val2_after = exec.stack.get::<2>(2).expect("Failed to get result of inner add");
-        
-        assert_eq!(val1_after, [VmValue::TAG_INT, 1], "First value should still be 1");
-        assert_eq!(val2_after, [VmValue::TAG_INT, 5], "Result of inner add should be 5");
-        
+        let val1_after = exec
+            .stack
+            .get::<2>(0)
+            .expect("Failed to get first value after inner add");
+        let val2_after = exec
+            .stack
+            .get::<2>(2)
+            .expect("Failed to get result of inner add");
+
+        assert_eq!(
+            val1_after,
+            [VmValue::TAG_INT, 1],
+            "First value should still be 1"
+        );
+        assert_eq!(
+            val2_after,
+            [VmValue::TAG_INT, 5],
+            "Result of inner add should be 5"
+        );
+
         // Next call to next_op should identify the CALL_NATIVE operation for the outer 'add'
-        let (op2, value2) = exec.next_op()?;
-        
+        let (op2, value2) = exec.next_op().expect("next_op failed");
+
         // The second operation should also be CALL_NATIVE for 'add' (the outer one)
-        assert_eq!(op2, Op::CALL_NATIVE, "Second operation should be CALL_NATIVE");
+        assert_eq!(
+            op2,
+            Op::CALL_NATIVE,
+            "Second operation should be CALL_NATIVE"
+        );
         assert_eq!(value2, 0, "Expected 'add' function to be at index 0");
-        
+
         // Execute the outer 'add' operation (add 1 5)
         // This should pop 1 and 5, and push their sum (6)
-        exec.do_op(op2, value2).expect("do_op failed for outer CALL_NATIVE");
-        
+        exec.do_op(op2, value2)
+            .expect("do_op failed for outer CALL_NATIVE");
+
         // Now the stack should have 1 value: 6 (the final result)
         assert_eq!(
             exec.stack.len().unwrap(),
             1 * 2,
             "Stack should have 1 value after outer add"
         );
-        
+
         // Check the final result
         let result = exec.stack.get::<2>(0).expect("Failed to get final result");
         assert_eq!(result, [VmValue::TAG_INT, 6], "Final result should be 6");
-        
+
         // There should be no more operations
-        let (op3, val3) = exec.next_op()?;
+        let (op3, val3) = exec.next_op().expect("next_op failed");
         assert_eq!(op3, Op::NONE, "There should be no more operations");
         assert_eq!(val3, 0, "No operation value");
-        
+
         Ok(())
     }
-    
+
     /// Test a complete program with function definition and call
     /// This test verifies that:
     /// 1. The next_op method correctly processes different operation types
@@ -2231,32 +2345,32 @@ mod tests {
         // Initialize a module
         let mut module =
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
-            
+
         // Create a program that defines a function and calls it:
         // [f: func [a b] [add a b] f 10 20]
         let program = rebel!([f: func [a b] [add a b] f 10 20]);
-            
+
         // Allocate the program in VM memory
         let vm_block = module
             .alloc_value(&program)
             .expect("Failed to allocate block");
-            
+
         // Get the VM representation
         let [_, block_addr] = vm_block.vm_repr();
-            
+
         // Create an execution context
         let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
-            
+
         // Call the block to set instruction pointer to it
         exec.call(block_addr).expect("Failed to call block");
-            
+
         // Run the full program by calling eval() instead of testing each operation individually
         // This is easier because the operation order in this program is more complex
         let result = exec.eval().expect("Failed to evaluate program");
-        
+
         // The final result should be 30 (10 + 20)
         assert_eq!(result, [VmValue::TAG_INT, 30], "Final result should be 30");
-        
+
         Ok(())
     }
 }
