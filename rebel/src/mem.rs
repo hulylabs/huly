@@ -219,7 +219,15 @@ where
                     .and_then(|block| block.try_into().ok())
             })
         })
-        // .ok_or(CoreError::StackUnderflow)
+    }
+
+    pub fn peek_all(&mut self, offset: Offset) -> Option<&[Word]> {
+        self.0.split_first().and_then(|(len, data)| {
+            len.checked_sub(offset).and_then(|size| {
+                let addr = offset as usize;
+                data.get(addr..addr + size as usize)
+            })
+        })
     }
 }
 
@@ -239,40 +247,14 @@ where
         self.0.alloc(words).map(|_| ())
     }
 
-    // pub fn replace_or_add_at<const N: usize>(
-    //     &mut self,
-    //     offset: Offset,
-    //     words: [Word; N],
-    // ) -> Result<(), CoreError> {
-    //     self.0
-    //         .split_first_mut()
-    //         .and_then(|(len, data)| {
-    //             len.checked_sub(offset).and_then(|size| {
-    //                 let addr = *len as usize;
-    //                 if size as usize >= N {
-    //                     data.get_mut(addr - N..addr).map(|block| {
-    //                         block
-    //                             .iter_mut()
-    //                             .zip(words.iter())
-    //                             .for_each(|(slot, value)| {
-    //                                 *slot = *value;
-    //                             });
-    //                     })
-    //                 } else {
-    //                     data.get_mut(addr..addr + N).map(|block| {
-    //                         block
-    //                             .iter_mut()
-    //                             .zip(words.iter())
-    //                             .for_each(|(slot, value)| {
-    //                                 *slot = *value;
-    //                             });
-    //                         *len += N as u32;
-    //                     })
-    //                 }
-    //             })
-    //         })
-    //         .ok_or(CoreError::OutOfMemory)
-    // }
+    pub fn peek_mut<const N: usize>(&mut self) -> Option<&mut [Word]> {
+        self.0.split_first_mut().and_then(|(len, data)| {
+            len.checked_sub(N as u32).and_then(|offset| {
+                let addr = offset as usize;
+                data.get_mut(addr..addr + N)
+            })
+        })
+    }
 
     pub fn pop<const N: usize>(&mut self) -> Option<[u32; N]> {
         self.0.split_first_mut().and_then(|(len, data)| {
@@ -413,30 +395,30 @@ where
 pub struct Context<T>(Memory<T>);
 
 /// An iterator over the entries in a Context, yielding (Symbol, [Word; 2]) pairs.
-/// 
+///
 /// This provides efficient iteration over all entries in a Context without having
 /// to manually check for empty slots or handle hash table collisions. It transparently
 /// skips empty slots and handles the underlying hash table structure.
-/// 
+///
 /// # Examples
-/// 
+///
 /// ```
 /// use rebel::mem::{Context, Word};
-/// 
+///
 /// // Initialize a context
 /// let mut buffer = vec![0u32; 100];
 /// let mut context = Context::new(buffer.as_mut_slice());
 /// context.init().unwrap();
-/// 
+///
 /// // Add some key-value pairs
 /// context.put(1, [10, 20]).unwrap();
 /// context.put(2, [30, 40]).unwrap();
-/// 
+///
 /// // Iterate using iter() method
 /// for (symbol, value) in context.iter() {
 ///     println!("Symbol: {}, Value: {:?}", symbol, value);
 /// }
-/// 
+///
 /// // Or use into_iter directly for a more concise syntax
 /// for (symbol, value) in &context {
 ///     // Process each key-value pair
@@ -452,7 +434,7 @@ pub struct ContextIterator<'a, T: 'a> {
     total_entries: usize,
 }
 
-impl<T> Iterator for ContextIterator<'_, T> 
+impl<T> Iterator for ContextIterator<'_, T>
 where
     T: AsRef<[Word]>,
 {
@@ -468,7 +450,7 @@ where
         while self.current_index < self.capacity {
             let index = self.current_index;
             self.current_index += 1; // Advance the index for next iteration
-            
+
             if let Some(entry) = self.context.get_entry_at(index) {
                 self.count_found += 1; // Increment count of found entries
                 return Some(entry);
@@ -477,7 +459,7 @@ where
 
         None // No more entries found
     }
-    
+
     fn size_hint(&self) -> (usize, Option<usize>) {
         let remaining = self.total_entries.saturating_sub(self.count_found);
         (remaining, Some(remaining))
@@ -547,7 +529,7 @@ where
     /// // Collect all entries into a Vec
     /// let entries: Vec<_> = context.iter().collect();
     /// assert_eq!(entries.len(), 2);
-    /// 
+    ///
     /// // Find an entry with a specific symbol ID
     /// let entry = context.iter().find(|(symbol, _)| *symbol == 1);
     /// assert!(entry.is_some());
@@ -555,12 +537,14 @@ where
     ///
     /// See [`ContextIterator`] for more examples and details.
     pub fn iter(&self) -> ContextIterator<'_, T> {
-        let capacity = self.0.split_first()
+        let capacity = self
+            .0
+            .split_first()
             .map(|(_, data)| data.len() / Self::ENTRY_SIZE)
             .unwrap_or(0);
-            
+
         let total_entries = self.entry_count().unwrap_or(0);
-        
+
         ContextIterator {
             context: self,
             capacity,
@@ -603,7 +587,7 @@ where
 
         Err(CoreError::WordNotFound)
     }
-    
+
     /// Retrieves an entry at the given index if it contains a valid symbol.
     ///
     /// This is an internal method used by the ContextIterator to efficiently
@@ -624,12 +608,12 @@ where
     /// 3. The second word of the value
     fn get_entry_at(&self, index: usize) -> Option<(Symbol, [Word; 2])> {
         let (_, data) = self.0.split_first()?;
-        
+
         let capacity = data.len() / Self::ENTRY_SIZE;
         if index >= capacity {
             return None;
         }
-        
+
         let offset = index * Self::ENTRY_SIZE;
         data.get(offset..offset + Self::ENTRY_SIZE)
             .and_then(|entry| {
@@ -652,7 +636,7 @@ where
     T: AsMut<[Word]>,
 {
     /// Initialize an empty context.
-    /// 
+    ///
     /// This sets up an empty context ready for use.
     pub fn init(&mut self) -> Option<()> {
         self.0.init(0)
@@ -823,60 +807,72 @@ mod tests {
     fn test_context_iterator() {
         // Create a buffer for the context
         let mut buffer = vec![0u32; 100];
-        
+
         // Initialize context with some entries
         let mut context = Context::new(buffer.as_mut_slice());
         context.init().expect("Failed to initialize context");
-        
+
         // Insert some key-value pairs
         let symbol1 = 1;
         let value1 = [10, 20];
-        context.put(symbol1, value1).expect("Failed to insert first entry");
-        
+        context
+            .put(symbol1, value1)
+            .expect("Failed to insert first entry");
+
         let symbol2 = 2;
         let value2 = [30, 40];
-        context.put(symbol2, value2).expect("Failed to insert second entry");
-        
+        context
+            .put(symbol2, value2)
+            .expect("Failed to insert second entry");
+
         let symbol3 = 3;
         let value3 = [50, 60];
-        context.put(symbol3, value3).expect("Failed to insert third entry");
-        
+        context
+            .put(symbol3, value3)
+            .expect("Failed to insert third entry");
+
         // Create a hashmap to track what we've found
         let mut expected = HashMap::new();
         expected.insert(symbol1, value1);
         expected.insert(symbol2, value2);
         expected.insert(symbol3, value3);
-        
+
         // Use the iterator to collect all entries
         let entries: Vec<_> = context.iter().collect();
-        
+
         // Verify we found the correct number of entries
         assert_eq!(entries.len(), 3, "Iterator should return exactly 3 entries");
-        
+
         // Verify all entries match what we inserted
         for (symbol, value) in entries {
-            assert!(expected.contains_key(&symbol), "Found unexpected symbol: {}", symbol);
+            assert!(
+                expected.contains_key(&symbol),
+                "Found unexpected symbol: {}",
+                symbol
+            );
             assert_eq!(
-                expected[&symbol], 
-                value, 
-                "Value for symbol {} doesn't match expected", 
+                expected[&symbol], value,
+                "Value for symbol {} doesn't match expected",
                 symbol
             );
         }
-        
+
         // Test the IntoIterator implementation with a for loop
         let mut found_count = 0;
         for (symbol, value) in &context {
             found_count += 1;
-            assert!(expected.contains_key(&symbol), "Found unexpected symbol: {}", symbol);
+            assert!(
+                expected.contains_key(&symbol),
+                "Found unexpected symbol: {}",
+                symbol
+            );
             assert_eq!(
-                expected[&symbol], 
-                value, 
-                "Value for symbol {} doesn't match expected", 
+                expected[&symbol], value,
+                "Value for symbol {} doesn't match expected",
                 symbol
             );
         }
-        
+
         assert_eq!(found_count, 3, "For loop should visit exactly 3 entries");
     }
 

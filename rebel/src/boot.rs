@@ -34,7 +34,7 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     match module.pop()? {
-        [VmValue::TAG_BLOCK, block] => module.call(block),
+        [VmValue::TAG_BLOCK, block] => module.jmp(block),
         _ => None,
     }
 }
@@ -47,7 +47,7 @@ where
         [VmValue::TAG_BLOCK, block] => {
             module.new_context(64)?;
             module.push_op(Op::CONTEXT, 0, 2)?;
-            module.call(block)
+            module.jmp(block)
         }
         _ => None,
     }
@@ -86,10 +86,21 @@ where
     match module.pop()? {
         [VmValue::TAG_BOOL, cond, VmValue::TAG_BLOCK, if_true, VmValue::TAG_BLOCK, if_false] => {
             let block = if cond != 0 { if_true } else { if_false };
-            module.call(block)
+            module.jmp(block)
         }
         _ => None,
     }
+}
+
+fn print<T>(module: &mut Exec<T>) -> Option<()>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    let [tag, data] = module.pop()?;
+    let vm_value = VmValue::from_tag_data(tag, data)?;
+    let value = module.to_value(vm_value)?;
+    println!("[print]: {:?}", value);
+    Some(())
 }
 
 pub fn core_package<T>(module: &mut Module<T>) -> Option<()>
@@ -102,6 +113,7 @@ where
     module.add_native_fn("context", context, 1)?;
     module.add_native_fn("func", func, 2)?;
     module.add_native_fn("either", either, 3)?;
+    module.add_native_fn("print", print, 1)?;
     Some(())
 }
 

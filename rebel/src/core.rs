@@ -185,9 +185,9 @@ where
         words.put(id, [VmValue::TAG_NATIVE_FN, index])
     }
 
-    pub fn eval(&mut self, block: Offset) -> Option<[Word; 2]> {
-        let mut exec = Exec::new(self)?;
-        exec.call(block)?;
+    pub fn eval(&mut self, block: Offset) -> Option<MemValue> {
+        let mut exec = Exec::new(self, block)?;
+        // exec.jmp(block)?;
         exec.eval()
     }
 }
@@ -474,8 +474,9 @@ impl Op {
     const SET_WORD: u32 = 1;
     const CALL_NATIVE: u32 = 2;
     const CALL_FUNC: u32 = 3;
-    const LEAVE: u32 = 4;
-    pub const CONTEXT: u32 = 5;
+    const LEAVE_BLOCK: u32 = 4;
+    const LEAVE_FUNC: u32 = 5;
+    pub const CONTEXT: u32 = 6;
 }
 
 #[derive(Debug)]
@@ -500,28 +501,29 @@ impl IP {
 }
 
 pub struct Exec<'a, T> {
-    ip: IP,
-    base_ptr: Offset,
+    block: Offset,
+    ip: Offset,
+
     module: &'a mut Module<T>,
     stack: Stack<[Offset; 1024]>,
     arity: Stack<[Offset; 256]>,
     base: Stack<[Offset; 256]>,
     env: Stack<[Offset; 256]>,
-    blocks: Stack<[Offset; 256]>,
+    // blocks: Stack<[Offset; 256]>,
 }
 
 impl<'a, T> Exec<'a, T> {
-    fn new(module: &'a mut Module<T>) -> Option<Self> {
+    fn new(module: &'a mut Module<T>, block: Offset) -> Option<Self> {
         let mut env = Stack::new([0; 256]);
         env.push([module.system_words])?;
         Some(Self {
-            ip: IP::new(0, 0),
-            base_ptr: 0,
+            block,
+            ip: 0,
             module,
             stack: Stack::new([0; 1024]),
             arity: Stack::new([0; 256]),
             base: Stack::new([0; 256]),
-            blocks: Stack::new([0; 256]),
+            // blocks: Stack::new([0; 256]),
             env,
         })
     }
@@ -555,6 +557,10 @@ where
         }
     }
 
+    pub fn to_value(&self, vm_value: VmValue) -> Option<Value> {
+        self.module.to_value(vm_value)
+    }
+
     // fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
     //     let envs = self.envs.peek_all(0)?;
 
@@ -576,6 +582,14 @@ where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
     pub fn pop<const N: usize>(&mut self) -> Option<[Word; N]> {
+        // let [bp, _, _] = self.blocks.peek()?;
+        // let sp = self.stack.len()?;
+        // if sp - N as u32 >= bp {
+        //     self.stack.pop()
+        // } else {
+        //     panic!("STACK UNDERFLOW: sp={}, bp={}, N={}", sp, bp, N);
+        //     None
+        // }
         self.stack.pop()
     }
 
@@ -583,11 +597,16 @@ where
         self.stack.push(value)
     }
 
-    pub fn call(&mut self, block: Offset) -> Option<()> {
-        self.base_ptr = self.stack.len()?;
-        let ret = [self.ip.block, self.ip.ip];
-        self.ip = IP::new(block, 0);
-        self.blocks.push(ret)
+    pub fn jmp(&mut self, block: Offset) -> Option<()> {
+        self.arity.push([
+            Op::LEAVE_BLOCK,
+            self.block,
+            self.stack.len()?,
+            1000 + self.ip,
+        ])?;
+        self.block = block;
+        self.ip = 0;
+        Some(())
     }
 
     pub fn push_op(&mut self, op: Word, word: Word, arity: Word) -> Option<()> {
@@ -621,7 +640,10 @@ where
                 .find_word(value[1])
                 .and_then(|result| {
                     if result[0] == VmValue::TAG_STACK_VALUE {
-                        self.stack.get(self.base_ptr + result[1])
+                        self.base
+                            .peek::<1>()
+                            .and_then(|[base]| self.stack.get(base + result[1] * 2))
+                        // self.stack.get(base + result[1] * 2)
                     } else {
                         Some(result)
                     }
@@ -658,26 +680,34 @@ where
                 let native_fn = self.module.get_func(word)?;
                 (native_fn.func)(self)
             }
-            Op::CALL_FUNC => self.module.get_array(word).and_then(|[_arity, ctx, blk]| {
+            Op::CALL_FUNC => self.module.get_array(word).and_then(|[arity, ctx, blk]| {
                 self.env.push([ctx])?;
-                self.base.push([self.base_ptr])?;
-                self.arity.push([Op::LEAVE, 0, self.stack.len()?, 2])?;
-                self.call(blk)
-            }),
-            Op::LEAVE => {
-                self.env.pop::<1>()?;
-                let [stack] = self.base.pop::<1>()?;
-                let result = self.stack.pop::<2>()?;
-                self.stack.set_len(stack)?;
-                self.stack.push(result)?;
-                self.base_ptr = stack;
+                let sp = self.stack.len()?;
+                let bp = sp.checked_sub(arity * 2)?;
+                self.base.push([bp])?;
+
+                self.arity
+                    .push([Op::LEAVE_FUNC, self.block, bp, 1000 + self.ip])?;
+                self.block = blk;
+                self.ip = 0;
+
+                println!("BLOCK CALL FUNC: bp={:?}", bp);
                 Some(())
-            }
+            }),
+            // Op::LEAVE => {
+            //     self.env.pop::<1>()?;
+            //     let [stack] = self.base.pop::<1>()?;
+            //     let result = self.stack.pop::<2>()?;
+            //     self.stack.set_len(stack)?;
+            //     self.stack.push(result)?;
+            //     self.base_ptr = stack;
+            //     Some(())
+            // }
             Op::CONTEXT => {
                 let ctx = self.pop_context()?;
                 self.stack.push([VmValue::TAG_CONTEXT, ctx])
             }
-            _ => None,
+            _ => panic!(" *** ERROR: unexpected do_op operation: {}", op),
         }
     }
 
@@ -690,8 +720,9 @@ where
                     return Some((op, word));
                 }
             }
-            // Take next value
-            if let Some(value) = self.ip.next(self.module) {
+
+            if let Some(value) = self.get_block(self.block, self.ip) {
+                self.ip += 2;
                 let value = self.resolve(value).ok()?;
                 let (op, arity) = self.op_arity(value).ok()?;
                 if arity == 0 {
@@ -704,145 +735,173 @@ where
                     self.push_op(op, value[1], arity);
                 }
             } else {
-                // end of block, let's return single value
-                let stack_len = self.stack.len()?;
-                match stack_len - self.base_ptr {
-                    2 => {}
-                    0 => {
+                // end of block, let's return single value and set up base
+                let [op, block, bp, ip] = self.arity.pop()?;
+
+                if op != Op::LEAVE_FUNC && op != Op::LEAVE_BLOCK {
+                    panic!(" *** ERROR: Expecing leave on block end");
+                }
+
+                let sp = self.stack.len()?;
+                println!("END BLOCK: (bp={}, sp={})", bp, sp);
+
+                let cut = if op == Op::LEAVE_FUNC {
+                    let [base] = self.base.pop()?;
+                    println!(" *** LEAVE_FUNC: base = {:?} bp={}", base, bp);
+                    base
+                } else {
+                    let [base] = self.base.peek()?;
+                    println!(" *** NORMAL BLOCK: base={:?} bp={:?}", base, bp);
+                    bp
+                };
+
+                println!("CUT: {:?}", cut);
+
+                match sp.checked_sub(cut) {
+                    Some(2) => {
+                        println!("EXACTLY one value on stack");
+                    }
+                    Some(0) => {
                         self.stack.push([VmValue::TAG_NONE, 0])?;
                     }
-                    _ => {
+                    Some(_) => {
+                        println!("MORE than one value on stack");
                         let result = self.stack.pop::<2>()?;
-                        self.stack.set_len(self.base_ptr)?;
+                        println!("RESULT: {:?}", result);
+                        self.stack.set_len(cut)?;
                         self.stack.push(result)?;
                     }
-                }
-                let [block, ip] = self.blocks.pop()?;
-                if block != 0 {
-                    self.ip = IP::new(block, ip);
-                } else {
-                    return None;
-                }
+                    None => {
+                        panic!("ERROR: stack underflow");
+                    }
+                };
+
+                self.block = block;
+                self.ip = ip - 1000;
             }
         }
     }
 
-    fn eval2(&mut self) -> Option<MemValue> {
+    fn eval(&mut self) -> Option<MemValue> {
         while let Some((op, word)) = self.next_op() {
+            println!("EVAL:  op: {:?}, word: {:?}", op, word);
+            println!("STACK BEFORE: {:?}", self.stack.peek_all(0)?);
             self.do_op(op, word)?;
+            println!("STACK AFTER: {:?}", self.stack.peek_all(0)?);
         }
+        println!("END");
         self.stack.pop()
     }
 
-    fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
-        let [tag, word] = value;
-        if tag == VmValue::TAG_WORD {
-            let resolved = self.find_word(word);
-            match resolved {
-                Some([VmValue::TAG_STACK_VALUE, index]) => self
-                    .base
-                    .peek()
-                    .and_then(|[bp]| self.stack.get(bp + index * 2)),
-                _ => resolved,
-            }
-        } else {
-            Some(value)
-        }
-    }
+    // fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
+    //     let [tag, word] = value;
+    //     if tag == VmValue::TAG_WORD {
+    //         let resolved = self.find_word(word);
+    //         match resolved {
+    //             Some([VmValue::TAG_STACK_VALUE, index]) => self
+    //                 .base
+    //                 .peek()
+    //                 .and_then(|[bp]| self.stack.get(bp + index * 2)),
+    //             _ => resolved,
+    //         }
+    //     } else {
+    //         Some(value)
+    //     }
+    // }
 
-    fn next_value(&mut self) -> Option<[Word; 2]> {
-        while let Some(cmd) = self.ip.next(self.module) {
-            let value = self.get_value(cmd)?;
+    // fn next_value(&mut self) -> Option<[Word; 2]> {
+    //     while let Some(cmd) = self.ip.next(self.module) {
+    //         let value = self.get_value(cmd)?;
 
-            if let Some((op, arity)) = match value[0] {
-                VmValue::TAG_NATIVE_FN => {
-                    Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
-                }
-                VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-                VmValue::TAG_FUNC => {
-                    Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
-                }
-                _ => None,
-            } {
-                let sp = self.stack.len()?;
-                self.arity.push([op, value[1], sp, arity * 2])?;
-            } else {
-                return Some(value);
-            }
-        }
-        None
-    }
+    //         if let Some((op, arity)) = match value[0] {
+    //             VmValue::TAG_NATIVE_FN => {
+    //                 Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
+    //             }
+    //             VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
+    //             VmValue::TAG_FUNC => {
+    //                 Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
+    //             }
+    //             _ => None,
+    //         } {
+    //             let sp = self.stack.len()?;
+    //             self.arity.push([op, value[1], sp, arity * 2])?;
+    //         } else {
+    //             return Some(value);
+    //         }
+    //     }
+    //     None
+    // }
 
-    fn eval(&mut self) -> Option<[Word; 2]> {
-        loop {
-            if let Some(value) = self.next_value() {
-                self.stack.alloc(value)?;
-            } else {
-                let stack_len = self.stack.len()?;
-                match stack_len - self.base_ptr {
-                    2 => {}
-                    0 => {
-                        self.stack.push([VmValue::TAG_NONE, 0])?;
-                    }
-                    _ => {
-                        let result = self.stack.pop::<2>()?;
-                        self.stack.set_len(self.base_ptr)?;
-                        self.stack.push(result)?;
-                    }
-                }
-                let [block, ip] = self.blocks.pop()?;
-                if block != 0 {
-                    self.ip = IP::new(block, ip);
-                } else {
-                    break;
-                }
-            }
+    // fn eval(&mut self) -> Option<[Word; 2]> {
+    //     loop {
+    //         if let Some(value) = self.next_value() {
+    //             self.stack.alloc(value)?;
+    //         } else {
+    //             let stack_len = self.stack.len()?;
+    //             match stack_len - self.base_ptr {
+    //                 2 => {}
+    //                 0 => {
+    //                     self.stack.push([VmValue::TAG_NONE, 0])?;
+    //                 }
+    //                 _ => {
+    //                     let result = self.stack.pop::<2>()?;
+    //                     self.stack.set_len(self.base_ptr)?;
+    //                     self.stack.push(result)?;
+    //                 }
+    //             }
+    //             let [block, ip] = self.blocks.pop()?;
+    //             if block != 0 {
+    //                 self.ip = IP::new(block, ip);
+    //             } else {
+    //                 break;
+    //             }
+    //         }
 
-            while let Some([bp, arity]) = self.arity.peek() {
-                let sp = self.stack.len()?;
-                if sp == bp + arity {
-                    let [op, value, _, _] = self.arity.pop()?;
-                    match op {
-                        Op::SET_WORD => {
-                            let result = self.stack.pop()?;
-                            self.put_context(value, result)?;
-                        }
-                        Op::CALL_NATIVE => {
-                            let native_fn = self.module.get_func(value)?;
-                            (native_fn.func)(self)?;
-                        }
-                        Op::CALL_FUNC => {
-                            let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
-                            self.env.push([ctx])?;
-                            self.base.push([bp])?;
-                            self.arity.push([Op::LEAVE, 0, sp, 2])?;
-                            self.call(blk)?;
-                            break;
-                        }
-                        Op::LEAVE => {
-                            self.env.pop::<1>()?;
-                            let [stack] = self.base.pop::<1>()?;
-                            let result = self.stack.pop::<2>()?;
-                            self.stack.set_len(stack)?;
-                            self.stack.push(result)?;
-                            self.base_ptr = stack;
-                        }
-                        Op::CONTEXT => {
-                            let ctx = self.pop_context()?;
-                            self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
-                        }
-                        _ => {
-                            return None;
-                        }
-                    };
-                } else {
-                    break;
-                }
-            }
-        }
+    //         while let Some([bp, arity]) = self.arity.peek() {
+    //             let sp = self.stack.len()?;
+    //             if sp == bp + arity {
+    //                 let [op, value, _, _] = self.arity.pop()?;
+    //                 match op {
+    //                     Op::SET_WORD => {
+    //                         let result = self.stack.pop()?;
+    //                         self.put_context(value, result)?;
+    //                     }
+    //                     Op::CALL_NATIVE => {
+    //                         let native_fn = self.module.get_func(value)?;
+    //                         (native_fn.func)(self)?;
+    //                     }
+    //                     Op::CALL_FUNC => {
+    //                         let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
+    //                         self.env.push([ctx])?;
+    //                         self.base.push([bp])?;
+    //                         self.arity.push([Op::LEAVE, 0, sp, 2])?;
+    //                         self.call(blk)?;
+    //                         break;
+    //                     }
+    //                     Op::LEAVE => {
+    //                         self.env.pop::<1>()?;
+    //                         let [stack] = self.base.pop::<1>()?;
+    //                         let result = self.stack.pop::<2>()?;
+    //                         self.stack.set_len(stack)?;
+    //                         self.stack.push(result)?;
+    //                         self.base_ptr = stack;
+    //                     }
+    //                     Op::CONTEXT => {
+    //                         let ctx = self.pop_context()?;
+    //                         self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
+    //                     }
+    //                     _ => {
+    //                         return None;
+    //                     }
+    //                 };
+    //             } else {
+    //                 break;
+    //             }
+    //         }
+    //     }
 
-        self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
-    }
+    //     self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
+    // }
 }
 
 // P A R S E  C O L L E C T O R
@@ -969,10 +1028,8 @@ mod tests {
         let [_, block_addr] = vm_block.vm_repr();
 
         // Create an execution context
-        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
-
-        // Call the block to set instruction pointer to it
-        exec.call(block_addr).expect("Failed to call block");
+        let mut exec =
+            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
 
         // A single call to next_op should process all values and return None
         // as there are no operations to execute and we've reached the end of the block
@@ -1019,10 +1076,8 @@ mod tests {
         let [_, block_addr] = vm_block.vm_repr();
 
         // Create an execution context
-        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
-
-        // Call the block to set instruction pointer to it
-        exec.call(block_addr).expect("Failed to call block");
+        let mut exec =
+            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
 
         // First call to next_op should encounter the set-word operation 'x:'
         // It will also push the value 1 onto the stack
@@ -1120,10 +1175,8 @@ mod tests {
         let [_, block_addr] = vm_block.vm_repr();
 
         // Create an execution context
-        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
-
-        // Call the block to set instruction pointer to it
-        exec.call(block_addr).expect("Failed to call block");
+        let mut exec =
+            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
 
         // First call to next_op should encounter the first set-word 'x:'
         // and push the value 1 onto the stack
@@ -1880,6 +1933,14 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn test_func_sum() -> Result<(), CoreError> {
+        let input = "sum: func [n] [either lt n 2 [n] [add 1 sum add n -1]] sum 10";
+        let result = eval(input)?;
+        assert_eq!([VmValue::TAG_INT, 10], result);
+        Ok(())
+    }
+
     // #[test]
     // fn test_func_returns_context() -> Result<(), CoreError> {
     //     // Define a simple function that creates and returns a context
@@ -2134,10 +2195,8 @@ mod tests {
         let [_, block_addr] = vm_block.vm_repr();
 
         // Create an execution context
-        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
-
-        // Call the block to set instruction pointer to it
-        exec.call(block_addr).expect("Failed to call block");
+        let mut exec =
+            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
 
         // First call to next_op should process the 'add' word and identify it as a CALL_NATIVE operation
         // It will also push the arguments 7 and 8 onto the stack
@@ -2217,10 +2276,8 @@ mod tests {
         let [_, block_addr] = vm_block.vm_repr();
 
         // Create an execution context
-        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
-
-        // Call the block to set instruction pointer to it
-        exec.call(block_addr).expect("Failed to call block");
+        let mut exec =
+            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
 
         // The first call to next_op will process all values and operations in the program.
         // This is because next_op keeps processing values until it finds an operation that
@@ -2357,10 +2414,8 @@ mod tests {
         let [_, block_addr] = vm_block.vm_repr();
 
         // Create an execution context
-        let mut exec = Exec::new(&mut module).expect("Failed to create execution context");
-
-        // Call the block to set instruction pointer to it
-        exec.call(block_addr).expect("Failed to call block");
+        let mut exec =
+            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
 
         // Run the full program by calling eval() instead of testing each operation individually
         // This is easier because the operation order in this program is more complex
@@ -2368,6 +2423,123 @@ mod tests {
 
         // The final result should be 30 (10 + 20)
         assert_eq!(result, [VmValue::TAG_INT, 30], "Final result should be 30");
+
+        Ok(())
+    }
+
+    /// Test the CALL_FUNC operation by verifying that a function call produces the expected result
+    /// This test focuses specifically on:
+    /// 1. Creating a function that performs a specific operation (doubles its input)
+    /// 2. Calling that function with a known argument
+    /// 3. Verifying that the CALL_FUNC operation executes properly and returns the correct result
+    #[test]
+    fn test_call_func_execution() -> Result<(), CoreError> {
+        // Initialize a module
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
+
+        // Create a simple test program that:
+        // 1. Defines a function 'double' that doubles its input
+        // 2. Calls the function with argument 21
+        // Expected result: 42
+        let program = rebel!([
+            double: func [x] [add x x]  // Define a function that doubles its input
+            double 21                   // Call the function with argument 21
+        ]);
+
+        // Allocate the program in VM memory
+        let vm_block = module
+            .alloc_value(&program)
+            .expect("Failed to allocate block");
+
+        // Get the VM representation
+        let [_, block_addr] = vm_block.vm_repr();
+
+        // Execute the program
+        let result = module.eval(block_addr).expect("Failed to evaluate program");
+
+        // The result should be 42 (21 doubled)
+        assert_eq!(
+            result,
+            [VmValue::TAG_INT, 42],
+            "Function should return 42 (21 doubled)"
+        );
+
+        Ok(())
+    }
+
+    /// Test verifying that the CALL_FUNC operation handling in next_op works correctly
+    /// This test focuses specifically on:
+    /// 1. Verifying that the next_op method properly identifies CALL_FUNC operations
+    /// 2. Making sure the do_op method for CALL_FUNC correctly handles function calls
+    /// 3. Testing that function arguments and results are processed correctly
+    #[test]
+    fn test_next_op_call_func() -> Result<(), CoreError> {
+        // Initialize a module
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
+
+        // Define our test function and enter it in the system context
+        let func_program = rebel!([double: func [x] [add x x]]);
+        let vm_func = module
+            .alloc_value(&func_program)
+            .expect("Failed to allocate block");
+        let [_, func_block_addr] = vm_func.vm_repr();
+        module
+            .eval(func_block_addr)
+            .expect("Failed to define function");
+
+        // Verify the direct execution approach works correctly
+        let test_call = rebel!([double 21]);
+        let vm_call = module
+            .alloc_value(&test_call)
+            .expect("Failed to allocate block");
+        let [_, call_block_addr] = vm_call.vm_repr();
+        let direct_result = module
+            .eval(call_block_addr)
+            .expect("Failed to evaluate function call");
+        println!("Direct call result: {:?}", direct_result);
+        assert_eq!(
+            direct_result,
+            [VmValue::TAG_INT, 42],
+            "Direct call should return 42"
+        );
+
+        // Now verify that the CALL_FUNC operation is properly identified in next_op
+        // We'll create a separate execution context for this test
+        let mut exec =
+            Exec::new(&mut module, call_block_addr).expect("Failed to create execution context");
+
+        // Get the first operation
+        let op_result = exec.next_op();
+        assert!(op_result.is_some(), "next_op should return an operation");
+        let (op, func_addr) = op_result.unwrap();
+        println!("Operation type: {}, func_addr: {}", op, func_addr);
+
+        // Verify it's a CALL_FUNC operation
+        assert_eq!(op, Op::CALL_FUNC, "Operation should be CALL_FUNC");
+
+        // We've confirmed that next_op correctly identifies CALL_FUNC operations
+        // Rather than trying to step through the function execution manually,
+        // we'll use the Module.eval method to verify the full execution
+
+        // Create another program with a slightly different function call to avoid caching
+        let test_call2 = rebel!([double 42]);
+        let vm_call2 = module
+            .alloc_value(&test_call2)
+            .expect("Failed to allocate block");
+        let [_, call_block_addr2] = vm_call2.vm_repr();
+
+        // Execute and verify the result
+        let result = module
+            .eval(call_block_addr2)
+            .expect("Failed to evaluate function call");
+        println!("Second function call result: {:?}", result);
+        assert_eq!(
+            result,
+            [VmValue::TAG_INT, 84],
+            "Second call should return 84"
+        );
 
         Ok(())
     }
