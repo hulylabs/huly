@@ -705,14 +705,36 @@ where
                     self.push_op(op, value[1], arity);
                 }
             } else {
-                return Some((Op::NONE, 0));
+                // end of block, let's return single value
+                let stack_len = self.stack.len()?;
+                match stack_len - self.base_ptr {
+                    2 => {}
+                    0 => {
+                        self.stack.push([VmValue::TAG_NONE, 0])?;
+                    }
+                    _ => {
+                        let result = self.stack.pop::<2>()?;
+                        self.stack.set_len(self.base_ptr)?;
+                        self.stack.push(result)?;
+                    }
+                }
+                let [block, ip] = self.blocks.pop()?;
+                if block != 0 {
+                    self.ip = IP::new(block, ip);
+                } else {
+                    return Some((Op::NONE, 0));
+                }
             }
         }
     }
 
-    // fn eval(&mut self) -> Option<MemValue> {
+    // fn eval2(&mut self) -> Option<MemValue> {
     //     loop {
     //         if let Some((op, word)) = self.next_op() {
+    //             if op != Op::NONE {
+    //                 self.do_op(op, word)?;
+    //             }
+
     //             self.stack.alloc(value)?;
     //         } else {
     //             let stack_len = self.stack.len()?;
@@ -993,12 +1015,11 @@ mod tests {
     }
 
     /// Test the next_op method with a simple program [1 2 3]
-    /// This verifies the basic execution of next_op by checking if values
-    /// are pushed onto the stack correctly.
+    /// This verifies that next_op correctly returns a single value at the end of a block.
     ///
-    /// The next_op method continues processing until it finds an operation
-    /// that needs to be executed (or runs out of instructions). For a simple
-    /// block like [1 2 3], it should process all three values in a single call.
+    /// With the improved next_op implementation, it processes all values in the block
+    /// and returns a single value (the last value or a result), ensuring blocks always
+    /// evaluate to a single value.
     #[test]
     fn test_next_op() -> Result<(), CoreError> {
         // Initialize a module
@@ -1022,8 +1043,7 @@ mod tests {
         // Call the block to set instruction pointer to it
         exec.call(block_addr).expect("Failed to call block");
 
-        // A single call to next_op should process all three values since they are
-        // simple values without operations
+        // A single call to next_op should process all values and return a single result
         let (op, val) = exec.next_op().expect("next_op failed");
 
         // Since there are no operations to execute after processing the values,
@@ -1031,21 +1051,17 @@ mod tests {
         assert_eq!(op, Op::NONE, "Operation should be NONE");
         assert_eq!(val, 0, "Operation value should be 0");
 
-        // Check the stack now has all three values
+        // Check the stack now has exactly one value (the last value from the block)
+        // Due to the improved next_op that ensures blocks always return a single value
         assert_eq!(
             exec.stack.len().unwrap(),
-            3 * 2,
-            "Stack should have 3 values (6 words total)"
+            1 * 2,
+            "Stack should have 1 value (2 words total)"
         );
 
-        // Check the values on stack (need to pop in reverse order)
-        let val3 = exec.pop::<2>().expect("Failed to pop third value");
-        let val2 = exec.pop::<2>().expect("Failed to pop second value");
-        let val1 = exec.pop::<2>().expect("Failed to pop first value");
-
-        assert_eq!(val1, [VmValue::TAG_INT, 1], "First value should be 1");
-        assert_eq!(val2, [VmValue::TAG_INT, 2], "Second value should be 2");
-        assert_eq!(val3, [VmValue::TAG_INT, 3], "Third value should be 3");
+        // Check the value on stack is the last value from our block (3)
+        let result = exec.pop::<2>().expect("Failed to pop result value");
+        assert_eq!(result, [VmValue::TAG_INT, 3], "Result value should be 3");
 
         Ok(())
     }
@@ -1111,26 +1127,26 @@ mod tests {
             "Stack should be empty after do_op"
         );
 
-        // Next call should process values 2 and 3
+        // Next call should process the rest of the block (values 2 and 3)
+        // With the improved next_op, it will process to the end of the block
+        // and leave only the last value (3) on the stack
         let (op2, val2) = exec.next_op().expect("next_op failed");
 
         // Should return NONE since there are no more operations
         assert_eq!(op2, Op::NONE, "Second operation should be NONE");
         assert_eq!(val2, 0, "Second operation value should be 0");
 
-        // Stack should now have two values (2, 3)
+        // Stack should now have one value (the last value from the block, which is 3)
+        // Due to the improved next_op that ensures blocks always return a single value
         assert_eq!(
             exec.stack.len().unwrap(),
-            2 * 2,
-            "Stack should have 2 values"
+            1 * 2,
+            "Stack should have 1 value"
         );
 
-        // Check the values on stack (need to pop in reverse order)
-        let val3 = exec.pop::<2>().expect("Failed to pop second value");
-        let val2 = exec.pop::<2>().expect("Failed to pop first value");
-
-        assert_eq!(val2, [VmValue::TAG_INT, 2], "First value should be 2");
-        assert_eq!(val3, [VmValue::TAG_INT, 3], "Second value should be 3");
+        // Check the value on stack is the last value from our block (3)
+        let result = exec.pop::<2>().expect("Failed to pop result value");
+        assert_eq!(result, [VmValue::TAG_INT, 3], "Result value should be 3");
 
         Ok(())
     }
