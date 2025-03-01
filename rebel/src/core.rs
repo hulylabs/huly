@@ -721,7 +721,7 @@ where
                 if block != 0 {
                     self.ip = IP::new(block, ip);
                 } else {
-                    return Some((Op::NONE, 0));
+                    return None;
                 }
             }
         }
@@ -1014,11 +1014,11 @@ mod tests {
     }
 
     /// Test the next_op method with a simple program [1 2 3]
-    /// This verifies that next_op correctly returns a single value at the end of a block.
+    /// This verifies that next_op returns None at the end of a block.
     ///
-    /// With the improved next_op implementation, it processes all values in the block
-    /// and returns a single value (the last value or a result), ensuring blocks always
-    /// evaluate to a single value.
+    /// With the updated next_op implementation, it processes values in the block
+    /// until encountering an operation that needs to be executed or reaching the end,
+    /// at which point it returns None.
     #[test]
     fn test_next_op() -> Result<(), CoreError> {
         // Initialize a module
@@ -1042,16 +1042,15 @@ mod tests {
         // Call the block to set instruction pointer to it
         exec.call(block_addr).expect("Failed to call block");
 
-        // A single call to next_op should process all values and return a single result
-        let (op, val) = exec.next_op().expect("next_op failed");
-
-        // Since there are no operations to execute after processing the values,
-        // next_op should return Op::NONE
-        assert_eq!(op, Op::NONE, "Operation should be NONE");
-        assert_eq!(val, 0, "Operation value should be 0");
+        // A single call to next_op should process all values and return None
+        // as there are no operations to execute and we've reached the end of the block
+        let result = exec.next_op();
+        
+        // With the updated implementation, next_op should return None when finished
+        assert!(result.is_none(), "next_op should return None at end of block");
 
         // Check the stack now has exactly one value (the last value from the block)
-        // Due to the improved next_op that ensures blocks always return a single value
+        // Due to the VM ensuring blocks always return a single value
         assert_eq!(
             exec.stack.len().unwrap(),
             1 * 2,
@@ -1092,9 +1091,11 @@ mod tests {
 
         // First call to next_op should encounter the set-word operation 'x:'
         // It will also push the value 1 onto the stack
-        let (op1, val1) = exec.next_op().expect("next_op failed");
-
-        // Should return SET_WORD operation with the symbol for 'x'
+        let op_result = exec.next_op();
+        
+        // Should return a SET_WORD operation with the symbol for 'x'
+        assert!(op_result.is_some(), "next_op should return an operation");
+        let (op1, val1) = op_result.unwrap();
         assert_eq!(op1, Op::SET_WORD, "First operation should be SET_WORD");
 
         // val1 should be the symbol for 'x'
@@ -1140,16 +1141,14 @@ mod tests {
         );
 
         // Next call should process the rest of the block (values 2 and 3)
-        // With the improved next_op, it will process to the end of the block
-        // and leave only the last value (3) on the stack
-        let (op2, val2) = exec.next_op().expect("next_op failed");
-
-        // Should return NONE since there are no more operations
-        assert_eq!(op2, Op::NONE, "Second operation should be NONE");
-        assert_eq!(val2, 0, "Second operation value should be 0");
+        // With the updated next_op, it will process to the end of the block and return None
+        let next_result = exec.next_op();
+        
+        // Should return None since there are no more operations to execute
+        assert!(next_result.is_none(), "next_op should return None at end of block");
 
         // Stack should now have one value (the last value from the block, which is 3)
-        // Due to the improved next_op that ensures blocks always return a single value
+        // Due to the VM ensuring blocks always return a single value
         assert_eq!(
             exec.stack.len().unwrap(),
             1 * 2,
@@ -1190,7 +1189,9 @@ mod tests {
 
         // First call to next_op should encounter the first set-word 'x:'
         // and push the value 1 onto the stack
-        let (op1, val1) = exec.next_op().expect("next_op failed");
+        let op_result1 = exec.next_op();
+        assert!(op_result1.is_some(), "First next_op should return an operation");
+        let (op1, val1) = op_result1.unwrap();
 
         // Should return SET_WORD operation
         assert_eq!(op1, Op::SET_WORD, "First operation should be SET_WORD");
@@ -1223,7 +1224,9 @@ mod tests {
 
         // Second call to next_op should encounter the second set-word 'y:'
         // and push the value 2 onto the stack
-        let (op2, val2) = exec.next_op().expect("next_op failed");
+        let op_result2 = exec.next_op();
+        assert!(op_result2.is_some(), "Second next_op should return an operation");
+        let (op2, val2) = op_result2.unwrap();
 
         // Should return SET_WORD operation
         assert_eq!(op2, Op::SET_WORD, "Second operation should be SET_WORD");
@@ -1256,7 +1259,9 @@ mod tests {
 
         // Third call to next_op should encounter the third set-word 'z:'
         // and push the value 3 onto the stack
-        let (op3, val3) = exec.next_op().expect("next_op failed");
+        let op_result3 = exec.next_op();
+        assert!(op_result3.is_some(), "Third next_op should return an operation");
+        let (op3, val3) = op_result3.unwrap();
 
         // Should return SET_WORD operation
         assert_eq!(op3, Op::SET_WORD, "Third operation should be SET_WORD");
@@ -1287,12 +1292,11 @@ mod tests {
             "Stack should be empty after third do_op"
         );
 
-        // Fourth call should encounter end of block
-        let (op4, val4) = exec.next_op().expect("next_op failed");
-
-        // Should return NONE since there are no more instructions
-        assert_eq!(op4, Op::NONE, "Fourth operation should be NONE");
-        assert_eq!(val4, 0, "Fourth operation value should be 0");
+        // Fourth call should encounter end of block and return None
+        let op_result4 = exec.next_op();
+        
+        // With the updated implementation, next_op should return None at the end of the block
+        assert!(op_result4.is_none(), "Fourth next_op should return None at end of block");
 
         // At this point, we've successfully executed all operations
         // and the context should contain the variables x, y, and z
@@ -2187,7 +2191,9 @@ mod tests {
 
         // First call to next_op should process the 'add' word and identify it as a CALL_NATIVE operation
         // It will also push the arguments 7 and 8 onto the stack
-        let (op, value) = exec.next_op().expect("next_op failed");
+        let op_result = exec.next_op();
+        assert!(op_result.is_some(), "next_op should return an operation");
+        let (op, value) = op_result.unwrap();
 
         // Should return CALL_NATIVE operation
         assert_eq!(op, Op::CALL_NATIVE, "First operation should be CALL_NATIVE");
@@ -2227,10 +2233,9 @@ mod tests {
         let result = exec.stack.get::<2>(0).expect("Failed to get result");
         assert_eq!(result, [VmValue::TAG_INT, 15], "Result should be 15");
 
-        // There should be no more operations
-        let (op2, val2) = exec.next_op().expect("next_op failed");
-        assert_eq!(op2, Op::NONE, "There should be no more operations");
-        assert_eq!(val2, 0, "No operation value");
+        // There should be no more operations (next_op should return None)
+        let next_result = exec.next_op();
+        assert!(next_result.is_none(), "next_op should return None at end of block");
 
         Ok(())
     }
@@ -2269,7 +2274,9 @@ mod tests {
         // needs to be executed, and it also pushes all values it encounters onto the stack.
         // In this case, it will process 'add', '1', 'add', '2', '3' before returning the
         // CALL_NATIVE operation for the inner 'add'.
-        let (op1, value1) = exec.next_op().expect("next_op failed");
+        let op_result1 = exec.next_op();
+        assert!(op_result1.is_some(), "First next_op should return an operation");
+        let (op1, value1) = op_result1.unwrap();
 
         // The first operation should be CALL_NATIVE for 'add' (the inner one)
         assert_eq!(
@@ -2329,7 +2336,9 @@ mod tests {
         );
 
         // Next call to next_op should identify the CALL_NATIVE operation for the outer 'add'
-        let (op2, value2) = exec.next_op().expect("next_op failed");
+        let op_result2 = exec.next_op();
+        assert!(op_result2.is_some(), "Second next_op should return an operation");
+        let (op2, value2) = op_result2.unwrap();
 
         // The second operation should also be CALL_NATIVE for 'add' (the outer one)
         assert_eq!(
@@ -2355,10 +2364,9 @@ mod tests {
         let result = exec.stack.get::<2>(0).expect("Failed to get final result");
         assert_eq!(result, [VmValue::TAG_INT, 6], "Final result should be 6");
 
-        // There should be no more operations
-        let (op3, val3) = exec.next_op().expect("next_op failed");
-        assert_eq!(op3, Op::NONE, "There should be no more operations");
-        assert_eq!(val3, 0, "No operation value");
+        // There should be no more operations (next_op should return None)
+        let next_result = exec.next_op();
+        assert!(next_result.is_none(), "next_op should return None at end of block");
 
         Ok(())
     }
