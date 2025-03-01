@@ -710,7 +710,6 @@ where
                     return None;
                 }
 
-                let sp = self.stack.len()?;
                 let cut = if op == Op::LEAVE_FUNC {
                     let [base] = self.base.pop()?;
                     base
@@ -718,26 +717,31 @@ where
                     bp
                 };
 
-                match sp.checked_sub(cut) {
-                    Some(2) => {}
-                    Some(0) => {
-                        self.stack.push([VmValue::TAG_NONE, 0])?;
-                    }
-                    Some(_) => {
-                        let result = self.stack.pop::<2>()?;
-                        self.stack.set_len(cut)?;
-                        self.stack.push(result)?;
-                    }
-                    None => {
-                        // panic!("ERROR: stack underflow");
-                        return None;
-                    }
-                };
+                self.leave(cut)?;
 
                 self.block = block;
                 self.ip = ip - Self::LEAVE_MARKER;
             }
         }
+    }
+
+    fn leave(&mut self, bp: Offset) -> Option<()> {
+        let sp = self.stack.len()?;
+        match sp.checked_sub(bp) {
+            Some(2) => {}
+            Some(0) => {
+                self.stack.push([VmValue::TAG_NONE, 0])?;
+            }
+            Some(_) => {
+                let result = self.stack.pop::<2>()?;
+                self.stack.set_len(bp)?;
+                self.stack.push(result)?;
+            }
+            None => {
+                return None;
+            }
+        };
+        Some(())
     }
 
     fn eval(&mut self) -> Option<MemValue> {
