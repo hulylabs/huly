@@ -539,7 +539,7 @@ where
         self.module.heap.get_block(block).map(|block| block.len())
     }
 
-    fn find_word(&self, symbol: Symbol) -> Option<[Word; 2]> {
+    pub fn find_word(&self, symbol: Symbol) -> Option<[Word; 2]> {
         let [ctx] = self.env.peek()?;
         let context = self.module.heap.get_block(ctx).map(Context::new)?;
         let result = context.get(symbol);
@@ -559,11 +559,7 @@ where
             _ => result.ok(),
         }
     }
-    
-    // Helper method for tests to check if a word is set in the context
-    pub fn get_word_value(&self, symbol: Symbol) -> Option<[Word; 2]> {
-        self.find_word(symbol)
-    }
+
 
     // fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
     //     let envs = self.envs.peek_all(0)?;
@@ -1135,13 +1131,19 @@ mod tests {
             0,
             "Stack should be empty after do_op"
         );
-        
-        // Now let's verify that 'x' was actually set in the context by using our helper method
+
+        // Now let's verify that 'x' was actually set in the context using find_word
         // This directly checks the context to see if the symbol exists and has the correct value
-        let word_value = exec.get_word_value(val1).expect("Failed to get word value for 'x'");
-        
+        let word_value = exec
+            .find_word(val1)
+            .expect("Failed to find word 'x' in context");
+
         // The value of 'x' should be 1
-        assert_eq!(word_value, [VmValue::TAG_INT, 1], "Value of 'x' should be 1");
+        assert_eq!(
+            word_value,
+            [VmValue::TAG_INT, 1],
+            "Value of 'x' should be 1"
+        );
 
         // Next call should process the rest of the block (values 2 and 3)
         // With the improved next_op, it will process to the end of the block
@@ -2366,7 +2368,6 @@ mod tests {
 
         Ok(())
     }
-
 
     /// Test a complete program with function definition and call
     /// This test verifies that:
