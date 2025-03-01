@@ -489,15 +489,15 @@ pub struct Exec<'a, T> {
     module: &'a mut Module<T>,
     stack: Stack<[Offset; 1024]>,
     op_stack: Stack<[Offset; 1024]>,
-    base: Stack<[Offset; 256]>,
-    env: Stack<[Offset; 256]>,
+    base: Stack<[Offset; 512]>,
+    env: Stack<[Offset; 512]>,
 }
 
 impl<'a, T> Exec<'a, T> {
     const LEAVE_MARKER: Offset = 0x10000;
 
     fn new(module: &'a mut Module<T>, block: Offset) -> Option<Self> {
-        let mut env = Stack::new([0; 256]);
+        let mut env = Stack::new([0; 512]);
         env.push([module.system_words])?;
         Some(Self {
             block,
@@ -505,7 +505,7 @@ impl<'a, T> Exec<'a, T> {
             module,
             stack: Stack::new([0; 1024]),
             op_stack: Stack::new([0; 1024]),
-            base: Stack::new([0; 256]),
+            base: Stack::new([0; 512]),
             env,
         })
     }
