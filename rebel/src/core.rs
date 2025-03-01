@@ -207,6 +207,10 @@ where
             .and_then(|block| block.get(offset..offset + N))
             .and_then(|value| value.try_into().ok())
     }
+
+    pub fn get_system_words(&self) -> Option<Context<&[u32]>> {
+        self.heap.get_block(self.system_words).map(Context::new)
+    }
 }
 
 impl<T> Module<T>
@@ -554,6 +558,11 @@ where
             }
             _ => result.ok(),
         }
+    }
+    
+    // Helper method for tests to check if a word is set in the context
+    pub fn get_word_value(&self, symbol: Symbol) -> Option<[Word; 2]> {
+        self.find_word(symbol)
     }
 
     // fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
@@ -1126,6 +1135,13 @@ mod tests {
             0,
             "Stack should be empty after do_op"
         );
+        
+        // Now let's verify that 'x' was actually set in the context by using our helper method
+        // This directly checks the context to see if the symbol exists and has the correct value
+        let word_value = exec.get_word_value(val1).expect("Failed to get word value for 'x'");
+        
+        // The value of 'x' should be 1
+        assert_eq!(word_value, [VmValue::TAG_INT, 1], "Value of 'x' should be 1");
 
         // Next call should process the rest of the block (values 2 and 3)
         // With the improved next_op, it will process to the end of the block
@@ -1147,8 +1163,6 @@ mod tests {
         // Check the value on stack is the last value from our block (3)
         let result = exec.pop::<2>().expect("Failed to pop result value");
         assert_eq!(result, [VmValue::TAG_INT, 3], "Result value should be 3");
-        
-        // We verify SET_WORD operations work correctly in test_set_word_operation
 
         Ok(())
     }
@@ -2353,21 +2367,7 @@ mod tests {
         Ok(())
     }
 
-    /// Test that SET_WORD operations actually set values in the context
-    /// This test uses existing VM evaluation code to verify that SET_WORD works correctly
-    #[test]
-    fn test_set_word_operation() -> Result<(), CoreError> {
-        // The test_word_1 function already tests this exact functionality
-        // It runs "42 \"world\" x: 5 x\n " and checks the result
-        // If this passes, it means the SET_WORD operation works correctly
-        
-        // Let's just verify the test_word_1 result is still working
-        let result = eval("42 \"world\" x: 5 x")?;
-        assert_eq!(result, [VmValue::TAG_INT, 5], "Result should be the value of x (5)");
-        
-        Ok(())
-    }
-    
+
     /// Test a complete program with function definition and call
     /// This test verifies that:
     /// 1. The next_op method correctly processes different operation types
