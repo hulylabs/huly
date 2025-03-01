@@ -225,7 +225,7 @@ where
         // Allocate the block with the words
         self.heap
             .alloc_block(&words)
-            .map(|addr| VmValue::String(addr))
+            .map(VmValue::String)
     }
 
     pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Option<Offset> {
@@ -240,11 +240,11 @@ where
             Value::Int(n) => Some(VmValue::Int(*n)),
 
             // Values requiring string allocation
-            Value::String(s) => self.alloc_string(&s),
+            Value::String(s) => self.alloc_string(s.as_ref()),
 
             // Symbol-based values
-            Value::Word(w) => self.get_or_insert_symbol(&w).map(VmValue::Word),
-            Value::SetWord(w) => self.get_or_insert_symbol(&w).map(VmValue::SetWord),
+            Value::Word(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::Word),
+            Value::SetWord(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::SetWord),
 
             // Nested collection types
             Value::Block(items) => {
@@ -336,12 +336,11 @@ where
                 let mut remaining = length;
 
                 // Process one word at a time, extracting bytes
-                for i in 1..string_block.len() {
+                for word in string_block.iter().skip(1) {
                     if remaining == 0 {
                         break;
                     }
 
-                    let word = string_block[i];
                     // Extract up to 4 bytes from each word
                     for j in 0..4 {
                         if remaining == 0 {
@@ -403,7 +402,40 @@ where
             }
 
             // Context value stored in heap
-            VmValue::Context(offset) => None,
+            VmValue::Context(offset) => {
+                let context_block = self.heap.get_block(offset)?;
+                if context_block.is_empty() {
+                    return Some(Value::Context(Box::new([])));
+                }
+
+                let mut pairs = Vec::new();
+                let context_data = Context::new(context_block);
+                
+                // Use the iterator to efficiently iterate through all entries in the context
+                for (symbol, [tag, data]) in &context_data {
+                    // Get the symbol name
+                    let symbol_name = self.get_symbol(symbol)?;
+                    
+                    // Convert the tag/data to a VmValue
+                    let vm_value = match tag {
+                        VmValue::TAG_NONE => VmValue::None,
+                        VmValue::TAG_INT => VmValue::Int(data as i32),
+                        VmValue::TAG_BLOCK => VmValue::Block(data),
+                        VmValue::TAG_CONTEXT => VmValue::Context(data),
+                        VmValue::TAG_INLINE_STRING => VmValue::String(data),
+                        VmValue::TAG_WORD => VmValue::Word(data),
+                        VmValue::TAG_SET_WORD => VmValue::SetWord(data),
+                        _ => continue, // Skip unknown tags
+                    };
+                    
+                    // Recursively convert to Value
+                    if let Some(value) = self.to_value(vm_value) {
+                        pairs.push((symbol_name, value));
+                    }
+                }
+                
+                Some(Value::Context(pairs.into_boxed_slice()))
+            },
         }
     }
 
