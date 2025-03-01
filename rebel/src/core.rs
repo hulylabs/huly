@@ -727,122 +727,122 @@ where
         }
     }
 
-    fn eval(&mut self) -> Option<MemValue> {
+    fn eval2(&mut self) -> Option<MemValue> {
         while let Some((op, word)) = self.next_op() {
             self.do_op(op, word)?;
         }
         self.stack.pop()
     }
 
-    // fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
-    //     let [tag, word] = value;
-    //     if tag == VmValue::TAG_WORD {
-    //         let resolved = self.find_word(word);
-    //         match resolved {
-    //             Some([VmValue::TAG_STACK_VALUE, index]) => self
-    //                 .base
-    //                 .peek()
-    //                 .and_then(|[bp]| self.stack.get(bp + index * 2)),
-    //             _ => resolved,
-    //         }
-    //     } else {
-    //         Some(value)
-    //     }
-    // }
+    fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
+        let [tag, word] = value;
+        if tag == VmValue::TAG_WORD {
+            let resolved = self.find_word(word);
+            match resolved {
+                Some([VmValue::TAG_STACK_VALUE, index]) => self
+                    .base
+                    .peek()
+                    .and_then(|[bp]| self.stack.get(bp + index * 2)),
+                _ => resolved,
+            }
+        } else {
+            Some(value)
+        }
+    }
 
-    // fn next_value(&mut self) -> Option<[Word; 2]> {
-    //     while let Some(cmd) = self.ip.next(self.module) {
-    //         let value = self.get_value(cmd)?;
+    fn next_value(&mut self) -> Option<[Word; 2]> {
+        while let Some(cmd) = self.ip.next(self.module) {
+            let value = self.get_value(cmd)?;
 
-    //         if let Some((op, arity)) = match value[0] {
-    //             VmValue::TAG_NATIVE_FN => {
-    //                 Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
-    //             }
-    //             VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-    //             VmValue::TAG_FUNC => {
-    //                 Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
-    //             }
-    //             _ => None,
-    //         } {
-    //             let sp = self.stack.len()?;
-    //             self.arity.push([op, value[1], sp, arity * 2])?;
-    //         } else {
-    //             return Some(value);
-    //         }
-    //     }
-    //     None
-    // }
+            if let Some((op, arity)) = match value[0] {
+                VmValue::TAG_NATIVE_FN => {
+                    Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
+                }
+                VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
+                VmValue::TAG_FUNC => {
+                    Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
+                }
+                _ => None,
+            } {
+                let sp = self.stack.len()?;
+                self.arity.push([op, value[1], sp, arity * 2])?;
+            } else {
+                return Some(value);
+            }
+        }
+        None
+    }
 
-    // fn eval(&mut self) -> Option<[Word; 2]> {
-    //     loop {
-    //         if let Some(value) = self.next_value() {
-    //             self.stack.alloc(value)?;
-    //         } else {
-    //             let stack_len = self.stack.len()?;
-    //             match stack_len - self.base_ptr {
-    //                 2 => {}
-    //                 0 => {
-    //                     self.stack.push([VmValue::TAG_NONE, 0])?;
-    //                 }
-    //                 _ => {
-    //                     let result = self.stack.pop::<2>()?;
-    //                     self.stack.set_len(self.base_ptr)?;
-    //                     self.stack.push(result)?;
-    //                 }
-    //             }
-    //             let [block, ip] = self.blocks.pop()?;
-    //             if block != 0 {
-    //                 self.ip = IP::new(block, ip);
-    //             } else {
-    //                 break;
-    //             }
-    //         }
+    fn eval(&mut self) -> Option<[Word; 2]> {
+        loop {
+            if let Some(value) = self.next_value() {
+                self.stack.alloc(value)?;
+            } else {
+                let stack_len = self.stack.len()?;
+                match stack_len - self.base_ptr {
+                    2 => {}
+                    0 => {
+                        self.stack.push([VmValue::TAG_NONE, 0])?;
+                    }
+                    _ => {
+                        let result = self.stack.pop::<2>()?;
+                        self.stack.set_len(self.base_ptr)?;
+                        self.stack.push(result)?;
+                    }
+                }
+                let [block, ip] = self.blocks.pop()?;
+                if block != 0 {
+                    self.ip = IP::new(block, ip);
+                } else {
+                    break;
+                }
+            }
 
-    //         while let Some([bp, arity]) = self.arity.peek() {
-    //             let sp = self.stack.len()?;
-    //             if sp == bp + arity {
-    //                 let [op, value, _, _] = self.arity.pop()?;
-    //                 match op {
-    //                     Op::SET_WORD => {
-    //                         let result = self.stack.pop()?;
-    //                         self.put_context(value, result)?;
-    //                     }
-    //                     Op::CALL_NATIVE => {
-    //                         let native_fn = self.module.get_func(value)?;
-    //                         (native_fn.func)(self)?;
-    //                     }
-    //                     Op::CALL_FUNC => {
-    //                         let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
-    //                         self.env.push([ctx])?;
-    //                         self.base.push([bp])?;
-    //                         self.arity.push([Op::LEAVE, 0, sp, 2])?;
-    //                         self.call(blk)?;
-    //                         break;
-    //                     }
-    //                     Op::LEAVE => {
-    //                         self.env.pop::<1>()?;
-    //                         let [stack] = self.base.pop::<1>()?;
-    //                         let result = self.stack.pop::<2>()?;
-    //                         self.stack.set_len(stack)?;
-    //                         self.stack.push(result)?;
-    //                         self.base_ptr = stack;
-    //                     }
-    //                     Op::CONTEXT => {
-    //                         let ctx = self.pop_context()?;
-    //                         self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
-    //                     }
-    //                     _ => {
-    //                         return None;
-    //                     }
-    //                 };
-    //             } else {
-    //                 break;
-    //             }
-    //         }
-    //     }
+            while let Some([bp, arity]) = self.arity.peek() {
+                let sp = self.stack.len()?;
+                if sp == bp + arity {
+                    let [op, value, _, _] = self.arity.pop()?;
+                    match op {
+                        Op::SET_WORD => {
+                            let result = self.stack.pop()?;
+                            self.put_context(value, result)?;
+                        }
+                        Op::CALL_NATIVE => {
+                            let native_fn = self.module.get_func(value)?;
+                            (native_fn.func)(self)?;
+                        }
+                        Op::CALL_FUNC => {
+                            let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
+                            self.env.push([ctx])?;
+                            self.base.push([bp])?;
+                            self.arity.push([Op::LEAVE, 0, sp, 2])?;
+                            self.call(blk)?;
+                            break;
+                        }
+                        Op::LEAVE => {
+                            self.env.pop::<1>()?;
+                            let [stack] = self.base.pop::<1>()?;
+                            let result = self.stack.pop::<2>()?;
+                            self.stack.set_len(stack)?;
+                            self.stack.push(result)?;
+                            self.base_ptr = stack;
+                        }
+                        Op::CONTEXT => {
+                            let ctx = self.pop_context()?;
+                            self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
+                        }
+                        _ => {
+                            return None;
+                        }
+                    };
+                } else {
+                    break;
+                }
+            }
+        }
 
-    //     self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
-    // }
+        self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
+    }
 }
 
 // P A R S E  C O L L E C T O R
