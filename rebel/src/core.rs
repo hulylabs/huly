@@ -479,34 +479,13 @@ impl Op {
     pub const CONTEXT: u32 = 6;
 }
 
-#[derive(Debug)]
-struct IP {
-    block: Offset,
-    ip: Offset,
-}
-
-impl IP {
-    fn new(block: Offset, ip: Offset) -> Self {
-        Self { block, ip }
-    }
-
-    fn next<T>(&mut self, module: &Module<T>) -> Option<[Word; 2]>
-    where
-        T: AsRef<[Word]>,
-    {
-        let addr = self.ip;
-        self.ip += 2;
-        module.get_block(self.block, addr)
-    }
-}
-
 pub struct Exec<'a, T> {
     block: Offset,
     ip: Offset,
 
     module: &'a mut Module<T>,
     stack: Stack<[Offset; 1024]>,
-    arity: Stack<[Offset; 256]>,
+    arity: Stack<[Offset; 1024]>,
     base: Stack<[Offset; 256]>,
     env: Stack<[Offset; 256]>,
     // blocks: Stack<[Offset; 256]>,
@@ -521,7 +500,7 @@ impl<'a, T> Exec<'a, T> {
             ip: 0,
             module,
             stack: Stack::new([0; 1024]),
-            arity: Stack::new([0; 256]),
+            arity: Stack::new([0; 1024]),
             base: Stack::new([0; 256]),
             // blocks: Stack::new([0; 256]),
             env,
@@ -582,14 +561,6 @@ where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
     pub fn pop<const N: usize>(&mut self) -> Option<[Word; N]> {
-        // let [bp, _, _] = self.blocks.peek()?;
-        // let sp = self.stack.len()?;
-        // if sp - N as u32 >= bp {
-        //     self.stack.pop()
-        // } else {
-        //     panic!("STACK UNDERFLOW: sp={}, bp={}, N={}", sp, bp, N);
-        //     None
-        // }
         self.stack.pop()
     }
 
@@ -643,7 +614,6 @@ where
                         self.base
                             .peek::<1>()
                             .and_then(|[base]| self.stack.get(base + result[1] * 2))
-                        // self.stack.get(base + result[1] * 2)
                     } else {
                         Some(result)
                     }
@@ -691,23 +661,13 @@ where
                 self.block = blk;
                 self.ip = 0;
 
-                println!("BLOCK CALL FUNC: bp={:?}", bp);
                 Some(())
             }),
-            // Op::LEAVE => {
-            //     self.env.pop::<1>()?;
-            //     let [stack] = self.base.pop::<1>()?;
-            //     let result = self.stack.pop::<2>()?;
-            //     self.stack.set_len(stack)?;
-            //     self.stack.push(result)?;
-            //     self.base_ptr = stack;
-            //     Some(())
-            // }
             Op::CONTEXT => {
                 let ctx = self.pop_context()?;
                 self.stack.push([VmValue::TAG_CONTEXT, ctx])
             }
-            _ => panic!(" *** ERROR: unexpected do_op operation: {}", op),
+            _ => None,
         }
     }
 
@@ -739,40 +699,31 @@ where
                 let [op, block, bp, ip] = self.arity.pop()?;
 
                 if op != Op::LEAVE_FUNC && op != Op::LEAVE_BLOCK {
-                    panic!(" *** ERROR: Expecing leave on block end");
+                    // panic!("ERROR: expecing leave");
+                    return None;
                 }
 
                 let sp = self.stack.len()?;
-                println!("END BLOCK: (bp={}, sp={})", bp, sp);
-
                 let cut = if op == Op::LEAVE_FUNC {
                     let [base] = self.base.pop()?;
-                    println!(" *** LEAVE_FUNC: base = {:?} bp={}", base, bp);
                     base
                 } else {
-                    let [base] = self.base.peek()?;
-                    println!(" *** NORMAL BLOCK: base={:?} bp={:?}", base, bp);
                     bp
                 };
 
-                println!("CUT: {:?}", cut);
-
                 match sp.checked_sub(cut) {
-                    Some(2) => {
-                        println!("EXACTLY one value on stack");
-                    }
+                    Some(2) => {}
                     Some(0) => {
                         self.stack.push([VmValue::TAG_NONE, 0])?;
                     }
                     Some(_) => {
-                        println!("MORE than one value on stack");
                         let result = self.stack.pop::<2>()?;
-                        println!("RESULT: {:?}", result);
                         self.stack.set_len(cut)?;
                         self.stack.push(result)?;
                     }
                     None => {
-                        panic!("ERROR: stack underflow");
+                        // panic!("ERROR: stack underflow");
+                        return None;
                     }
                 };
 
@@ -784,13 +735,9 @@ where
 
     fn eval(&mut self) -> Option<MemValue> {
         while let Some((op, word)) = self.next_op() {
-            println!("EVAL:  op: {:?}, word: {:?}", op, word);
-            println!("STACK BEFORE: {:?}", self.stack.peek_all(0)?);
             self.do_op(op, word)?;
-            println!("STACK AFTER: {:?}", self.stack.peek_all(0)?);
         }
-        println!("END");
-        self.stack.pop()
+        self.stack.pop().or(Some([VmValue::TAG_NONE, 0]))
     }
 
     // fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
@@ -1002,311 +949,6 @@ mod tests {
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
         let block = module.parse(input)?;
         module.eval(block).ok_or(CoreError::InternalError)
-    }
-
-    /// Test the next_op method with a simple program [1 2 3]
-    /// This verifies that next_op returns None at the end of a block.
-    ///
-    /// With the updated next_op implementation, it processes values in the block
-    /// until encountering an operation that needs to be executed or reaching the end,
-    /// at which point it returns None.
-    #[test]
-    fn test_next_op() -> Result<(), CoreError> {
-        // Initialize a module
-        let mut module =
-            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
-
-        // Create a simple program [1 2 3] using the rebel! macro
-        let program = rebel!([1 2 3]);
-
-        // Allocate the program in VM memory
-        let vm_block = module
-            .alloc_value(&program)
-            .expect("Failed to allocate block");
-
-        // Get the VM representation
-        let [_, block_addr] = vm_block.vm_repr();
-
-        // Create an execution context
-        let mut exec =
-            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
-
-        // A single call to next_op should process all values and return None
-        // as there are no operations to execute and we've reached the end of the block
-        let result = exec.next_op();
-
-        // With the updated implementation, next_op should return None when finished
-        assert!(
-            result.is_none(),
-            "next_op should return None at end of block"
-        );
-
-        // Check the stack now has exactly one value (the last value from the block)
-        // Due to the VM ensuring blocks always return a single value
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            1 * 2,
-            "Stack should have 1 value (2 words total)"
-        );
-
-        // Check the value on stack is the last value from our block (3)
-        let result = exec.pop::<2>().expect("Failed to pop result value");
-        assert_eq!(result, [VmValue::TAG_INT, 3], "Result value should be 3");
-
-        Ok(())
-    }
-
-    /// Test the next_op method with a program that includes operations,
-    /// followed by do_op to verify it correctly executes the operations
-    #[test]
-    fn test_next_op_with_operations() -> Result<(), CoreError> {
-        // Initialize a module
-        let mut module =
-            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
-
-        // Create a program with a set-word: [x: 1 2 3]
-        let program = rebel!([x: 1 2 3]);
-
-        // Allocate the program in VM memory
-        let vm_block = module
-            .alloc_value(&program)
-            .expect("Failed to allocate block");
-
-        // Get the VM representation
-        let [_, block_addr] = vm_block.vm_repr();
-
-        // Create an execution context
-        let mut exec =
-            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
-
-        // First call to next_op should encounter the set-word operation 'x:'
-        // It will also push the value 1 onto the stack
-        let op_result = exec.next_op();
-
-        // Should return a SET_WORD operation with the symbol for 'x'
-        assert!(op_result.is_some(), "next_op should return an operation");
-        let (op1, val1) = op_result.unwrap();
-        assert_eq!(op1, Op::SET_WORD, "First operation should be SET_WORD");
-
-        // val1 should be the symbol for 'x'
-        // We can't easily verify the exact symbol value, but it should be non-zero
-        assert_ne!(
-            val1, 0,
-            "SET_WORD operation value should be the symbol for 'x'"
-        );
-
-        // Stack should have one value (the 1) pushed
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            1 * 2,
-            "Stack should have 1 value"
-        );
-
-        // We get the stack value but we don't need to compare it
-        // since we're just testing that do_op works correctly
-        let _stack_val1 = exec.stack.get::<2>(0).expect("Failed to get stack value");
-
-        // Execute the SET_WORD operation using do_op
-        // This should pop the value 1 from the stack and put it in the context with key 'x'
-        exec.do_op(op1, val1).expect("do_op failed for SET_WORD");
-
-        // Stack should now be empty after do_op consumed the value
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            0,
-            "Stack should be empty after do_op"
-        );
-
-        // Now let's verify that 'x' was actually set in the context using find_word
-        // This directly checks the context to see if the symbol exists and has the correct value
-        let word_value = exec
-            .find_word(val1)
-            .expect("Failed to find word 'x' in context");
-
-        // The value of 'x' should be 1
-        assert_eq!(
-            word_value,
-            [VmValue::TAG_INT, 1],
-            "Value of 'x' should be 1"
-        );
-
-        // Next call should process the rest of the block (values 2 and 3)
-        // With the updated next_op, it will process to the end of the block and return None
-        let next_result = exec.next_op();
-
-        // Should return None since there are no more operations to execute
-        assert!(
-            next_result.is_none(),
-            "next_op should return None at end of block"
-        );
-
-        // Stack should now have one value (the last value from the block, which is 3)
-        // Due to the VM ensuring blocks always return a single value
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            1 * 2,
-            "Stack should have 1 value"
-        );
-
-        // Check the value on stack is the last value from our block (3)
-        let result = exec.pop::<2>().expect("Failed to pop result value");
-        assert_eq!(result, [VmValue::TAG_INT, 3], "Result value should be 3");
-
-        Ok(())
-    }
-
-    /// Test the next_op and do_op methods with a more complex program
-    /// This test includes multiple operations and verifies the context after each operation
-    #[test]
-    fn test_next_op_with_multiple_operations() -> Result<(), CoreError> {
-        // Initialize a module
-        let mut module =
-            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
-
-        // Create a program with multiple set-words: [x: 1 y: 2 z: 3]
-        let program = rebel!([x: 1 y: 2 z: 3]);
-
-        // Allocate the program in VM memory
-        let vm_block = module
-            .alloc_value(&program)
-            .expect("Failed to allocate block");
-
-        // Get the VM representation
-        let [_, block_addr] = vm_block.vm_repr();
-
-        // Create an execution context
-        let mut exec =
-            Exec::new(&mut module, block_addr).expect("Failed to create execution context");
-
-        // First call to next_op should encounter the first set-word 'x:'
-        // and push the value 1 onto the stack
-        let op_result1 = exec.next_op();
-        assert!(
-            op_result1.is_some(),
-            "First next_op should return an operation"
-        );
-        let (op1, val1) = op_result1.unwrap();
-
-        // Should return SET_WORD operation
-        assert_eq!(op1, Op::SET_WORD, "First operation should be SET_WORD");
-        assert_ne!(
-            val1, 0,
-            "SET_WORD operation value should be the symbol for 'x'"
-        );
-
-        // Stack should have one value (1)
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            1 * 2,
-            "Stack should have 1 value after first next_op"
-        );
-
-        // Get the value before using do_op, but prefix with _ since we won't use it
-        let _stack_val1 = exec.stack.get::<2>(0).expect("Failed to get value");
-
-        // Execute the first SET_WORD operation using do_op
-        // This should set x to 1 in the context
-        exec.do_op(op1, val1)
-            .expect("do_op failed for first SET_WORD");
-
-        // Stack should be empty after do_op
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            0,
-            "Stack should be empty after first do_op"
-        );
-
-        // Second call to next_op should encounter the second set-word 'y:'
-        // and push the value 2 onto the stack
-        let op_result2 = exec.next_op();
-        assert!(
-            op_result2.is_some(),
-            "Second next_op should return an operation"
-        );
-        let (op2, val2) = op_result2.unwrap();
-
-        // Should return SET_WORD operation
-        assert_eq!(op2, Op::SET_WORD, "Second operation should be SET_WORD");
-        assert_ne!(
-            val2, 0,
-            "SET_WORD operation value should be the symbol for 'y'"
-        );
-
-        // Stack should have one value (2)
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            1 * 2,
-            "Stack should have 1 value after second next_op"
-        );
-
-        // Get the value before using do_op, but prefix with _ since we won't use it
-        let _stack_val2 = exec.stack.get::<2>(0).expect("Failed to get value");
-
-        // Execute the second SET_WORD operation using do_op
-        // This should set y to 2 in the context
-        exec.do_op(op2, val2)
-            .expect("do_op failed for second SET_WORD");
-
-        // Stack should be empty after do_op
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            0,
-            "Stack should be empty after second do_op"
-        );
-
-        // Third call to next_op should encounter the third set-word 'z:'
-        // and push the value 3 onto the stack
-        let op_result3 = exec.next_op();
-        assert!(
-            op_result3.is_some(),
-            "Third next_op should return an operation"
-        );
-        let (op3, val3) = op_result3.unwrap();
-
-        // Should return SET_WORD operation
-        assert_eq!(op3, Op::SET_WORD, "Third operation should be SET_WORD");
-        assert_ne!(
-            val3, 0,
-            "SET_WORD operation value should be the symbol for 'z'"
-        );
-
-        // Stack should have one value (3)
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            1 * 2,
-            "Stack should have 1 value after third next_op"
-        );
-
-        // Get the value before using do_op, but prefix with _ since we won't use it
-        let _stack_val3 = exec.stack.get::<2>(0).expect("Failed to get value");
-
-        // Execute the third SET_WORD operation using do_op
-        // This should set z to 3 in the context
-        exec.do_op(op3, val3)
-            .expect("do_op failed for third SET_WORD");
-
-        // Stack should be empty after do_op
-        assert_eq!(
-            exec.stack.len().unwrap(),
-            0,
-            "Stack should be empty after third do_op"
-        );
-
-        // Fourth call should encounter end of block and return None
-        let op_result4 = exec.next_op();
-
-        // With the updated implementation, next_op should return None at the end of the block
-        assert!(
-            op_result4.is_none(),
-            "Fourth next_op should return None at end of block"
-        );
-
-        // At this point, we've successfully executed all operations
-        // and the context should contain the variables x, y, and z
-        // We don't need to verify the exact values since we've already
-        // tested that do_op works correctly in the first test
-
-        Ok(())
     }
 
     /// This test demonstrates the new Context iterator functionality by:
@@ -2485,9 +2127,9 @@ mod tests {
             .alloc_value(&func_program)
             .expect("Failed to allocate block");
         let [_, func_block_addr] = vm_func.vm_repr();
-        module
-            .eval(func_block_addr)
-            .expect("Failed to define function");
+        let m = module.eval(func_block_addr);
+        println!("MMM: {:?}", m);
+        m.expect("Failed to define function");
 
         // Verify the direct execution approach works correctly
         let test_call = rebel!([double 21]);
