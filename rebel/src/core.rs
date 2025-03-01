@@ -485,13 +485,14 @@ pub struct Exec<'a, T> {
 
     module: &'a mut Module<T>,
     stack: Stack<[Offset; 1024]>,
-    arity: Stack<[Offset; 1024]>,
+    op_stack: Stack<[Offset; 1024]>,
     base: Stack<[Offset; 256]>,
     env: Stack<[Offset; 256]>,
-    // blocks: Stack<[Offset; 256]>,
 }
 
 impl<'a, T> Exec<'a, T> {
+    const LEAVE_MARKER: Offset = 0x10000;
+
     fn new(module: &'a mut Module<T>, block: Offset) -> Option<Self> {
         let mut env = Stack::new([0; 256]);
         env.push([module.system_words])?;
@@ -500,9 +501,8 @@ impl<'a, T> Exec<'a, T> {
             ip: 0,
             module,
             stack: Stack::new([0; 1024]),
-            arity: Stack::new([0; 1024]),
+            op_stack: Stack::new([0; 1024]),
             base: Stack::new([0; 256]),
-            // blocks: Stack::new([0; 256]),
             env,
         })
     }
@@ -569,7 +569,7 @@ where
     }
 
     pub fn jmp(&mut self, block: Offset) -> Option<()> {
-        self.arity.push([
+        self.op_stack.push([
             Op::LEAVE_BLOCK,
             self.block,
             self.stack.len()?,
@@ -581,7 +581,7 @@ where
     }
 
     pub fn push_op(&mut self, op: Word, word: Word, arity: Word) -> Option<()> {
-        self.arity.push([op, word, self.stack.len()?, arity])
+        self.op_stack.push([op, word, self.stack.len()?, arity])
     }
 
     pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Option<Offset> {
@@ -656,7 +656,7 @@ where
                 let bp = sp.checked_sub(arity * 2)?;
                 self.base.push([bp])?;
 
-                self.arity
+                self.op_stack
                     .push([Op::LEAVE_FUNC, self.block, bp, 1000 + self.ip])?;
                 self.block = blk;
                 self.ip = 0;
@@ -674,9 +674,9 @@ where
     fn next_op(&mut self) -> Option<(Word, Word)> {
         loop {
             // Check pending operations
-            if let Some([bp, arity]) = self.arity.peek() {
+            if let Some([bp, arity]) = self.op_stack.peek() {
                 if self.stack.len()? == bp + arity {
-                    let [op, word, _, _] = self.arity.pop()?;
+                    let [op, word, _, _] = self.op_stack.pop()?;
                     return Some((op, word));
                 }
             }
@@ -696,7 +696,7 @@ where
                 }
             } else {
                 // end of block, let's return single value and set up base
-                let [op, block, bp, ip] = self.arity.pop()?;
+                let [op, block, bp, ip] = self.op_stack.pop()?;
 
                 if op != Op::LEAVE_FUNC && op != Op::LEAVE_BLOCK {
                     // panic!("ERROR: expecing leave");
