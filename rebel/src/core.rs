@@ -812,12 +812,108 @@ pub fn eval(module: &mut Exec<&mut [Word]>) -> Option<[Word; 2]> {
 mod tests {
     use super::*;
     use crate::value::Value;
+    use crate::rebel;
 
     fn eval(input: &str) -> Result<[Word; 2], CoreError> {
         let mut module =
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
         let block = module.parse(input)?;
         module.eval(block).ok_or(CoreError::InternalError)
+    }
+
+    /// This test demonstrates the new Context iterator functionality by:
+    /// 1. Creating a context value with key-value pairs
+    /// 2. Allocating it in the VM 
+    /// 3. Reading it back using the read_value function
+    /// 4. Iterating through the context entries using our new iterator
+    /// 5. Verifying all keys and values
+    ///
+    /// It shows how the Context iterator makes it easy to process all
+    /// entries in a Context without manually handling hash table lookups.
+    #[test]
+    fn test_context_transform() -> Result<(), CoreError> {
+        // This test demonstrates how we can use the new Context iterator to
+        // efficiently work with context values, by creating a context, 
+        // iterating through it, and verifying the results.
+        
+        // Initialize a new module 
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+            
+        // Create a test context value using the rebel! macro
+        let test_context = rebel!({
+            name => "John Doe",
+            age => 42,
+            active => true
+        });
+            
+        // Allocate the context in the VM
+        let vm_context = module.alloc_value(&test_context)
+            .expect("Failed to allocate test context");
+            
+        // Create a tag and data for the VM representation
+        let [tag, addr] = vm_context.vm_repr();
+            
+        // Store it at a known location
+        let context_addr = module.heap
+            .alloc([tag, addr])
+            .expect("Failed to store context");
+            
+        // Now read back the value
+        let roundtrip_context = module.read_value(context_addr)
+            .expect("Failed to read context value");
+            
+        // Verify it's a context
+        assert!(matches!(roundtrip_context, Value::Context(_)), 
+            "Value should be a context, got: {:?}", roundtrip_context);
+            
+        // Verify the contents
+        if let Value::Context(pairs) = roundtrip_context {
+            // The context should have 3 specific entries
+            assert_eq!(pairs.len(), 3, "Context should have 3 entries");
+            
+            // Create a more idiomatic verification using a HashMap
+            let context_map: std::collections::HashMap<_, _> = pairs.iter()
+                .map(|(k, v)| (k.as_str(), v))
+                .collect();
+            
+            // Verify all expected keys exist
+            assert!(context_map.contains_key("name"), "name key not found");
+            assert!(context_map.contains_key("age"), "age key not found");
+            assert!(context_map.contains_key("active"), "active key not found");
+            
+            // Match on each value to verify the correct types and values
+            if let Value::String(name) = &**context_map.get("name").unwrap() {
+                assert_eq!(name, "John Doe", "Name value mismatch");
+            } else {
+                panic!("Name is not a string value");
+            }
+            
+            if let Value::Int(age) = &**context_map.get("age").unwrap() {
+                assert_eq!(*age, 42, "Age value mismatch");
+            } else {
+                panic!("Age is not an integer value");
+            }
+            
+            // The active value should be 1 (true is converted to 1)
+            if let Value::Int(active) = &**context_map.get("active").unwrap() {
+                assert_eq!(*active, 1, "Active value mismatch");
+            } else {
+                panic!("Active is not an integer value");
+            }
+                       
+            // Or you can use direct iteration with the Context iterator
+            // to display more clearly how it works
+            println!("Context entries:");
+            for (key, value) in pairs.iter() {
+                println!("  {} => {:?}", key, value);
+            }
+            
+        } else {
+            panic!("Result is not a context: {:?}", roundtrip_context);
+        }
+        
+        Ok(())
     }
 
     #[test]

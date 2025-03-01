@@ -415,26 +415,33 @@ pub struct Context<T>(Memory<T>);
 /// An iterator over the entries in a Context, yielding (Symbol, [Word; 2]) pairs.
 /// 
 /// This provides efficient iteration over all entries in a Context without having
-/// to manually check for empty slots or handle hash table collisions.
+/// to manually check for empty slots or handle hash table collisions. It transparently
+/// skips empty slots and handles the underlying hash table structure.
 /// 
 /// # Examples
 /// 
 /// ```
-/// # use rebel::mem::{Context, Word};
-/// # let mut buffer = vec![0u32; 100];
-/// # let mut context = Context::new(buffer.as_mut_slice());
-/// # context.init().unwrap();
-/// # context.put(1, [10, 20]).unwrap();
-/// # context.put(2, [30, 40]).unwrap();
+/// use rebel::mem::{Context, Word};
+/// 
+/// // Initialize a context
+/// let mut buffer = vec![0u32; 100];
+/// let mut context = Context::new(buffer.as_mut_slice());
+/// context.init().unwrap();
+/// 
+/// // Add some key-value pairs
+/// context.put(1, [10, 20]).unwrap();
+/// context.put(2, [30, 40]).unwrap();
 /// 
 /// // Iterate using iter() method
 /// for (symbol, value) in context.iter() {
 ///     println!("Symbol: {}, Value: {:?}", symbol, value);
 /// }
 /// 
-/// // Or use into_iter directly
+/// // Or use into_iter directly for a more concise syntax
 /// for (symbol, value) in &context {
-///     println!("Symbol: {}, Value: {:?}", symbol, value);
+///     // Process each key-value pair
+///     assert!(symbol > 0, "Symbol IDs start at 1");
+///     assert_eq!(value.len(), 2, "Values are [Word; 2] arrays");
 /// }
 /// ```
 pub struct ContextIterator<'a, T: 'a> {
@@ -523,24 +530,30 @@ where
     ///
     /// This provides an efficient way to iterate over all key-value pairs in the context
     /// without having to know the symbol IDs in advance or handle the hash table structure.
-    ///
-    /// # Returns
-    /// A `ContextIterator` that yields `(Symbol, [Word; 2])` pairs for each entry
+    /// It returns a [`ContextIterator`] that yields `(Symbol, [Word; 2])` pairs for each entry.
     ///
     /// # Examples
     ///
     /// ```
-    /// # use rebel::mem::{Context, Word};
-    /// # let mut buffer = vec![0u32; 100];
-    /// # let mut context = Context::new(buffer.as_mut_slice());
-    /// # context.init().unwrap();
-    /// # context.put(1, [10, 20]).unwrap();
-    /// # context.put(2, [30, 40]).unwrap();
+    /// use rebel::mem::{Context, Word};
+    ///
+    /// // Create and populate a context
+    /// let mut buffer = vec![0u32; 100];
+    /// let mut context = Context::new(buffer.as_mut_slice());
+    /// context.init().unwrap();
+    /// context.put(1, [10, 20]).unwrap();
+    /// context.put(2, [30, 40]).unwrap();
     ///
     /// // Collect all entries into a Vec
     /// let entries: Vec<_> = context.iter().collect();
     /// assert_eq!(entries.len(), 2);
+    /// 
+    /// // Find an entry with a specific symbol ID
+    /// let entry = context.iter().find(|(symbol, _)| *symbol == 1);
+    /// assert!(entry.is_some());
     /// ```
+    ///
+    /// See [`ContextIterator`] for more examples and details.
     pub fn iter(&self) -> ContextIterator<'_, T> {
         let capacity = self.0.split_first()
             .map(|(_, data)| data.len() / Self::ENTRY_SIZE)
@@ -638,7 +651,10 @@ impl<T> Context<T>
 where
     T: AsMut<[Word]>,
 {
-    fn init(&mut self) -> Option<()> {
+    /// Initialize an empty context.
+    /// 
+    /// This sets up an empty context ready for use.
+    pub fn init(&mut self) -> Option<()> {
         self.0.init(0)
     }
 
