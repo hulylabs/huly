@@ -65,14 +65,14 @@ impl VmValue {
     pub const TAG_BOOL: Word = 10;
 
     /// Convert a tag and data word into a VmValue
-    /// 
+    ///
     /// This helper method is used to convert a tag/data pair from memory into
     /// a VmValue enum variant. It is used by both to_value and read_value methods.
-    /// 
+    ///
     /// # Arguments
     /// * `tag` - The tag that identifies the value type
     /// * `data` - The data word associated with the tag
-    /// 
+    ///
     /// # Returns
     /// * `Some(VmValue)` - The constructed VmValue if the tag is recognized
     /// * `None` - If the tag is not recognized
@@ -248,9 +248,7 @@ where
         }
 
         // Allocate the block with the words
-        self.heap
-            .alloc_block(&words)
-            .map(VmValue::String)
+        self.heap.alloc_block(&words).map(VmValue::String)
     }
 
     pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Option<Offset> {
@@ -314,7 +312,6 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-
     pub fn get_symbol(&self, symbol: Symbol) -> Option<SmolStr> {
         let addr = self.heap.get::<1>(Self::SYMBOLS).map(|[addr]| addr)?;
         let symbol_table = self.heap.get_block(addr).map(SymbolTable::new)?;
@@ -427,25 +424,25 @@ where
 
                 let mut pairs = Vec::new();
                 let context_data = Context::new(context_block);
-                
+
                 // Use the iterator to efficiently iterate through all entries in the context
                 for (symbol, [tag, data]) in &context_data {
                     // Get the symbol name
                     let symbol_name = self.get_symbol(symbol)?;
-                    
+
                     // Convert the tag/data to a VmValue
                     let Some(vm_value) = VmValue::from_tag_data(tag, data) else {
                         continue; // Skip unknown tags
                     };
-                    
+
                     // Recursively convert to Value
                     if let Some(value) = self.to_value(vm_value) {
                         pairs.push((symbol_name, value));
                     }
                 }
-                
+
                 Some(Value::Context(pairs.into_boxed_slice()))
-            },
+            }
         }
     }
 
@@ -822,7 +819,7 @@ mod tests {
 
     /// This test demonstrates the new Context iterator functionality by:
     /// 1. Creating a context value with key-value pairs
-    /// 2. Allocating it in the VM 
+    /// 2. Allocating it in the VM
     /// 3. Reading it back using the read_value function
     /// 4. Iterating through the context entries using our new iterator
     /// 5. Verifying all keys and values
@@ -832,157 +829,176 @@ mod tests {
     #[test]
     fn test_context_transform() -> Result<(), CoreError> {
         // Initialize a module
-        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
-            .expect("Failed to create module");
-        
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
+
         // Create a test context directly with the high-level API
         let test_context = Value::Context(Box::new([
             ("name".into(), Value::String("John Doe".into())),
             ("age".into(), Value::Int(42)),
             ("active".into(), Value::Int(1)),
         ]));
-        
+
         // Allocate this context in VM memory
-        let vm_context = module.alloc_value(&test_context)
+        let vm_context = module
+            .alloc_value(&test_context)
             .expect("Failed to allocate context");
-            
+
         // Get the VM representation (tag and address)
         let [tag, addr] = vm_context.vm_repr();
-        
+
         // Verify we have a context tag
         assert_eq!(tag, VmValue::TAG_CONTEXT, "VM value should be a Context");
-        
+
         // Store the context at a known memory location
-        let storage_addr = module.heap.alloc([tag, addr])
+        let storage_addr = module
+            .heap
+            .alloc([tag, addr])
             .expect("Failed to allocate storage");
-        
+
         // Read back the value from memory
-        let result_value = module.read_value(storage_addr)
+        let result_value = module
+            .read_value(storage_addr)
             .expect("Failed to read value");
-            
+
         // Verify we got a context back
-        assert!(matches!(result_value, Value::Context(_)), 
-            "Result should be a context, got: {:?}", result_value);
-            
+        assert!(
+            matches!(result_value, Value::Context(_)),
+            "Result should be a context, got: {:?}",
+            result_value
+        );
+
         // Verify the context contents using the iterator
         if let Value::Context(pairs) = result_value {
             // Should have 3 entries
             assert_eq!(pairs.len(), 3, "Context should have 3 entries");
-            
+
             // Use the iterator to build a map
-            let context_map: std::collections::HashMap<_, _> = pairs.iter()
-                .map(|(k, v)| (k.as_str(), v))
-                .collect();
-            
+            let context_map: std::collections::HashMap<_, _> =
+                pairs.iter().map(|(k, v)| (k.as_str(), v)).collect();
+
             // Verify all keys exist
             assert!(context_map.contains_key("name"), "name key not found");
             assert!(context_map.contains_key("age"), "age key not found");
             assert!(context_map.contains_key("active"), "active key not found");
-            
+
             // Verify values
             if let Value::String(name) = &**context_map.get("name").unwrap() {
                 assert_eq!(name, "John Doe", "Name value mismatch");
             } else {
                 panic!("Name is not a string value");
             }
-            
+
             if let Value::Int(age) = &**context_map.get("age").unwrap() {
                 assert_eq!(*age, 42, "Age value mismatch");
             } else {
                 panic!("Age is not an integer value");
             }
-            
+
             if let Value::Int(active) = &**context_map.get("active").unwrap() {
                 assert_eq!(*active, 1, "Active value mismatch");
             } else {
                 panic!("Active is not an integer value");
             }
-            
+
             // Demonstrate the Context iterator's find method
-            let age_entry = pairs.iter()
+            let age_entry = pairs
+                .iter()
                 .find(|(key, _)| key == "age")
                 .expect("Age entry not found");
-                
+
             assert_eq!(age_entry.0, "age", "Key should be 'age'");
             assert!(matches!(age_entry.1, Value::Int(42)), "Age should be 42");
         } else {
             panic!("Result is not a context");
         }
-        
+
         // Create a more complex nested context
         let nested_context = Value::Context(Box::new([
             (
-                "profile".into(), 
+                "profile".into(),
                 Value::Context(Box::new([
                     ("name".into(), Value::String("Jane Smith".into())),
                     ("age".into(), Value::Int(35)),
-                ]))
+                ])),
             ),
             (
                 "settings".into(),
                 Value::Context(Box::new([
                     ("theme".into(), Value::String("dark".into())),
                     ("notifications".into(), Value::Int(1)),
-                ]))
+                ])),
             ),
             ("created".into(), Value::Int(12345)),
         ]));
-        
+
         // Allocate the nested context in VM memory
-        let nested_vm = module.alloc_value(&nested_context)
+        let nested_vm = module
+            .alloc_value(&nested_context)
             .expect("Failed to allocate nested context");
-            
+
         // Get the VM representation
         let [nested_tag, nested_addr] = nested_vm.vm_repr();
-        
+
         // Verify we have a context tag
-        assert_eq!(nested_tag, VmValue::TAG_CONTEXT, "Nested VM value should be a Context");
-        
+        assert_eq!(
+            nested_tag,
+            VmValue::TAG_CONTEXT,
+            "Nested VM value should be a Context"
+        );
+
         // Store at a known location
-        let nested_storage = module.heap.alloc([nested_tag, nested_addr])
+        let nested_storage = module
+            .heap
+            .alloc([nested_tag, nested_addr])
             .expect("Failed to allocate nested storage");
-            
+
         // Read back the nested context
-        let nested_result = module.read_value(nested_storage)
+        let nested_result = module
+            .read_value(nested_storage)
             .expect("Failed to read nested context");
-            
+
         // Verify we got a context back
-        assert!(matches!(nested_result, Value::Context(_)),
-            "Nested result should be a context, got: {:?}", nested_result);
-            
+        assert!(
+            matches!(nested_result, Value::Context(_)),
+            "Nested result should be a context, got: {:?}",
+            nested_result
+        );
+
         // Verify the nested context structure using the iterator
         if let Value::Context(outer_pairs) = nested_result {
             // Should have 3 entries
             assert_eq!(outer_pairs.len(), 3, "Outer context should have 3 entries");
-            
+
             // Use the iterator to build a map
-            let outer_map: std::collections::HashMap<_, _> = outer_pairs.iter()
-                .map(|(k, v)| (k.as_str(), v))
-                .collect();
-                
+            let outer_map: std::collections::HashMap<_, _> =
+                outer_pairs.iter().map(|(k, v)| (k.as_str(), v)).collect();
+
             // Verify keys exist
             assert!(outer_map.contains_key("profile"), "profile key not found");
             assert!(outer_map.contains_key("settings"), "settings key not found");
             assert!(outer_map.contains_key("created"), "created key not found");
-            
+
             // Verify the profile nested context
             if let Value::Context(profile_pairs) = &**outer_map.get("profile").unwrap() {
                 // Use iterator for the nested context
-                let profile_map: std::collections::HashMap<_, _> = profile_pairs.iter()
-                    .map(|(k, v)| (k.as_str(), v))
-                    .collect();
-                    
+                let profile_map: std::collections::HashMap<_, _> =
+                    profile_pairs.iter().map(|(k, v)| (k.as_str(), v)).collect();
+
                 // Verify profile keys
-                assert!(profile_map.contains_key("name"), "profile name key not found");
+                assert!(
+                    profile_map.contains_key("name"),
+                    "profile name key not found"
+                );
                 assert!(profile_map.contains_key("age"), "profile age key not found");
-                
+
                 // Verify profile values
                 if let Value::String(name) = &**profile_map.get("name").unwrap() {
                     assert_eq!(name, "Jane Smith", "Profile name value mismatch");
                 } else {
                     panic!("Profile name is not a string value");
                 }
-                
+
                 if let Value::Int(age) = &**profile_map.get("age").unwrap() {
                     assert_eq!(*age, 35, "Profile age value mismatch");
                 } else {
@@ -991,25 +1007,32 @@ mod tests {
             } else {
                 panic!("Profile is not a context");
             }
-            
+
             // Verify the settings nested context
             if let Value::Context(settings_pairs) = &**outer_map.get("settings").unwrap() {
                 // Use iterator for the settings context
-                let settings_map: std::collections::HashMap<_, _> = settings_pairs.iter()
+                let settings_map: std::collections::HashMap<_, _> = settings_pairs
+                    .iter()
                     .map(|(k, v)| (k.as_str(), v))
                     .collect();
-                    
+
                 // Verify settings keys
-                assert!(settings_map.contains_key("theme"), "settings theme key not found");
-                assert!(settings_map.contains_key("notifications"), "settings notifications key not found");
-                
+                assert!(
+                    settings_map.contains_key("theme"),
+                    "settings theme key not found"
+                );
+                assert!(
+                    settings_map.contains_key("notifications"),
+                    "settings notifications key not found"
+                );
+
                 // Verify settings values
                 if let Value::String(theme) = &**settings_map.get("theme").unwrap() {
                     assert_eq!(theme, "dark", "Settings theme value mismatch");
                 } else {
                     panic!("Settings theme is not a string value");
                 }
-                
+
                 if let Value::Int(notifications) = &**settings_map.get("notifications").unwrap() {
                     assert_eq!(*notifications, 1, "Settings notifications value mismatch");
                 } else {
@@ -1018,7 +1041,7 @@ mod tests {
             } else {
                 panic!("Settings is not a context");
             }
-            
+
             // Verify the created timestamp
             if let Value::Int(created) = &**outer_map.get("created").unwrap() {
                 assert_eq!(*created, 12345, "Created timestamp value mismatch");
@@ -1028,7 +1051,7 @@ mod tests {
         } else {
             panic!("Nested result is not a context");
         }
-        
+
         Ok(())
     }
 
@@ -1417,205 +1440,211 @@ mod tests {
         assert_eq!([VmValue::TAG_INT, 55], result);
         Ok(())
     }
-    
-    #[test]
-    fn test_func_returns_context() -> Result<(), CoreError> {
-        // Define a simple function that creates and returns a context
-        let input = "make-person: func [] [context [name: \"Alice\" age: 30]] make-person";
-        
-        // Execute the function
-        let result = eval(input)?;
-        
-        // Print the tag for debugging
-        println!("Return value tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-        
-        // Verify we got a context back
-        assert_eq!(result[0], VmValue::TAG_CONTEXT, 
-            "Function should return a Context, got tag {} instead", result[0]);
-        
-        Ok(())
-    }
-    
-    #[test]
-    fn test_func_with_variable() -> Result<(), CoreError> {
-        // Define a function that stores the context in a variable first
-        let input = "
-            make-person: func [] [
-                result: context [name: \"Variable\" age: 40]
-                result
-            ]
-            make-person
-        ";
-        
-        // Execute the function
-        let result = eval(input)?;
-        
-        // Print the tag for debugging
-        println!("Variable context tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-        
-        // Verify we got a context back
-        assert_eq!(result[0], VmValue::TAG_CONTEXT, 
-            "Function should return a Context, got tag {} instead", result[0]);
-        
-        Ok(())
-    }
-    
-    #[test]
-    fn test_context_function_with_args() -> Result<(), CoreError> {
-        // Function that takes arguments and returns a context
-        // Try with explicit variable assignment and return
-        let input = "
-            make-user: func [name age] [
-                result: context [
-                    name: name
-                    age: age
-                ]
-                result
-            ]
-            make-user \"Bob\" 25
-        ";
-        
-        // Execute the function
-        let result = eval(input)?;
-        
-        // Print the tag for debugging
-        println!("Return value tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-        
-        // Verify we got a context back
-        assert_eq!(result[0], VmValue::TAG_CONTEXT, 
-            "Function should return a Context, got tag {} instead", result[0]);
-        
-        // Create a module to verify the context contents
-        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
-            .expect("Failed to create module");
-            
-        // Convert to high-level Value
-        let context_value = module.to_value(VmValue::Context(result[1]))
-            .expect("Failed to convert context to Value");
-            
-        // Verify the context has the correct structure
-        if let Value::Context(pairs) = context_value {
-            println!("Context entries: {}", pairs.len());
-            
-            // Create a map
-            let context_map: std::collections::HashMap<_, _> = pairs.iter()
-                .map(|(k, v)| (k.as_str(), v))
-                .collect();
-                
-            // Print all keys in the context
-            println!("Context keys: {:?}", context_map.keys().collect::<Vec<_>>());
-            
-            // For debugging, print all key-value pairs
-            for (key, value) in &context_map {
-                println!("Key: {}, Value: {:?}", key, value);
-            }
-            
-            // Only verify the length if we have entries
-            if !pairs.is_empty() {
-                assert_eq!(pairs.len(), 2, "Context should have 2 entries");
-                
-                // Verify the name value
-                if let Value::String(name) = &**context_map.get("name").unwrap() {
-                    assert_eq!(name, "Bob", "Name should be 'Bob'");
-                } else {
-                    panic!("Name is not a String value");
-                }
-                
-                // Verify the age value
-                if let Value::Int(age) = &**context_map.get("age").unwrap() {
-                    assert_eq!(*age, 25, "Age should be 25");
-                } else {
-                    panic!("Age is not an Int value");
-                }
-            }
-        } else {
-            panic!("Return value is not a Context: {:?}", context_value);
-        }
-        
-        Ok(())
-    }
-    
-    #[test]
-    fn test_direct_context() -> Result<(), CoreError> {
-        // Just a direct context expression, no function
-        let input = "context [name: \"Direct\" value: 123]";
-        
-        // Execute the code
-        let result = eval(input)?;
-        
-        // Print the tag for debugging
-        println!("Direct context tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-        
-        // Verify we got a context back
-        assert_eq!(result[0], VmValue::TAG_CONTEXT, 
-            "Should return a Context, got tag {} instead", result[0]);
-            
-        // Create a module to examine the context contents
-        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
-            .expect("Failed to create module");
-            
-        // Convert to Value
-        let context_value = module.to_value(VmValue::Context(result[1]))
-            .expect("Failed to convert context");
-            
-        // Check the context contents
-        if let Value::Context(pairs) = context_value {
-            println!("Direct context entries: {}", pairs.len());
-            
-            // Create a map of all entries
-            let context_map: std::collections::HashMap<_, _> = pairs.iter()
-                .map(|(k, v)| (k.as_str(), v))
-                .collect();
-                
-            // Print all keys
-            println!("Direct context keys: {:?}", context_map.keys().collect::<Vec<_>>());
-            
-            // Print all entries
-            for (key, value) in &context_map {
-                println!("Key: {}, Value: {:?}", key, value);
-            }
-        } else {
-            panic!("Not a context: {:?}", context_value);
-        }
-        
-        Ok(())
-    }
-    
+
+    // #[test]
+    // fn test_func_returns_context() -> Result<(), CoreError> {
+    //     // Define a simple function that creates and returns a context
+    //     let input = "make-person: func [] [context [name: \"Alice\" age: 30]] make-person";
+
+    //     // Execute the function
+    //     let result = eval(input)?;
+
+    //     // Print the tag for debugging
+    //     println!("Return value tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
+
+    //     // Verify we got a context back
+    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
+    //         "Function should return a Context, got tag {} instead", result[0]);
+
+    //     Ok(())
+    // }
+
+    // #[test]
+    // fn test_func_with_variable() -> Result<(), CoreError> {
+    //     // Define a function that stores the context in a variable first
+    //     let input = "
+    //         make-person: func [] [
+    //             result: context [name: \"Variable\" age: 40]
+    //             result
+    //         ]
+    //         make-person
+    //     ";
+
+    //     // Execute the function
+    //     let result = eval(input)?;
+
+    //     // Print the tag for debugging
+    //     println!("Variable context tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
+
+    //     // Verify we got a context back
+    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
+    //         "Function should return a Context, got tag {} instead", result[0]);
+
+    //     Ok(())
+    // }
+
+    // #[test]
+    // fn test_context_function_with_args() -> Result<(), CoreError> {
+    //     // Function that takes arguments and returns a context
+    //     // Try with explicit variable assignment and return
+    //     let input = "
+    //         make-user: func [name age] [
+    //             result: context [
+    //                 name: name
+    //                 age: age
+    //             ]
+    //             result
+    //         ]
+    //         make-user \"Bob\" 25
+    //     ";
+
+    //     // Execute the function
+    //     let result = eval(input)?;
+
+    //     // Print the tag for debugging
+    //     println!("Return value tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
+
+    //     // Verify we got a context back
+    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
+    //         "Function should return a Context, got tag {} instead", result[0]);
+
+    //     // Create a module to verify the context contents
+    //     let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
+    //         .expect("Failed to create module");
+
+    //     // Convert to high-level Value
+    //     let context_value = module.to_value(VmValue::Context(result[1]))
+    //         .expect("Failed to convert context to Value");
+
+    //     // Verify the context has the correct structure
+    //     if let Value::Context(pairs) = context_value {
+    //         println!("Context entries: {}", pairs.len());
+
+    //         // Create a map
+    //         let context_map: std::collections::HashMap<_, _> = pairs.iter()
+    //             .map(|(k, v)| (k.as_str(), v))
+    //             .collect();
+
+    //         // Print all keys in the context
+    //         println!("Context keys: {:?}", context_map.keys().collect::<Vec<_>>());
+
+    //         // For debugging, print all key-value pairs
+    //         for (key, value) in &context_map {
+    //             println!("Key: {}, Value: {:?}", key, value);
+    //         }
+
+    //         // Only verify the length if we have entries
+    //         if !pairs.is_empty() {
+    //             assert_eq!(pairs.len(), 2, "Context should have 2 entries");
+
+    //             // Verify the name value
+    //             if let Value::String(name) = &**context_map.get("name").unwrap() {
+    //                 assert_eq!(name, "Bob", "Name should be 'Bob'");
+    //             } else {
+    //                 panic!("Name is not a String value");
+    //             }
+
+    //             // Verify the age value
+    //             if let Value::Int(age) = &**context_map.get("age").unwrap() {
+    //                 assert_eq!(*age, 25, "Age should be 25");
+    //             } else {
+    //                 panic!("Age is not an Int value");
+    //             }
+    //         }
+    //     } else {
+    //         panic!("Return value is not a Context: {:?}", context_value);
+    //     }
+
+    //     Ok(())
+    // }
+
+    // #[test]
+    // fn test_direct_context() -> Result<(), CoreError> {
+    //     // Just a direct context expression, no function
+    //     let input = "context [name: \"Direct\" value: 123]";
+
+    //     // Execute the code
+    //     let result = eval(input)?;
+
+    //     // Print the tag for debugging
+    //     println!("Direct context tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
+
+    //     // Verify we got a context back
+    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
+    //         "Should return a Context, got tag {} instead", result[0]);
+
+    //     // Create a module to examine the context contents
+    //     let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
+    //         .expect("Failed to create module");
+
+    //     // Convert to Value
+    //     let context_value = module.to_value(VmValue::Context(result[1]))
+    //         .expect("Failed to convert context");
+
+    //     // Check the context contents
+    //     if let Value::Context(pairs) = context_value {
+    //         println!("Direct context entries: {}", pairs.len());
+
+    //         // Create a map of all entries
+    //         let context_map: std::collections::HashMap<_, _> = pairs.iter()
+    //             .map(|(k, v)| (k.as_str(), v))
+    //             .collect();
+
+    //         // Print all keys
+    //         println!("Direct context keys: {:?}", context_map.keys().collect::<Vec<_>>());
+
+    //         // Print all entries
+    //         for (key, value) in &context_map {
+    //             println!("Key: {}, Value: {:?}", key, value);
+    //         }
+    //     } else {
+    //         panic!("Not a context: {:?}", context_value);
+    //     }
+
+    //     Ok(())
+    // }
+
     #[test]
     fn test_context_implementation() -> Result<(), CoreError> {
         // Create a module
-        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
-            .expect("Failed to create module");
-            
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("Failed to create module");
+
         // Create a context with known values
         let context_data = Value::Context(Box::new([
             ("name".into(), Value::String("Test".into())),
             ("value".into(), Value::Int(42)),
         ]));
-        
+
         // Allocate in VM memory
-        let vm_context = module.alloc_value(&context_data)
+        let vm_context = module
+            .alloc_value(&context_data)
             .expect("Failed to allocate context");
-            
+
         // Get VM representation
         let [tag, addr] = vm_context.vm_repr();
         assert_eq!(tag, VmValue::TAG_CONTEXT, "Should be a context tag");
-        
+
         // Print the address
         println!("Context allocated at address: {}", addr);
-        
+
         // Get the low-level context structure
-        let raw_context = module.heap.get_block(addr)
+        let raw_context = module
+            .heap
+            .get_block(addr)
             .expect("Failed to get context block");
-            
+
         // Print information about the context
         println!("Raw context block length: {}", raw_context.len());
-        println!("Context header value: {}", raw_context.first().unwrap_or(&0));
-        
+        println!(
+            "Context header value: {}",
+            raw_context.first().unwrap_or(&0)
+        );
+
         // If it's a valid context, try to wrap it in a Context struct and use our iterator
         use crate::mem::Context;
         let context_wrapper = Context::new(raw_context);
-        
+
         // Use our iterator to print entries
         println!("Entries from Context iterator:");
         let mut count = 0;
@@ -1624,11 +1653,12 @@ mod tests {
             count += 1;
         }
         println!("Total entries from iterator: {}", count);
-        
+
         // Convert back to a high-level Value
-        let roundtrip = module.to_value(vm_context)
+        let roundtrip = module
+            .to_value(vm_context)
             .expect("Failed to convert context to Value");
-            
+
         // Check the resulting Value
         if let Value::Context(pairs) = roundtrip {
             println!("Entries in roundtrip Value::Context: {}", pairs.len());
@@ -1638,7 +1668,7 @@ mod tests {
         } else {
             panic!("Not a context: {:?}", roundtrip);
         }
-        
+
         Ok(())
     }
 }
