@@ -66,13 +66,13 @@ where
                 let param = module.get_block::<2>(params, i * 2)?;
                 match param {
                     [VmValue::TAG_WORD, symbol] => {
-                        module.put_context(symbol, [VmValue::TAG_STACK_VALUE, i as Offset])?
+                        module.put_context(symbol, [VmValue::TAG_STACK_VALUE, 2 * i as Offset])?
                     }
                     _ => return None,
                 }
             }
             let ctx = module.pop_context()?;
-            let func = module.alloc([arity, ctx, body])?;
+            let func = module.alloc([arity * 2, ctx, body])?;
             module.push([VmValue::TAG_FUNC, func])
         }
         _ => None,

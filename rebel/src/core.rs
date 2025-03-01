@@ -175,7 +175,10 @@ where
 
     pub fn add_native_fn(&mut self, name: &str, func: NativeFn<T>, arity: u32) -> Option<()> {
         let index = self.functions.len() as u32;
-        self.functions.push(FuncDesc { func, arity });
+        self.functions.push(FuncDesc {
+            func,
+            arity: arity * 2,
+        });
         let symbol = inline_string(name)?;
         let id = self.get_symbols_mut()?.get_or_insert(symbol)?;
         let mut words = self
@@ -613,7 +616,7 @@ where
                     if result[0] == VmValue::TAG_STACK_VALUE {
                         self.base
                             .peek::<1>()
-                            .and_then(|[base]| self.stack.get(base + result[1] * 2))
+                            .and_then(|[base]| self.stack.get(base + result[1]))
                     } else {
                         Some(result)
                     }
@@ -628,12 +631,12 @@ where
             VmValue::TAG_NATIVE_FN => self
                 .module
                 .get_func(value[1])
-                .map(|native| (Op::CALL_NATIVE, native.arity * 2))
+                .map(|native| (Op::CALL_NATIVE, native.arity))
                 .ok_or(CoreError::FunctionNotFound),
             VmValue::TAG_FUNC => self
                 .module
                 .get_array::<1>(value[1])
-                .map(|[arity]| (Op::CALL_FUNC, arity * 2))
+                .map(|[arity]| (Op::CALL_FUNC, arity))
                 .ok_or(CoreError::FunctionNotFound),
             VmValue::TAG_SET_WORD => Ok((Op::SET_WORD, 2)),
             _ => Ok((Op::NONE, 0)),
@@ -653,7 +656,7 @@ where
             Op::CALL_FUNC => self.module.get_array(word).and_then(|[arity, ctx, blk]| {
                 self.env.push([ctx])?;
                 let sp = self.stack.len()?;
-                let bp = sp.checked_sub(arity * 2)?;
+                let bp = sp.checked_sub(arity)?;
                 self.base.push([bp])?;
 
                 self.op_stack.push([
