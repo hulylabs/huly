@@ -932,9 +932,13 @@ pub fn eval(module: &mut Exec<&mut [Word]>) -> Option<[Word; 2]> {
     module.eval()
 }
 
-pub fn next_op(module: &mut Exec<&mut [Word]>) -> Option<(Word, Word)> {
-    module.next_op()
-}
+// pub fn next_op(module: &mut Exec<&mut [Word]>) -> Option<(Word, Word)> {
+//     module.next_op()
+// }
+
+// pub fn do_op(module: &mut Exec<&mut [Word]>, op: Word, word: Word) -> Option<()> {
+//     module.do_op(op, word)
+// }
 
 //
 
