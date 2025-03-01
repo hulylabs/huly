@@ -832,47 +832,61 @@ mod tests {
     /// entries in a Context without manually handling hash table lookups.
     #[test]
     fn test_context_transform() -> Result<(), CoreError> {
-        // This test demonstrates how we can use the new Context iterator to
-        // efficiently work with context values, by creating a context, 
-        // iterating through it, and verifying the results.
+        // This test demonstrates creating and manipulating a context in VM memory
+        // using the new Context iterator functionality
         
-        // Initialize a new module 
+        // Initialize a new module with plenty of memory
         let mut module =
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
-            
-        // Create a test context value using the rebel! macro
+        
+        // Create a test context directly using the rebel! macro
+        // This is a more reliable approach while we test the Context iterator functionality
         let test_context = rebel!({
             name => "John Doe",
             age => 42,
             active => true
         });
-            
-        // Allocate the context in the VM
-        let vm_context = module.alloc_value(&test_context)
+        
+        // Allocate the context in VM memory
+        let vm_value = module.alloc_value(&test_context)
             .expect("Failed to allocate test context");
-            
-        // Create a tag and data for the VM representation
-        let [tag, addr] = vm_context.vm_repr();
-            
-        // Store it at a known location
-        let context_addr = module.heap
-            .alloc([tag, addr])
-            .expect("Failed to store context");
-            
-        // Now read back the value
-        let roundtrip_context = module.read_value(context_addr)
-            .expect("Failed to read context value");
-            
-        // Verify it's a context
-        assert!(matches!(roundtrip_context, Value::Context(_)), 
-            "Value should be a context, got: {:?}", roundtrip_context);
-            
-        // Verify the contents
-        if let Value::Context(pairs) = roundtrip_context {
+        
+        // Now let's create a function that directly returns this context
+        // We'll allocate the context first, then create a block that returns it
+        let [tag, context_addr] = vm_value.vm_repr();
+        
+        // Create a block that simply returns the context value
+        let mut block_data = Vec::new();
+        block_data.push(tag);
+        block_data.push(context_addr);
+        
+        // Allocate the block in memory
+        let block_addr = module.heap.alloc_block(&block_data)
+            .expect("Failed to allocate block");
+        
+        // Now execute this block, which should return our context
+        let [result_tag, result_addr] = module.eval(block_addr)
+            .expect("Failed to execute block");
+        
+        // Verify that we got a context back
+        assert_eq!(result_tag, VmValue::TAG_CONTEXT, "Result should be a Context");
+        assert_eq!(result_addr, context_addr, "Context address should match");
+        
+        // Now convert the VM value back to a high-level Value type
+        let result_context = module.to_value(VmValue::Context(result_addr))
+            .expect("Failed to convert context");
+        
+        // Verify we got a context
+        assert!(matches!(result_context, Value::Context(_)), 
+            "Result should be a context, got: {:?}", result_context);
+        
+        // Verify the contents using the Context iterator
+        if let Value::Context(pairs) = result_context {
             // The context should have 3 specific entries
             assert_eq!(pairs.len(), 3, "Context should have 3 entries");
             
-            // Create a more idiomatic verification using a HashMap
+            // Use the iterator to efficiently check all entries
+            // First create a HashMap for easier verification
             let context_map: std::collections::HashMap<_, _> = pairs.iter()
                 .map(|(k, v)| (k.as_str(), v))
                 .collect();
@@ -901,16 +915,153 @@ mod tests {
             } else {
                 panic!("Active is not an integer value");
             }
-                       
-            // Or you can use direct iteration with the Context iterator
-            // to display more clearly how it works
-            println!("Context entries:");
-            for (key, value) in pairs.iter() {
-                println!("  {} => {:?}", key, value);
+            
+            // Demonstrate the power of the new Context iterator
+            // by transforming the context data
+            println!("Context entries from function execution:");
+            
+            // Create a transformed copy using iterator methods
+            let transformed_entries: Vec<_> = pairs.iter()
+                .map(|(key, value)| {
+                    let formatted_value = match value {
+                        Value::String(s) => format!("\"{}\"", s),
+                        Value::Int(n) => format!("{}", n),
+                        _ => format!("{:?}", value)
+                    };
+                    
+                    format!("{}: {}", key, formatted_value)
+                })
+                .collect();
+                
+            // Print the formatted output
+            for entry in &transformed_entries {
+                println!("  {}", entry);
             }
             
+            // We could also find specific entries or filter
+            let age_entry = pairs.iter()
+                .find(|(key, _)| key == "age")
+                .expect("Age entry not found");
+                
+            assert_eq!(age_entry.0, "age", "Key should be 'age'");
+            assert!(matches!(age_entry.1, Value::Int(42)), "Age should be 42");
+            
         } else {
-            panic!("Result is not a context: {:?}", roundtrip_context);
+            panic!("Result is not a context: {:?}", result_context);
+        }
+        
+        // Now let's try a more complex case with nested contexts
+        // We'll create a more complex context with nested contexts inside
+        let complex_context = rebel!({
+            profile => {
+                name => "Jane Smith",
+                age => 35
+            },
+            settings => {
+                theme => "dark",
+                notifications => true
+            },
+            created => 12345
+        });
+        
+        // Allocate the complex context in VM memory
+        let vm_complex = module.alloc_value(&complex_context)
+            .expect("Failed to allocate complex context");
+        let [complex_tag, complex_addr] = vm_complex.vm_repr();
+        
+        // Create a block that returns the complex context
+        let complex_block_data = vec![complex_tag, complex_addr];
+        let complex_block_addr = module.heap.alloc_block(&complex_block_data)
+            .expect("Failed to allocate complex block");
+        
+        // Execute the block
+        let [complex_result_tag, complex_result_addr] = module.eval(complex_block_addr)
+            .expect("Failed to execute complex block");
+        
+        // Verify we got a context back
+        assert_eq!(complex_result_tag, VmValue::TAG_CONTEXT, "Complex result should be a Context");
+        
+        // Convert to Value type
+        let complex_result_value = module.to_value(VmValue::Context(complex_result_addr))
+            .expect("Failed to convert complex context");
+        
+        // Verify the structure
+        if let Value::Context(outer_pairs) = complex_result_value {
+            // The outer context should have 3 entries
+            assert_eq!(outer_pairs.len(), 3, "Outer context should have 3 entries");
+            
+            // Create a map for easier verification
+            let outer_map: std::collections::HashMap<_, _> = outer_pairs.iter()
+                .map(|(k, v)| (k.as_str(), v))
+                .collect();
+                
+            // Verify the outer context keys
+            assert!(outer_map.contains_key("profile"), "profile key not found");
+            assert!(outer_map.contains_key("settings"), "settings key not found");
+            assert!(outer_map.contains_key("created"), "created key not found");
+            
+            // Verify the created timestamp
+            if let Value::Int(timestamp) = &**outer_map.get("created").unwrap() {
+                assert_eq!(*timestamp, 12345, "timestamp value mismatch");
+            } else {
+                panic!("created is not an integer value");
+            }
+            
+            // Verify the profile is a nested context
+            if let Value::Context(profile_pairs) = &**outer_map.get("profile").unwrap() {
+                // Verify profile contents
+                let profile_map: std::collections::HashMap<_, _> = profile_pairs.iter()
+                    .map(|(k, v)| (k.as_str(), v))
+                    .collect();
+                    
+                // Verify expected keys exist
+                assert!(profile_map.contains_key("name"), "name key not found in profile");
+                assert!(profile_map.contains_key("age"), "age key not found in profile");
+                
+                // Verify values
+                if let Value::String(name) = &**profile_map.get("name").unwrap() {
+                    assert_eq!(name, "Jane Smith", "Profile name value mismatch");
+                } else {
+                    panic!("Profile name is not a string value");
+                }
+                
+                if let Value::Int(age) = &**profile_map.get("age").unwrap() {
+                    assert_eq!(*age, 35, "Profile age value mismatch");
+                } else {
+                    panic!("Profile age is not an integer value");
+                }
+            } else {
+                panic!("profile is not a context");
+            }
+            
+            // Verify the settings is a nested context
+            if let Value::Context(settings_pairs) = &**outer_map.get("settings").unwrap() {
+                // Verify settings contents
+                let settings_map: std::collections::HashMap<_, _> = settings_pairs.iter()
+                    .map(|(k, v)| (k.as_str(), v))
+                    .collect();
+                    
+                // Verify expected keys exist
+                assert!(settings_map.contains_key("theme"), "theme key not found in settings");
+                assert!(settings_map.contains_key("notifications"), "notifications key not found in settings");
+                
+                // Verify values
+                if let Value::String(theme) = &**settings_map.get("theme").unwrap() {
+                    assert_eq!(theme, "dark", "Settings theme value mismatch");
+                } else {
+                    panic!("Settings theme is not a string value");
+                }
+                
+                if let Value::Int(notifications) = &**settings_map.get("notifications").unwrap() {
+                    assert_eq!(*notifications, 1, "Settings notifications value mismatch");
+                } else {
+                    panic!("Settings notifications is not an integer value");
+                }
+            } else {
+                panic!("settings is not a context");
+            }
+        } else {
+            panic!("Complex result is not a context: {:?}", complex_result_value);
         }
         
         Ok(())
