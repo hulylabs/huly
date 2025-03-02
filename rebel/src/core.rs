@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::boot::core_package;
-use crate::mem::{Context, Heap, Offset, Stack, Symbol, SymbolTable, Word};
+use crate::mem::{Context, Heap, Offset, Stack, Symbol, SymbolId, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use crate::value::Value;
 use smol_str::SmolStr;
@@ -51,8 +51,8 @@ pub enum VmValue {
     String(Offset),
     Block(Offset),
     Context(Offset),
-    Word(Symbol),
-    SetWord(Symbol),
+    Word(SymbolId),
+    SetWord(SymbolId),
 }
 
 impl VmValue {
@@ -103,22 +103,6 @@ impl VmValue {
             VmValue::Block(offset) => [Self::TAG_BLOCK, *offset],
             VmValue::Context(offset) => [Self::TAG_CONTEXT, *offset],
         }
-    }
-}
-
-fn inline_string(string: &str) -> Option<[u32; 8]> {
-    let bytes = string.as_bytes();
-    let len = bytes.len();
-    if len < 32 {
-        let mut buf = [0; 8];
-        buf[0] = len as u32;
-        for (i, byte) in bytes.iter().enumerate() {
-            let j = i + 1;
-            buf[j / 4] |= (*byte as u32) << ((j % 4) * 8);
-        }
-        Some(buf)
-    } else {
-        None
     }
 }
 
@@ -179,7 +163,7 @@ where
             func,
             arity: arity * 2,
         });
-        let symbol = inline_string(name)?;
+        let symbol = Symbol::from(name)?;
         let id = self.get_symbols_mut()?.get_or_insert(symbol)?;
         let mut words = self
             .heap
@@ -263,8 +247,7 @@ where
     }
 
     pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Option<Offset> {
-        self.get_symbols_mut()?
-            .get_or_insert(inline_string(symbol)?)
+        self.get_symbols_mut()?.get_or_insert(Symbol::from(symbol)?)
     }
 
     pub fn alloc_value(&mut self, value: &Value) -> Option<VmValue> {
@@ -323,7 +306,7 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get_symbol(&self, symbol: Symbol) -> Option<SmolStr> {
+    pub fn get_symbol(&self, symbol: SymbolId) -> Option<SmolStr> {
         let addr = self.heap.get::<1>(Self::SYMBOLS).map(|[addr]| addr)?;
         let symbol_table = self.heap.get_block(addr).map(SymbolTable::new)?;
         let inlined = symbol_table.get(symbol)?;
@@ -523,7 +506,7 @@ where
         self.module.heap.get_block(block).map(|block| block.len())
     }
 
-    pub fn find_word(&self, symbol: Symbol) -> Option<[Word; 2]> {
+    pub fn find_word(&self, symbol: SymbolId) -> Option<[Word; 2]> {
         let [ctx] = self.env.peek()?;
         let context = self.module.heap.get_block(ctx).map(Context::new)?;
         let result = context.get(symbol);
@@ -591,7 +574,7 @@ where
         self.module.heap.alloc(values)
     }
 
-    pub fn put_context(&mut self, symbol: Symbol, value: [Word; 2]) -> Option<()> {
+    pub fn put_context(&mut self, symbol: SymbolId, value: [Word; 2]) -> Option<()> {
         let [ctx] = self.env.peek()?;
         self.module
             .heap

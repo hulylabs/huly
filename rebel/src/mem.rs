@@ -5,7 +5,7 @@ use crate::hash::hash_u32x8;
 
 pub type Word = u32;
 pub type Offset = Word;
-pub type Symbol = Offset;
+pub type SymbolId = Offset;
 
 // O P S
 
@@ -289,6 +289,27 @@ where
 
 // S Y M B O L   T A B L E
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Symbol([u32; 8]);
+
+impl Symbol {
+    pub fn from(string: &str) -> Option<Self> {
+        let bytes = string.as_bytes();
+        let len = bytes.len();
+        if len < 32 {
+            let mut buf = [0; 8];
+            buf[0] = len as u32;
+            for (i, byte) in bytes.iter().enumerate() {
+                let j = i + 1;
+                buf[j / 4] |= (*byte as u32) << ((j % 4) * 8);
+            }
+            Some(Symbol(buf))
+        } else {
+            None
+        }
+    }
+}
+
 /// Symbol table for storing and retrieving symbols
 /// Symbols are [u32; 8] values stored starting at symbol_table.len() / 9 offset
 /// First symbol_table.len() / 9 words is lookup table for symbol values
@@ -304,7 +325,7 @@ impl<T> SymbolTable<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get(&self, symbol: Symbol) -> Option<[u32; 8]> {
+    pub fn get(&self, symbol: SymbolId) -> Option<Symbol> {
         // Symbol IDs start at 1, so return None for symbol 0
         if symbol == 0 {
             return None;
@@ -327,6 +348,7 @@ where
 
         data.get(offset..offset + 8)
             .and_then(|bytes| bytes.try_into().ok())
+            .map(Symbol)
     }
 }
 
@@ -338,7 +360,7 @@ where
         self.0.init(0)
     }
 
-    pub fn get_or_insert(&mut self, sym: [u32; 8]) -> Option<Symbol> {
+    pub fn get_or_insert(&mut self, sym: Symbol) -> Option<SymbolId> {
         let (count, data) = self.0.split_first_mut()?;
 
         let symbols = data.len() / 9;
@@ -346,7 +368,7 @@ where
             return None;
         }
 
-        let h = hash_u32x8(sym) as usize;
+        let h = hash_u32x8(sym.0) as usize;
         let mut index = h % symbols;
         let mut probe = 0;
 
@@ -365,7 +387,7 @@ where
 
                 let offset = symbols + (pos - 1) as usize * 8;
                 let value = data.get_mut(offset..offset + 8)?;
-                value.iter_mut().zip(sym.iter()).for_each(|(dst, src)| {
+                value.iter_mut().zip(sym.0.iter()).for_each(|(dst, src)| {
                     *dst = *src;
                 });
                 return Some(pos);
@@ -374,7 +396,7 @@ where
                 let value = data.get_mut(offset..offset + 8)?;
 
                 // Fix for clippy::op_ref
-                if value == sym {
+                if value == sym.0 {
                     return Some(pos);
                 }
             }
@@ -438,7 +460,7 @@ impl<T> Iterator for ContextIterator<'_, T>
 where
     T: AsRef<[Word]>,
 {
-    type Item = (Symbol, [Word; 2]);
+    type Item = (SymbolId, [Word; 2]);
 
     fn next(&mut self) -> Option<Self::Item> {
         // Early return if we've found all entries or exhausted the capacity
@@ -471,7 +493,7 @@ impl<'a, T> IntoIterator for &'a Context<T>
 where
     T: AsRef<[Word]>,
 {
-    type Item = (Symbol, [Word; 2]);
+    type Item = (SymbolId, [Word; 2]);
     type IntoIter = ContextIterator<'a, T>;
 
     fn into_iter(self) -> Self::IntoIter {
@@ -555,7 +577,7 @@ where
     }
 
     /// Get a value for a given symbol
-    pub fn get(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
+    pub fn get(&self, symbol: SymbolId) -> Result<[Word; 2], CoreError> {
         let (_, data) = self.0.split_first().ok_or(CoreError::BoundsCheckFailed)?;
 
         let capacity = data.len() / Self::ENTRY_SIZE;
@@ -606,7 +628,7 @@ where
     /// 1. The symbol ID (0 if the slot is empty)
     /// 2. The first word of the value
     /// 3. The second word of the value
-    fn get_entry_at(&self, index: usize) -> Option<(Symbol, [Word; 2])> {
+    fn get_entry_at(&self, index: usize) -> Option<(SymbolId, [Word; 2])> {
         let (_, data) = self.0.split_first()?;
 
         let capacity = data.len() / Self::ENTRY_SIZE;
@@ -642,7 +664,7 @@ where
         self.0.init(0)
     }
 
-    pub fn put(&mut self, symbol: Symbol, value: [Word; 2]) -> Option<()> {
+    pub fn put(&mut self, symbol: SymbolId, value: [Word; 2]) -> Option<()> {
         let (count, data) = self.0.split_first_mut()?;
 
         let capacity = data.len() / Self::ENTRY_SIZE;
@@ -886,7 +908,7 @@ mod tests {
         table.init().expect("Failed to initialize symbol table");
 
         // Insert a new symbol
-        let sym1 = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        let sym1 = Symbol([1u32, 2, 3, 4, 5, 6, 7, 8]);
         let symbol1 = table.get_or_insert(sym1).expect("Failed to insert symbol");
 
         // Verify we can retrieve it
@@ -897,7 +919,7 @@ mod tests {
         );
 
         // Insert another symbol
-        let sym2 = [10u32, 20, 30, 40, 50, 60, 70, 80];
+        let sym2 = Symbol([10u32, 20, 30, 40, 50, 60, 70, 80]);
         let symbol2 = table
             .get_or_insert(sym2)
             .expect("Failed to insert second symbol");
@@ -937,7 +959,7 @@ mod tests {
 
         // Create and insert 8 different symbols
         for i in 0..8 {
-            let sym = [i + 1, i + 2, i + 3, i + 4, i + 5, i + 6, i + 7, i + 8];
+            let sym = Symbol([i + 1, i + 2, i + 3, i + 4, i + 5, i + 6, i + 7, i + 8]);
             symbols.push(sym);
             let id = table.get_or_insert(sym).expect("Failed to insert symbol");
             symbol_ids.push(id);
@@ -992,7 +1014,7 @@ mod tests {
             .init()
             .expect("Failed to initialize small table");
 
-        let sym = [1u32, 2, 3, 4, 5, 6, 7, 8];
+        let sym = Symbol([1u32, 2, 3, 4, 5, 6, 7, 8]);
         assert!(
             small_table.get_or_insert(sym).is_none(),
             "Inserting into table without enough space should return None"
