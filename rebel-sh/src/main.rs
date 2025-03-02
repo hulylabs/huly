@@ -2,7 +2,7 @@
 
 use anyhow::Result;
 use colored::*;
-use rebel::core::Module;
+use rebel::core::{Module, VmValue};
 use rustyline::{error::ReadlineError, DefaultEditor};
 
 fn main() -> Result<()> {
@@ -32,18 +32,19 @@ fn main() -> Result<()> {
                     break;
                 }
 
-                match module.parse(line.as_str()) {
-                    Ok(block) => match module.eval(block) {
-                        Ok(result) => {
-                            println!("{}: {:?}", "OK".green(), result)
-                        }
-                        Err(e) => eprintln!("{} {}", "ERROR:".red().bold(), e),
-                    },
-                    Err(err) => eprintln!("{}: {}", "PARSE:".cyan().bold(), err),
+                let result = module
+                    .parse(line.as_str())
+                    .and_then(|block| module.eval(block))
+                    .and_then(|result| VmValue::from_tag_data(result[0], result[1]))
+                    .and_then(|result| module.to_value(result));
+
+                match result {
+                    Ok(value) => println!("{} {}", "OK:".green(), value),
+                    Err(e) => eprintln!("{} {}", "ERROR:".red().bold(), e),
                 }
             }
             Err(ReadlineError::Interrupted) => {
-                println!("CTRL-C");
+                println!("Ctrl-C");
                 continue;
             }
             Err(ReadlineError::Eof) => {
@@ -51,7 +52,7 @@ fn main() -> Result<()> {
                 break;
             }
             Err(err) => {
-                println!("Error: {:?}", err);
+                println!("{}", err);
                 break;
             }
         }
