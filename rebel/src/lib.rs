@@ -4,6 +4,7 @@ pub mod boot;
 pub mod collector;
 pub mod core;
 pub mod encoding;
+pub mod fs;
 mod hash;
 pub mod mem;
 pub mod parse;

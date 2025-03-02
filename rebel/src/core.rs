@@ -543,6 +543,10 @@ where
         self.env.pop().map(|[addr]| addr)
     }
 
+    pub fn alloc_value(&mut self, value: &Value) -> Result<VmValue, MemoryError> {
+        self.module.alloc_value(value)
+    }
+
     fn resolve(&self, value: MemValue) -> Result<MemValue, MemoryError> {
         match value[0] {
             VmValue::TAG_WORD => self.find_word(value[1]).and_then(|result| {
