@@ -310,10 +310,7 @@ where
         let addr = self.heap.get::<1>(Self::SYMBOLS).map(|[addr]| addr)?;
         let symbol_table = self.heap.get_block(addr).map(SymbolTable::new)?;
         let inlined = symbol_table.get(symbol)?;
-        let bytes: [u8; 32] = unsafe { std::mem::transmute(inlined) };
-        let len = bytes[0] as usize;
-        let str = unsafe { std::str::from_utf8_unchecked(&bytes[1..=len]) };
-        Some(str.into())
+        Some(inlined.to_string())
     }
 
     pub fn to_value(&self, vm_value: VmValue) -> Option<Value> {

@@ -1,5 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
+use smol_str::SmolStr;
+
 use crate::core::CoreError;
 use crate::hash::hash_u32x8;
 
@@ -307,6 +309,13 @@ impl Symbol {
         } else {
             None
         }
+    }
+
+    pub fn to_string(&self) -> SmolStr {
+        let bytes: [u8; 32] = unsafe { std::mem::transmute(self.0) };
+        let len = bytes[0] as usize;
+        let str = unsafe { std::str::from_utf8_unchecked(&bytes[1..=len]) };
+        str.into()
     }
 }
 
