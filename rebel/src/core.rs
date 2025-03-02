@@ -33,6 +33,10 @@ pub enum CoreError {
     MemoryError(#[from] MemoryError),
     #[error(transparent)]
     Utf8Error(#[from] std::string::FromUtf8Error),
+    #[error(transparent)]
+    IoError(#[from] std::io::Error),
+    #[error(transparent)]
+    AnyError(#[from] anyhow::Error),
 }
 
 // V M  V A L U E
