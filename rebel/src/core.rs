@@ -503,40 +503,34 @@ where
         self.module.heap.get_block(block).map(|block| block.len())
     }
 
-    pub fn find_word(&self, symbol: SymbolId) -> Option<[Word; 2]> {
-        let [ctx] = self.env.peek()?;
-        let context = self.module.heap.get_block(ctx).map(Context::new)?;
+    pub fn find_word(&self, symbol: SymbolId) -> Result<MemValue, CoreError> {
+        let [ctx] = self.env.peek().ok_or(CoreError::StackUnderflow)?;
+        let context = self
+            .module
+            .heap
+            .get_block(ctx)
+            .map(Context::new)
+            .ok_or(CoreError::InternalError)?;
         let result = context.get(symbol);
         match result {
             Err(CoreError::WordNotFound) => {
                 if ctx != self.module.system_words {
-                    self.module.get_system_words()?.get(symbol).ok()
+                    let system_words = self
+                        .module
+                        .get_system_words()
+                        .ok_or(CoreError::InternalError)?;
+                    system_words.get(symbol)
                 } else {
-                    result.ok()
+                    result
                 }
             }
-            _ => result.ok(),
+            _ => result,
         }
     }
 
     pub fn to_value(&self, vm_value: VmValue) -> Option<Value> {
         self.module.to_value(vm_value)
     }
-
-    // fn find_word(&self, symbol: Symbol) -> Result<[Word; 2], CoreError> {
-    //     let envs = self.envs.peek_all(0)?;
-
-    //     for &addr in envs.iter().rev() {
-    //         let context = self.module.heap.get_block(addr).map(Context::new)?;
-    //         match context.get(symbol) {
-    //             Ok(result) => return Ok(result),
-    //             Err(CoreError::WordNotFound) => continue,
-    //             Err(err) => return Err(err),
-    //         }
-    //     }
-
-    //     Err(CoreError::WordNotFound)
-    // }
 }
 
 impl<'a, T> Exec<'a, T>
@@ -590,18 +584,16 @@ where
 
     fn resolve(&self, value: MemValue) -> Result<MemValue, CoreError> {
         match value[0] {
-            VmValue::TAG_WORD => self
-                .find_word(value[1])
-                .and_then(|result| {
-                    if result[0] == VmValue::TAG_STACK_VALUE {
-                        self.base
-                            .peek::<1>()
-                            .and_then(|[base]| self.stack.get(base + result[1]))
-                    } else {
-                        Some(result)
-                    }
-                })
-                .ok_or(CoreError::WordNotFound),
+            VmValue::TAG_WORD => self.find_word(value[1]).and_then(|result| {
+                if result[0] == VmValue::TAG_STACK_VALUE {
+                    self.base
+                        .peek::<1>()
+                        .and_then(|[base]| self.stack.get(base + result[1]))
+                        .ok_or(CoreError::StackUnderflow)
+                } else {
+                    Ok(result)
+                }
+            }),
             _ => Ok(value),
         }
     }
