@@ -285,7 +285,7 @@ where
         })
     }
 
-    pub fn peek_all(&mut self, offset: Offset) -> Option<&[Word]> {
+    pub fn peek_all(&self, offset: Offset) -> Option<&[Word]> {
         self.0.split_first().and_then(|(len, data)| {
             len.checked_sub(offset).and_then(|size| {
                 let addr = offset as usize;

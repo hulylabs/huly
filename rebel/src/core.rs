@@ -203,10 +203,6 @@ where
             })
             .and_then(|value| value.try_into().map_err(Into::into))
     }
-
-    pub fn get_system_words(&self) -> Result<Context<&[u32]>, MemoryError> {
-        self.heap.get_block(self.system_words).map(Context::new)
-    }
 }
 
 impl<T> Module<T>
@@ -481,21 +477,19 @@ where
         self.module.heap.get_block(block).map(|block| block.len())
     }
 
-    pub fn find_word(&self, symbol: SymbolId) -> Result<MemValue, MemoryError> {
-        let [ctx] = self.env.peek().ok_or(MemoryError::StackUnderflow)?;
-        let context = self.module.heap.get_block(ctx).map(Context::new)?;
-        let result = context.get(symbol);
-        match result {
-            Err(MemoryError::WordNotFound) => {
-                if ctx != self.module.system_words {
-                    let system_words = self.module.get_system_words()?;
-                    system_words.get(symbol)
-                } else {
-                    result.map_err(Into::into)
-                }
+    fn find_word(&self, symbol: SymbolId) -> Result<MemValue, MemoryError> {
+        let envs = self.env.peek_all(0).ok_or(MemoryError::StackUnderflow)?;
+
+        for &addr in envs.iter().rev() {
+            let context = self.module.heap.get_block(addr).map(Context::new)?;
+            match context.get(symbol) {
+                Ok(result) => return Ok(result),
+                Err(MemoryError::WordNotFound) => continue,
+                Err(err) => return Err(err),
             }
-            _ => result.map_err(Into::into),
         }
+
+        Err(MemoryError::WordNotFound)
     }
 
     pub fn to_value(&self, vm_value: VmValue) -> Result<Value, CoreError> {
@@ -892,6 +886,8 @@ pub fn eval(module: &mut Exec<&mut [Word]>) -> Result<[Word; 2], CoreError> {
 
 #[cfg(test)]
 mod tests {
+    use std::result;
+
     use super::*;
     use crate::rebel;
     use crate::value::Value;
@@ -1465,9 +1461,52 @@ mod tests {
 
     #[test]
     fn test_context_0() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
         let input = "context [x: 8]";
-        let result = eval(input)?;
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+
         assert_eq!(VmValue::TAG_CONTEXT, result[0]);
+
+        let value = module.to_value(VmValue::from_tag_data(result[0], result[1])?)?;
+
+        if let Value::Context(pairs) = value {
+            assert_eq!(pairs.len(), 1);
+            assert_eq!(pairs[0].0, "x");
+            assert_eq!(pairs[0].1, 8.into());
+        } else {
+            panic!("Result should be a context");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_context_1() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input =
+            "make-person: func [name age] [context [name: name age: age]] make-person \"Alice\" 30";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+
+        assert_eq!(VmValue::TAG_CONTEXT, result[0]);
+
+        let value = module.to_value(VmValue::from_tag_data(result[0], result[1])?)?;
+
+        if let Value::Context(pairs) = value {
+            assert_eq!(pairs.len(), 2);
+            assert_eq!(pairs[0].0, "name");
+            assert_eq!(pairs[0].1, "Alice".into());
+            assert_eq!(pairs[1].0, "age");
+            assert_eq!(pairs[1].1, 30.into());
+        } else {
+            panic!("Result should be a context");
+        }
+
         Ok(())
     }
 
