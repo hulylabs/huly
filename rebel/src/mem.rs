@@ -13,25 +13,25 @@ pub type SymbolId = Offset;
 
 #[derive(Debug, Error)]
 pub enum MemoryError {
-    #[error("Unexpected error")]
+    #[error("unexpected error")]
     UnexpectedError,
-    #[error("Word not found")]
+    #[error("word not found")]
     WordNotFound,
-    #[error("Stack underflow")]
+    #[error("stack underflow")]
     StackUnderflow,
-    #[error("Stack overflow")]
+    #[error("stack overflow")]
     StackOverflow,
-    #[error("Out of memory")]
+    #[error("out of memory")]
     OutOfMemory,
-    #[error("Out of bounds")]
+    #[error("out of bounds")]
     OutOfBounds,
-    #[error("Symbol not found")]
+    #[error("symbol not found")]
     SymbolNotFound,
-    #[error("Symbol table full")]
+    #[error("symbol table full")]
     SymbolTableFull,
-    #[error("Bad symbol")]
+    #[error("bad symbol")]
     BadSymbol,
-    #[error("String too long")]
+    #[error("string too long")]
     StringTooLong,
     #[error(transparent)]
     TryFromSliceError(#[from] std::array::TryFromSliceError),

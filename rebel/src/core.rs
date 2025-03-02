@@ -13,6 +13,8 @@ pub enum CoreError {
     InternalError,
     #[error("end of input")]
     EndOfInput,
+    #[error("unexpected end of block")]
+    UnexpectedEndOfBlock,
     #[error("function not found")]
     FunctionNotFound,
     #[error("string too long")]
@@ -579,11 +581,10 @@ where
 
     fn do_op(&mut self, op: Word, word: Word) -> Result<(), CoreError> {
         match op {
-            Op::SET_WORD => self
-                .stack
-                .pop()
-                .and_then(|value| self.put_context(word, value))
-                .map_err(Into::into),
+            Op::SET_WORD => {
+                let value = self.stack.peek().ok_or(MemoryError::StackUnderflow)?;
+                self.put_context(word, value).map_err(Into::into)
+            }
             Op::CALL_NATIVE => {
                 let native_fn = self.module.get_func(word)?;
                 (native_fn.func)(self)
@@ -649,7 +650,7 @@ where
                 let [op, block, bp, ip] = self.op_stack.pop()?;
 
                 if op != Op::LEAVE_FUNC && op != Op::LEAVE_BLOCK {
-                    return Err(CoreError::InternalError);
+                    return Err(CoreError::UnexpectedEndOfBlock);
                 }
 
                 let cut = if op == Op::LEAVE_FUNC {
