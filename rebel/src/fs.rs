@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{CoreError, Exec, Module, VmValue};
+use crate::core::{CoreError, Exec, Module};
 use crate::mem::Word;
 use crate::value::Value;
 use std::fs;
@@ -11,23 +11,11 @@ fn get_string_arg<T>(module: &mut Exec<T>) -> Result<String, CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    let [tag, data] = module.pop()?;
-    let vm_value = VmValue::from_tag_data(tag, data)?;
-    let value = module.to_value(vm_value)?;
-
+    let value = module.pop_to_value()?;
     match value {
         Value::String(s) => Ok(s.to_string()),
         _ => Err(CoreError::BadArguments),
     }
-}
-
-/// Helper function to push a Value onto the stack
-fn push_value<T>(module: &mut Exec<T>, value: Value) -> Result<(), CoreError>
-where
-    T: AsRef<[Word]> + AsMut<[Word]>,
-{
-    let vm_value = module.alloc_value(&value)?;
-    module.push(vm_value.vm_repr()).map_err(Into::into)
 }
 
 /// List files in the current directory
@@ -79,7 +67,8 @@ where
         .collect::<Vec<_>>();
 
     // Create a block containing all file contexts and push it onto the stack
-    push_value(module, Value::block(files))
+    let vm_value = module.alloc_value(&Value::block(files))?;
+    module.push_value(vm_value).map_err(Into::into)
 }
 
 /// Print the current working directory
@@ -100,7 +89,8 @@ where
     };
 
     // Create a string value and push it onto the stack
-    push_value(module, Value::string(cwd_str))
+    let vm_value = module.alloc_value(&Value::string(cwd_str))?;
+    module.push_value(vm_value).map_err(Into::into)
 }
 
 /// Change the current working directory
@@ -135,7 +125,8 @@ where
     };
 
     // Create a string value and push it onto the stack
-    push_value(module, Value::string(contents))
+    let vm_value = module.alloc_value(&Value::string(contents))?;
+    module.push_value(vm_value).map_err(Into::into)
 }
 
 /// Create a new directory
@@ -152,7 +143,8 @@ where
     }
 
     // Return a boolean value (true for success)
-    push_value(module, Value::boolean(true))
+    let vm_value = module.alloc_value(&Value::boolean(true))?;
+    module.push_value(vm_value).map_err(Into::into)
 }
 
 /// Remove a file or directory
@@ -181,7 +173,8 @@ where
     }
 
     // Return a boolean value (true for success)
-    push_value(module, Value::boolean(true))
+    let vm_value = module.alloc_value(&Value::boolean(true))?;
+    module.push_value(vm_value).map_err(Into::into)
 }
 
 /// Register all filesystem functions

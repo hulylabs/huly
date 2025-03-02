@@ -72,8 +72,8 @@ impl VmValue {
     /// * `data` - The data word associated with the tag
     ///
     /// # Returns
-    /// * `Some(VmValue)` - The constructed VmValue if the tag is recognized
-    /// * `None` - If the tag is not recognized
+    /// * `Ok(VmValue)` - The constructed VmValue if the tag is recognized
+    /// * `Err(CoreError)` - If the tag is not recognized
     pub fn from_tag_data(tag: Word, data: Word) -> Result<Self, CoreError> {
         match tag {
             Self::TAG_NONE => Ok(VmValue::None),
@@ -97,6 +97,23 @@ impl VmValue {
             VmValue::Block(offset) => [Self::TAG_BLOCK, *offset],
             VmValue::Context(offset) => [Self::TAG_CONTEXT, *offset],
         }
+    }
+}
+
+// Implement TryFrom for VmValue to allow more ergonomic conversion from [Word; 2]
+impl TryFrom<[Word; 2]> for VmValue {
+    type Error = CoreError;
+
+    fn try_from(value: [Word; 2]) -> Result<Self, Self::Error> {
+        let [tag, data] = value;
+        VmValue::from_tag_data(tag, data)
+    }
+}
+
+// Implement From for [Word; 2] to allow easy conversion from VmValue
+impl From<VmValue> for [Word; 2] {
+    fn from(value: VmValue) -> Self {
+        value.vm_repr()
     }
 }
 
@@ -505,8 +522,25 @@ where
         self.stack.pop()
     }
 
+    /// Pop a value from the stack and convert it to a VmValue
+    pub fn pop_value(&mut self) -> Result<VmValue, CoreError> {
+        let words = self.pop::<2>()?;
+        words.try_into()
+    }
+
+    /// Pop a value from the stack and convert it directly to a high-level Value
+    pub fn pop_to_value(&mut self) -> Result<Value, CoreError> {
+        let vm_value = self.pop_value()?;
+        self.to_value(vm_value)
+    }
+
     pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Result<(), MemoryError> {
         self.stack.push(value)
+    }
+
+    /// Push a VmValue onto the stack
+    pub fn push_value(&mut self, value: VmValue) -> Result<(), MemoryError> {
+        self.push(value.into())
     }
 
     pub fn jmp(&mut self, block: Offset) -> Result<(), CoreError> {

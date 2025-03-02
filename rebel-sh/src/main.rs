@@ -74,8 +74,8 @@ fn execute_command(module: &mut Module<Box<[u32]>>, command: &str) -> Result<()>
     let result = module
         .parse(command)
         .and_then(|block| module.eval(block))
-        .and_then(|result| VmValue::from_tag_data(result[0], result[1]))
-        .and_then(|result| module.to_value(result));
+        .and_then(|result| result.try_into())
+        .and_then(|result: VmValue| module.to_value(result));
 
     match result {
         Ok(value) => println!("{} {}", "OK:".green(), value),

@@ -98,9 +98,7 @@ fn print<T>(module: &mut Exec<T>) -> Result<(), CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    let [tag, data] = module.pop()?;
-    let vm_value = VmValue::from_tag_data(tag, data)?;
-    let value = module.to_value(vm_value)?;
+    let value = module.pop_to_value()?;
     println!("[print]: {:?}", value);
     Ok(())
 }
