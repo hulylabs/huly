@@ -6,6 +6,30 @@ use crate::value::Value;
 use std::fs;
 use std::time::UNIX_EPOCH;
 
+/// Helper function to extract a string argument from the stack
+fn get_string_arg<T>(module: &mut Exec<T>) -> Result<String, CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    let [tag, data] = module.pop()?;
+    let vm_value = VmValue::from_tag_data(tag, data)?;
+    let value = module.to_value(vm_value)?;
+
+    match value {
+        Value::String(s) => Ok(s.to_string()),
+        _ => Err(CoreError::BadArguments),
+    }
+}
+
+/// Helper function to push a Value onto the stack
+fn push_value<T>(module: &mut Exec<T>, value: Value) -> Result<(), CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    let vm_value = module.alloc_value(&value)?;
+    module.push(vm_value.vm_repr()).map_err(Into::into)
+}
+
 /// List files in the current directory
 /// Returns a block of contexts, each representing a file with its metadata
 fn ls<T>(module: &mut Exec<T>) -> Result<(), CoreError>
@@ -18,69 +42,44 @@ where
         Err(_) => return Err(CoreError::InternalError),
     };
 
-    // Create a vector to hold file contexts
-    let mut files = Vec::new();
+    // Process each directory entry and collect into a vector
+    let files = entries
+        .filter_map(|entry_result| {
+            let entry = entry_result.ok()?;
+            let metadata = entry.metadata().ok()?;
 
-    // Process each directory entry
-    for entry_result in entries {
-        match entry_result {
-            Ok(entry) => {
-                // Get file metadata
-                if let Ok(metadata) = entry.metadata() {
-                    // Get filename
-                    let name = entry.file_name();
-                    let name_str = name.to_string_lossy().to_string();
+            // Get filename
+            let name = entry.file_name();
+            let name_str = name.to_string_lossy().to_string();
 
-                    // Create a context for this file
-                    let mut file_pairs = Vec::new();
+            // Create a context for this file using Value::object()
+            let mut file_ctx = Value::object()
+                .insert("name", name_str)
+                .insert("size", metadata.len() as i32)
+                .insert("is_dir", metadata.is_dir())
+                .insert("is_file", metadata.is_file())
+                .insert("readonly", metadata.permissions().readonly());
 
-                    // Add name
-                    file_pairs.push(("name".into(), Value::String(name_str.into())));
-
-                    // Add size
-                    file_pairs.push(("size".into(), Value::Int(metadata.len() as i32)));
-
-                    // Add file type
-                    file_pairs.push(("is_dir".into(), Value::boolean(metadata.is_dir())));
-                    file_pairs.push(("is_file".into(), Value::boolean(metadata.is_file())));
-
-                    // Add modification time if available
-                    if let Ok(modified) = metadata.modified() {
-                        if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
-                            file_pairs
-                                .push(("modified".into(), Value::Int(duration.as_secs() as i32)));
-                        }
-                    }
-
-                    // Add creation time if available
-                    if let Ok(created) = metadata.created() {
-                        if let Ok(duration) = created.duration_since(UNIX_EPOCH) {
-                            file_pairs
-                                .push(("created".into(), Value::Int(duration.as_secs() as i32)));
-                        }
-                    }
-
-                    // Add permissions
-                    let permissions = metadata.permissions();
-                    file_pairs.push(("readonly".into(), Value::boolean(permissions.readonly())));
-
-                    // Create the file context
-                    let file_context = Value::Context(file_pairs.into_boxed_slice());
-                    files.push(file_context);
+            // Add modification time if available
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(duration) = modified.duration_since(UNIX_EPOCH) {
+                    file_ctx = file_ctx.insert("modified", duration.as_secs() as i32);
                 }
             }
-            Err(_) => continue, // Skip entries that can't be read
-        }
-    }
 
-    // Create a block containing all file contexts
-    let files_block = Value::Block(files.into_boxed_slice());
+            // Add creation time if available
+            if let Ok(created) = metadata.created() {
+                if let Ok(duration) = created.duration_since(UNIX_EPOCH) {
+                    file_ctx = file_ctx.insert("created", duration.as_secs() as i32);
+                }
+            }
 
-    // Convert the Value to a VmValue using the alloc_value method
-    let vm_value = module.alloc_value(&files_block)?;
+            Some(file_ctx.build())
+        })
+        .collect::<Vec<_>>();
 
-    // Push the VmValue onto the stack
-    module.push(vm_value.vm_repr()).map_err(Into::into)
+    // Create a block containing all file contexts and push it onto the stack
+    push_value(module, Value::block(files))
 }
 
 /// Print the current working directory
@@ -100,14 +99,8 @@ where
         None => return Err(CoreError::InternalError),
     };
 
-    // Create a string value
-    let cwd_value = Value::String(cwd_str.into());
-
-    // Convert the Value to a VmValue using the alloc_value method
-    let vm_value = module.alloc_value(&cwd_value)?;
-
-    // Push the VmValue onto the stack
-    module.push(vm_value.vm_repr()).map_err(Into::into)
+    // Create a string value and push it onto the stack
+    push_value(module, Value::string(cwd_str))
 }
 
 /// Change the current working directory
@@ -116,15 +109,7 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     // Get the directory path from the stack
-    let [tag, data] = module.pop()?;
-    let vm_value = VmValue::from_tag_data(tag, data)?;
-    let value = module.to_value(vm_value)?;
-
-    // Extract the path string
-    let path = match value {
-        Value::String(s) => s.to_string(),
-        _ => return Err(CoreError::BadArguments),
-    };
+    let path = get_string_arg(module)?;
 
     // Change the current directory
     if let Err(_) = std::env::set_current_dir(&path) {
@@ -141,15 +126,7 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     // Get the file path from the stack
-    let [tag, data] = module.pop()?;
-    let vm_value = VmValue::from_tag_data(tag, data)?;
-    let value = module.to_value(vm_value)?;
-
-    // Extract the path string
-    let path = match value {
-        Value::String(s) => s.to_string(),
-        _ => return Err(CoreError::BadArguments),
-    };
+    let path = get_string_arg(module)?;
 
     // Read the file contents
     let contents = match std::fs::read_to_string(&path) {
@@ -157,14 +134,8 @@ where
         Err(_) => return Err(CoreError::InternalError),
     };
 
-    // Create a string value
-    let contents_value = Value::String(contents.into());
-
-    // Convert the Value to a VmValue using the alloc_value method
-    let vm_value = module.alloc_value(&contents_value)?;
-
-    // Push the VmValue onto the stack
-    module.push(vm_value.vm_repr()).map_err(Into::into)
+    // Create a string value and push it onto the stack
+    push_value(module, Value::string(contents))
 }
 
 /// Create a new directory
@@ -173,23 +144,15 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     // Get the directory path from the stack
-    let [tag, data] = module.pop()?;
-    let vm_value = VmValue::from_tag_data(tag, data)?;
-    let value = module.to_value(vm_value)?;
-
-    // Extract the path string
-    let path = match value {
-        Value::String(s) => s.to_string(),
-        _ => return Err(CoreError::BadArguments),
-    };
+    let path = get_string_arg(module)?;
 
     // Create the directory
     if let Err(_) = std::fs::create_dir(&path) {
         return Err(CoreError::InternalError);
     }
 
-    // Return a simple integer value (1 for success)
-    module.push([VmValue::TAG_INT, 1]).map_err(Into::into)
+    // Return a boolean value (true for success)
+    push_value(module, Value::boolean(true))
 }
 
 /// Remove a file or directory
@@ -198,15 +161,7 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     // Get the path from the stack
-    let [tag, data] = module.pop()?;
-    let vm_value = VmValue::from_tag_data(tag, data)?;
-    let value = module.to_value(vm_value)?;
-
-    // Extract the path string
-    let path = match value {
-        Value::String(s) => s.to_string(),
-        _ => return Err(CoreError::BadArguments),
-    };
+    let path = get_string_arg(module)?;
 
     // Check if it's a directory or a file
     let metadata = match std::fs::metadata(&path) {
@@ -225,8 +180,8 @@ where
         }
     }
 
-    // Return a simple integer value (1 for success)
-    module.push([VmValue::TAG_INT, 1]).map_err(Into::into)
+    // Return a boolean value (true for success)
+    push_value(module, Value::boolean(true))
 }
 
 /// Register all filesystem functions
