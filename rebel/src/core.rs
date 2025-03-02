@@ -886,8 +886,6 @@ pub fn eval(module: &mut Exec<&mut [Word]>) -> Result<[Word; 2], CoreError> {
 
 #[cfg(test)]
 mod tests {
-    use std::result;
-
     use super::*;
     use crate::rebel;
     use crate::value::Value;
