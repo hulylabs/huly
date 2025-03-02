@@ -543,6 +543,12 @@ where
         self.push(value.into())
     }
 
+    /// Push a high-level Value directly onto the stack
+    pub fn push_value_direct(&mut self, value: Value) -> Result<(), CoreError> {
+        let vm_value = self.module.alloc_value(&value)?;
+        self.push_value(vm_value).map_err(Into::into)
+    }
+
     pub fn jmp(&mut self, block: Offset) -> Result<(), CoreError> {
         self.op_stack.push([
             Op::LEAVE_BLOCK,

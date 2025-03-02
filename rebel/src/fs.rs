@@ -67,8 +67,7 @@ where
         .collect::<Vec<_>>();
 
     // Create a block containing all file contexts and push it onto the stack
-    let vm_value = module.alloc_value(&Value::block(files))?;
-    module.push_value(vm_value).map_err(Into::into)
+    module.push_value_direct(Value::block(files))
 }
 
 /// Print the current working directory
@@ -89,8 +88,7 @@ where
     };
 
     // Create a string value and push it onto the stack
-    let vm_value = module.alloc_value(&Value::string(cwd_str))?;
-    module.push_value(vm_value).map_err(Into::into)
+    module.push_value_direct(Value::string(cwd_str))
 }
 
 /// Change the current working directory
@@ -125,8 +123,7 @@ where
     };
 
     // Create a string value and push it onto the stack
-    let vm_value = module.alloc_value(&Value::string(contents))?;
-    module.push_value(vm_value).map_err(Into::into)
+    module.push_value_direct(Value::string(contents))
 }
 
 /// Create a new directory
@@ -143,8 +140,7 @@ where
     }
 
     // Return a boolean value (true for success)
-    let vm_value = module.alloc_value(&Value::boolean(true))?;
-    module.push_value(vm_value).map_err(Into::into)
+    module.push_value_direct(Value::boolean(true))
 }
 
 /// Remove a file or directory
@@ -173,8 +169,7 @@ where
     }
 
     // Return a boolean value (true for success)
-    let vm_value = module.alloc_value(&Value::boolean(true))?;
-    module.push_value(vm_value).map_err(Into::into)
+    module.push_value_direct(Value::boolean(true))
 }
 
 /// Register all filesystem functions
