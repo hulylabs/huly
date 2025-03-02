@@ -119,6 +119,6 @@ where
     Ok(())
 }
 
-// pub fn test(module: &mut Exec<&mut [Word]>) -> Option<()> {
-//     either(module)
-// }
+pub fn test_either(module: &mut Exec<&mut [Word]>) -> Result<(), CoreError> {
+    either(module)
+}
