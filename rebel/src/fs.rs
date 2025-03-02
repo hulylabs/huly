@@ -100,7 +100,7 @@ where
     let path = get_string_arg(module)?;
 
     // Change the current directory
-    if let Err(_) = std::env::set_current_dir(&path) {
+    if std::env::set_current_dir(&path).is_err() {
         return Err(CoreError::InternalError);
     }
 
@@ -135,7 +135,7 @@ where
     let path = get_string_arg(module)?;
 
     // Create the directory
-    if let Err(_) = std::fs::create_dir(&path) {
+    if std::fs::create_dir(&path).is_err() {
         return Err(CoreError::InternalError);
     }
 
@@ -159,13 +159,11 @@ where
 
     // Remove the file or directory
     if metadata.is_dir() {
-        if let Err(_) = std::fs::remove_dir(&path) {
+        if std::fs::remove_dir(&path).is_err() {
             return Err(CoreError::InternalError);
         }
-    } else {
-        if let Err(_) = std::fs::remove_file(&path) {
-            return Err(CoreError::InternalError);
-        }
+    } else if std::fs::remove_file(&path).is_err() {
+        return Err(CoreError::InternalError);
     }
 
     // Return a boolean value (true for success)
