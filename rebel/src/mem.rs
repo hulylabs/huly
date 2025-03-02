@@ -2,12 +2,40 @@
 
 use smol_str::SmolStr;
 
-use crate::core::CoreError;
 use crate::hash::hash_u32x8;
+use thiserror::Error;
 
 pub type Word = u32;
 pub type Offset = Word;
 pub type SymbolId = Offset;
+
+// E R R O R
+
+#[derive(Debug, Error)]
+pub enum MemoryError {
+    #[error("Unexpected error")]
+    UnexpectedError,
+    #[error("Word not found")]
+    WordNotFound,
+    #[error("Stack underflow")]
+    StackUnderflow,
+    #[error("Stack overflow")]
+    StackOverflow,
+    #[error("Out of memory")]
+    OutOfMemory,
+    #[error("Out of bounds")]
+    OutOfBounds,
+    #[error("Symbol not found")]
+    SymbolNotFound,
+    #[error("Symbol table full")]
+    SymbolTableFull,
+    #[error("Bad symbol")]
+    BadSymbol,
+    #[error("String too long")]
+    StringTooLong,
+    #[error(transparent)]
+    TryFromSliceError(#[from] std::array::TryFromSliceError),
+}
 
 // O P S
 
@@ -18,31 +46,43 @@ impl<T> Memory<T>
 where
     T: AsRef<[Word]>,
 {
-    fn len(&self) -> Option<Offset> {
-        self.0.as_ref().first().copied()
+    fn len(&self) -> Result<Offset, MemoryError> {
+        self.0
+            .as_ref()
+            .first()
+            .copied()
+            .ok_or(MemoryError::UnexpectedError)
     }
 
     fn split_first(&self) -> Option<(&u32, &[Word])> {
         self.0.as_ref().split_first()
     }
 
-    fn get_block(&self, addr: Offset) -> Option<&[Word]> {
-        self.0.as_ref().get(addr as usize + 1..).and_then(|data| {
-            data.split_first()
-                .and_then(|(len, block)| block.get(..*len as usize))
-        })
+    fn get_block(&self, addr: Offset) -> Result<&[Word], MemoryError> {
+        self.0
+            .as_ref()
+            .get(addr as usize + 1..)
+            .and_then(|data| {
+                data.split_first()
+                    .and_then(|(len, block)| block.get(..*len as usize))
+            })
+            .ok_or(MemoryError::OutOfBounds)
     }
 
-    fn get<const N: usize>(&self, addr: Offset) -> Option<[u32; N]> {
-        self.0.as_ref().split_first().and_then(|(len, data)| {
-            let begin = addr as usize;
-            let end = begin + N;
-            if end <= *len as usize {
-                data.get(begin..end).and_then(|block| block.try_into().ok())
-            } else {
-                None
-            }
-        })
+    fn get<const N: usize>(&self, addr: Offset) -> Result<[u32; N], MemoryError> {
+        self.0
+            .as_ref()
+            .split_first()
+            .and_then(|(len, data)| {
+                let begin = addr as usize;
+                let end = begin + N;
+                if end <= *len as usize {
+                    data.get(begin..end).and_then(|block| block.try_into().ok())
+                } else {
+                    None
+                }
+            })
+            .ok_or(MemoryError::OutOfBounds)
     }
 }
 
@@ -51,24 +91,32 @@ where
     T: AsMut<[Word]>,
 {
     /// Set memory from allocation start to provided values
-    fn init(&mut self, value: Word) -> Option<()> {
-        self.0.as_mut().first_mut().map(|slot| *slot = value)
+    fn init(&mut self, value: Word) -> Result<(), MemoryError> {
+        self.0
+            .as_mut()
+            .first_mut()
+            .map(|slot| *slot = value)
+            .ok_or(MemoryError::UnexpectedError)
     }
 
-    fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
-        self.0.as_mut().split_first_mut().and_then(|(len, data)| {
-            let addr = *len as usize;
-            data.get_mut(addr..addr + N).map(|block| {
-                block
-                    .iter_mut()
-                    .zip(words.iter())
-                    .for_each(|(slot, value)| {
-                        *slot = *value;
-                    });
-                *len += N as u32;
-                addr as Offset
+    fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, MemoryError> {
+        self.0
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                let addr = *len as usize;
+                data.get_mut(addr..addr + N).map(|block| {
+                    block
+                        .iter_mut()
+                        .zip(words.iter())
+                        .for_each(|(slot, value)| {
+                            *slot = *value;
+                        });
+                    *len += N as u32;
+                    addr as Offset
+                })
             })
-        })
+            .ok_or(MemoryError::OutOfMemory)
     }
 
     fn split_first_mut(&mut self) -> Option<(&mut u32, &mut [Word])> {
@@ -104,7 +152,7 @@ where
         })
     }
 
-    fn alloc_block(&mut self, values: &[Word]) -> Option<Offset> {
+    fn alloc_block(&mut self, values: &[Word]) -> Result<Offset, MemoryError> {
         self.alloc_empty_block(values.len() as Offset)
             .map(|(addr, block)| {
                 block
@@ -115,9 +163,10 @@ where
                     });
                 addr
             })
+            .ok_or(MemoryError::OutOfMemory)
     }
 
-    fn get_block_mut(&mut self, addr: Offset) -> Option<&mut [Word]> {
+    fn get_block_mut(&mut self, addr: Offset) -> Result<&mut [Word], MemoryError> {
         self.0
             .as_mut()
             .get_mut(addr as usize + 1..)
@@ -125,37 +174,46 @@ where
                 data.split_first_mut()
                     .and_then(|(len, block)| block.get_mut(..*len as usize))
             })
+            .ok_or(MemoryError::OutOfBounds)
     }
 
-    fn put<const N: usize>(&mut self, addr: Offset, value: [Word; N]) -> Option<()> {
-        self.0.as_mut().split_first_mut().and_then(|(len, data)| {
-            let addr = addr as usize;
-            if addr + N <= *len as usize {
-                data.get_mut(addr..addr + N).map(|block| {
-                    block
-                        .iter_mut()
-                        .zip(value.iter())
-                        .for_each(|(slot, value)| {
-                            *slot = *value;
-                        });
-                })
-            } else {
-                None
-            }
-        })
+    fn put<const N: usize>(&mut self, addr: Offset, value: [Word; N]) -> Result<(), MemoryError> {
+        self.0
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                let addr = addr as usize;
+                if addr + N <= *len as usize {
+                    data.get_mut(addr..addr + N).map(|block| {
+                        block
+                            .iter_mut()
+                            .zip(value.iter())
+                            .for_each(|(slot, value)| {
+                                *slot = *value;
+                            });
+                    })
+                } else {
+                    None
+                }
+            })
+            .ok_or(MemoryError::OutOfBounds)
     }
 
-    fn get_mut<const N: usize>(&mut self, addr: Offset) -> Option<&mut [u32; N]> {
-        self.0.as_mut().split_first_mut().and_then(|(len, data)| {
-            let begin = addr as usize;
-            let end = begin + N;
-            if end <= *len as usize {
-                data.get_mut(begin..end)
-                    .and_then(|block| block.try_into().ok())
-            } else {
-                None
-            }
-        })
+    fn get_mut<const N: usize>(&mut self, addr: Offset) -> Result<&mut [u32; N], MemoryError> {
+        self.0
+            .as_mut()
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                let begin = addr as usize;
+                let end = begin + N;
+                if end <= *len as usize {
+                    data.get_mut(begin..end)
+                        .and_then(|block| block.try_into().ok())
+                } else {
+                    None
+                }
+            })
+            .ok_or(MemoryError::OutOfBounds)
     }
 }
 
@@ -193,11 +251,15 @@ impl<T> Stack<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn len(&self) -> Option<Offset> {
+    pub fn len(&self) -> Result<Offset, MemoryError> {
         self.0.len()
     }
 
-    pub fn get<const N: usize>(&self, offset: Offset) -> Option<[Word; N]> {
+    pub fn is_empty(&self) -> Result<bool, MemoryError> {
+        self.len().map(|len| len == 0)
+    }
+
+    pub fn get<const N: usize>(&self, offset: Offset) -> Result<[Word; N], MemoryError> {
         self.0.get(offset)
     }
 
@@ -237,15 +299,15 @@ impl<T> Stack<T>
 where
     T: AsMut<[Word]>,
 {
-    pub fn set_len(&mut self, len: Word) -> Option<()> {
+    pub fn set_len(&mut self, len: Word) -> Result<(), MemoryError> {
         self.0.init(len)
     }
 
-    pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
+    pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, MemoryError> {
         self.0.alloc(words)
     }
 
-    pub fn push<const N: usize>(&mut self, words: [u32; N]) -> Option<()> {
+    pub fn push<const N: usize>(&mut self, words: [u32; N]) -> Result<(), MemoryError> {
         self.0.alloc(words).map(|_| ())
     }
 
@@ -258,23 +320,26 @@ where
         })
     }
 
-    pub fn pop<const N: usize>(&mut self) -> Option<[u32; N]> {
-        self.0.split_first_mut().and_then(|(len, data)| {
-            len.checked_sub(N as u32).and_then(|new_len| {
-                let addr = new_len as usize;
-                data.get(addr..addr + N).map(|block| {
-                    let mut words = [0; N];
-                    block
-                        .iter()
-                        .zip(words.iter_mut())
-                        .for_each(|(slot, value)| {
-                            *value = *slot;
-                        });
-                    *len = new_len;
-                    words
+    pub fn pop<const N: usize>(&mut self) -> Result<[u32; N], MemoryError> {
+        self.0
+            .split_first_mut()
+            .and_then(|(len, data)| {
+                len.checked_sub(N as u32).and_then(|new_len| {
+                    let addr = new_len as usize;
+                    data.get(addr..addr + N).map(|block| {
+                        let mut words = [0; N];
+                        block
+                            .iter()
+                            .zip(words.iter_mut())
+                            .for_each(|(slot, value)| {
+                                *value = *slot;
+                            });
+                        *len = new_len;
+                        words
+                    })
                 })
             })
-        })
+            .ok_or(MemoryError::StackUnderflow)
     }
 
     pub fn pop_all(&mut self, offset: Offset) -> Option<&[Word]> {
@@ -295,7 +360,7 @@ where
 pub struct Symbol([u32; 8]);
 
 impl Symbol {
-    pub fn from(string: &str) -> Option<Self> {
+    pub fn from(string: &str) -> Result<Self, MemoryError> {
         let bytes = string.as_bytes();
         let len = bytes.len();
         if len < 32 {
@@ -305,9 +370,9 @@ impl Symbol {
                 let j = i + 1;
                 buf[j / 4] |= (*byte as u32) << ((j % 4) * 8);
             }
-            Some(Symbol(buf))
+            Ok(Symbol(buf))
         } else {
-            None
+            Err(MemoryError::StringTooLong)
         }
     }
 
@@ -334,30 +399,38 @@ impl<T> SymbolTable<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get(&self, symbol: SymbolId) -> Option<Symbol> {
+    pub fn get(&self, symbol: SymbolId) -> Result<Symbol, MemoryError> {
         // Symbol IDs start at 1, so return None for symbol 0
         if symbol == 0 {
-            return None;
+            return Err(MemoryError::BadSymbol);
         }
 
-        let (_, data) = self.0.split_first()?;
+        let (_, data) = self.0.split_first().ok_or(MemoryError::UnexpectedError)?;
         let symbols = data.len() / 9;
 
         // Check if symbol is out of bounds
-        if symbol > *self.0 .0.as_ref().first()? {
-            return None;
+        if symbol
+            > *self
+                .0
+                 .0
+                .as_ref()
+                .first()
+                .ok_or(MemoryError::UnexpectedError)?
+        {
+            return Err(MemoryError::BadSymbol);
         }
 
         let offset = symbols + (symbol - 1) as usize * 8;
 
         // Ensure offset is within bounds
         if offset + 8 > data.len() {
-            return None;
+            return Err(MemoryError::BadSymbol);
         }
 
-        data.get(offset..offset + 8)
-            .and_then(|bytes| bytes.try_into().ok())
-            .map(Symbol)
+        let bytes = data
+            .get(offset..offset + 8)
+            .ok_or(MemoryError::OutOfBounds)?;
+        Ok(Symbol(bytes.try_into()?))
     }
 }
 
@@ -365,16 +438,19 @@ impl<T> SymbolTable<T>
 where
     T: AsMut<[Word]>,
 {
-    pub fn init(&mut self) -> Option<()> {
+    pub fn init(&mut self) -> Result<(), MemoryError> {
         self.0.init(0)
     }
 
-    pub fn get_or_insert(&mut self, sym: Symbol) -> Option<SymbolId> {
-        let (count, data) = self.0.split_first_mut()?;
+    pub fn get_or_insert(&mut self, sym: Symbol) -> Result<SymbolId, MemoryError> {
+        let (count, data) = self
+            .0
+            .split_first_mut()
+            .ok_or(MemoryError::UnexpectedError)?;
 
         let symbols = data.len() / 9;
         if symbols == 0 {
-            return None;
+            return Err(MemoryError::SymbolTableFull);
         }
 
         let h = hash_u32x8(sym.0) as usize;
@@ -382,37 +458,36 @@ where
         let mut probe = 0;
 
         loop {
-            let pos = data.get(index).copied()?;
+            let pos = data.get(index).copied().ok_or(MemoryError::OutOfBounds)?;
             if pos == 0 {
                 *count += 1;
                 let pos = *count;
 
-                // If we can't get the slot, something is fundamentally wrong
-                let slot = match data.get_mut(index) {
-                    Some(s) => s,
-                    None => return None, // This should never happen, but return None if it does
-                };
-                *slot = pos;
+                data.get_mut(index)
+                    .map(|slot| *slot = pos)
+                    .ok_or(MemoryError::UnexpectedError)?;
 
                 let offset = symbols + (pos - 1) as usize * 8;
-                let value = data.get_mut(offset..offset + 8)?;
+                let value = data
+                    .get_mut(offset..offset + 8)
+                    .ok_or(MemoryError::OutOfBounds)?;
                 value.iter_mut().zip(sym.0.iter()).for_each(|(dst, src)| {
                     *dst = *src;
                 });
-                return Some(pos);
+                return Ok(pos);
             } else {
                 let offset = symbols + (pos - 1) as usize * 8;
-                let value = data.get_mut(offset..offset + 8)?;
-
-                // Fix for clippy::op_ref
+                let value = data
+                    .get_mut(offset..offset + 8)
+                    .ok_or(MemoryError::OutOfBounds)?;
                 if value == sym.0 {
-                    return Some(pos);
+                    return Ok(pos);
                 }
             }
             index = (index + 1) % symbols;
             probe += 1;
             if probe >= symbols {
-                return None;
+                return Err(MemoryError::SymbolTableFull);
             }
         }
     }
@@ -586,12 +661,12 @@ where
     }
 
     /// Get a value for a given symbol
-    pub fn get(&self, symbol: SymbolId) -> Result<[Word; 2], CoreError> {
-        let (_, data) = self.0.split_first().ok_or(CoreError::BoundsCheckFailed)?;
+    pub fn get(&self, symbol: SymbolId) -> Result<[Word; 2], MemoryError> {
+        let (_, data) = self.0.split_first().ok_or(MemoryError::UnexpectedError)?;
 
         let capacity = data.len() / Self::ENTRY_SIZE;
         if capacity == 0 {
-            return Err(CoreError::WordNotFound);
+            return Err(MemoryError::WordNotFound);
         }
 
         let h = Self::hash_u32(symbol) as usize;
@@ -616,7 +691,7 @@ where
             index = (index + 1) % capacity;
         }
 
-        Err(CoreError::WordNotFound)
+        Err(MemoryError::WordNotFound)
     }
 
     /// Retrieves an entry at the given index if it contains a valid symbol.
@@ -669,16 +744,19 @@ where
     /// Initialize an empty context.
     ///
     /// This sets up an empty context ready for use.
-    pub fn init(&mut self) -> Option<()> {
+    pub fn init(&mut self) -> Result<(), MemoryError> {
         self.0.init(0)
     }
 
-    pub fn put(&mut self, symbol: SymbolId, value: [Word; 2]) -> Option<()> {
-        let (count, data) = self.0.split_first_mut()?;
+    pub fn put(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
+        let (count, data) = self
+            .0
+            .split_first_mut()
+            .ok_or(MemoryError::UnexpectedError)?;
 
         let capacity = data.len() / Self::ENTRY_SIZE;
         if capacity == 0 {
-            return None;
+            return Err(MemoryError::SymbolTableFull);
         }
 
         let h = Self::hash_u32(symbol) as usize;
@@ -705,11 +783,11 @@ where
                 })
                 .is_some()
             {
-                return Some(());
+                return Ok(());
             }
             index = (index + 1) % capacity;
         }
-        None
+        Err(MemoryError::SymbolTableFull)
     }
 }
 
@@ -727,11 +805,11 @@ impl<T> Heap<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get_block(&self, addr: Offset) -> Option<&[Word]> {
+    pub fn get_block(&self, addr: Offset) -> Result<&[Word], MemoryError> {
         self.0.get_block(addr)
     }
 
-    pub fn get<const N: usize>(&self, addr: Offset) -> Option<[Word; N]> {
+    pub fn get<const N: usize>(&self, addr: Offset) -> Result<[Word; N], MemoryError> {
         self.0.get(addr)
     }
 }
@@ -740,41 +818,50 @@ impl<T> Heap<T>
 where
     T: AsMut<[Word]>,
 {
-    pub fn init(&mut self, reserve: u32) -> Option<()> {
+    pub fn init(&mut self, reserve: u32) -> Result<(), MemoryError> {
         self.0.init(reserve)
     }
 
-    pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Option<Offset> {
+    pub fn alloc<const N: usize>(&mut self, words: [u32; N]) -> Result<Offset, MemoryError> {
         self.0.alloc(words)
     }
 
-    pub fn alloc_empty_block(&mut self, size: Offset) -> Option<(Offset, &mut [Word])> {
-        self.0.alloc_empty_block(size)
+    pub fn alloc_empty_block(
+        &mut self,
+        size: Offset,
+    ) -> Result<(Offset, &mut [Word]), MemoryError> {
+        self.0
+            .alloc_empty_block(size)
+            .ok_or(MemoryError::OutOfMemory)
     }
 
-    pub fn alloc_block(&mut self, values: &[Word]) -> Option<Offset> {
+    pub fn alloc_block(&mut self, values: &[Word]) -> Result<Offset, MemoryError> {
         self.0.alloc_block(values)
     }
 
-    pub fn get_block_mut(&mut self, addr: Offset) -> Option<&mut [Word]> {
+    pub fn get_block_mut(&mut self, addr: Offset) -> Result<&mut [Word], MemoryError> {
         self.0.get_block_mut(addr)
     }
 
-    pub fn put<const N: usize>(&mut self, addr: Offset, value: [Word; N]) -> Option<()> {
+    pub fn put<const N: usize>(
+        &mut self,
+        addr: Offset,
+        value: [Word; N],
+    ) -> Result<(), MemoryError> {
         self.0.put(addr, value)
     }
 
-    pub fn get_mut<const N: usize>(&mut self, addr: Offset) -> Option<&mut [u32; N]> {
+    pub fn get_mut<const N: usize>(&mut self, addr: Offset) -> Result<&mut [u32; N], MemoryError> {
         self.0.get_mut(addr)
     }
 
     //
 
-    pub fn alloc_context(&mut self, size: Offset) -> Option<Offset> {
+    pub fn alloc_context(&mut self, size: Offset) -> Result<Offset, MemoryError> {
         let (addr, data) =
             self.alloc_empty_block(size * (Context::<T>::ENTRY_SIZE as Offset) + 1)?;
         Context::new(data).init()?;
-        Some(addr)
+        Ok(addr)
     }
 }
 
@@ -1005,13 +1092,13 @@ mod tests {
 
         // Try to get a symbol that doesn't exist
         assert!(
-            table.get(999).is_none(),
+            table.get(999).is_err(),
             "Getting non-existent symbol should return None"
         );
 
         // Symbol index 0 should be invalid (symbols start at 1)
         assert!(
-            table.get(0).is_none(),
+            table.get(0).is_err(),
             "Getting symbol with ID 0 should return None"
         );
 
@@ -1025,7 +1112,7 @@ mod tests {
 
         let sym = Symbol([1u32, 2, 3, 4, 5, 6, 7, 8]);
         assert!(
-            small_table.get_or_insert(sym).is_none(),
+            small_table.get_or_insert(sym).is_err(),
             "Inserting into table without enough space should return None"
         );
     }

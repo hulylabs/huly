@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::boot::core_package;
-use crate::mem::{Context, Heap, Offset, Stack, Symbol, SymbolId, SymbolTable, Word};
+use crate::mem::{Context, Heap, MemoryError, Offset, Stack, Symbol, SymbolId, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use crate::value::Value;
 use smol_str::SmolStr;
@@ -11,6 +11,8 @@ use thiserror::Error;
 pub enum CoreError {
     #[error("internal error")]
     InternalError,
+    #[error("end of input")]
+    EndOfInput,
     #[error("function not found")]
     FunctionNotFound,
     #[error("string too long")]
@@ -19,26 +21,16 @@ pub enum CoreError {
     BoundsCheckFailed,
     #[error("symbol table full")]
     SymbolTableFull,
-    #[error("word not found")]
-    WordNotFound,
-    #[error("stack underflow")]
-    StackUnderflow,
-    #[error("stack overflow")]
-    StackOverflow,
     #[error("bad arguments")]
     BadArguments,
-    #[error(transparent)]
-    TryFromSliceError(#[from] std::array::TryFromSliceError),
+    #[error("unknown tag")]
+    UnknownTag,
     #[error(transparent)]
     ParserError(#[from] crate::parse::ParserError<MemoryError>),
-}
-
-#[derive(Debug, Error)]
-pub enum MemoryError {
-    #[error("out of memory")]
-    OutOfMemory,
-    #[error("unexpected error")]
-    UnexpectedError,
+    #[error(transparent)]
+    MemoryError(#[from] MemoryError),
+    #[error(transparent)]
+    Utf8Error(#[from] std::string::FromUtf8Error),
 }
 
 // V M  V A L U E
@@ -80,16 +72,16 @@ impl VmValue {
     /// # Returns
     /// * `Some(VmValue)` - The constructed VmValue if the tag is recognized
     /// * `None` - If the tag is not recognized
-    pub fn from_tag_data(tag: Word, data: Word) -> Option<Self> {
+    pub fn from_tag_data(tag: Word, data: Word) -> Result<Self, CoreError> {
         match tag {
-            Self::TAG_NONE => Some(VmValue::None),
-            Self::TAG_INT => Some(VmValue::Int(data as i32)),
-            Self::TAG_BLOCK => Some(VmValue::Block(data)),
-            Self::TAG_CONTEXT => Some(VmValue::Context(data)),
-            Self::TAG_INLINE_STRING => Some(VmValue::String(data)),
-            Self::TAG_WORD => Some(VmValue::Word(data)),
-            Self::TAG_SET_WORD => Some(VmValue::SetWord(data)),
-            _ => None, // Unknown tag
+            Self::TAG_NONE => Ok(VmValue::None),
+            Self::TAG_INT => Ok(VmValue::Int(data as i32)),
+            Self::TAG_BLOCK => Ok(VmValue::Block(data)),
+            Self::TAG_CONTEXT => Ok(VmValue::Context(data)),
+            Self::TAG_INLINE_STRING => Ok(VmValue::String(data)),
+            Self::TAG_WORD => Ok(VmValue::Word(data)),
+            Self::TAG_SET_WORD => Ok(VmValue::SetWord(data)),
+            _ => Err(CoreError::UnknownTag),
         }
     }
 
@@ -108,7 +100,7 @@ impl VmValue {
 
 // M O D U L E
 
-type NativeFn<T> = fn(module: &mut Exec<T>) -> Option<()>;
+type NativeFn<T> = fn(module: &mut Exec<T>) -> Result<(), CoreError>;
 
 struct FuncDesc<T> {
     func: NativeFn<T>,
@@ -126,8 +118,10 @@ impl<T> Module<T> {
     const SYMBOLS: Offset = 1;
     // const CONTEXT: Offset = 2;
 
-    fn get_func(&self, index: u32) -> Option<&FuncDesc<T>> {
-        self.functions.get(index as usize)
+    fn get_func(&self, index: u32) -> Result<&FuncDesc<T>, CoreError> {
+        self.functions
+            .get(index as usize)
+            .ok_or(CoreError::FunctionNotFound)
     }
 }
 
@@ -135,7 +129,7 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    pub fn init(data: T) -> Option<Self> {
+    pub fn init(data: T) -> Result<Self, CoreError> {
         let mut heap = Heap::new(data);
         heap.init(3)?;
 
@@ -154,10 +148,15 @@ where
             .heap
             .put(0, [0xdeadbeef, symbols_addr, system_words])?;
         core_package(&mut module)?;
-        Some(module)
+        Ok(module)
     }
 
-    pub fn add_native_fn(&mut self, name: &str, func: NativeFn<T>, arity: u32) -> Option<()> {
+    pub fn add_native_fn(
+        &mut self,
+        name: &str,
+        func: NativeFn<T>,
+        arity: u32,
+    ) -> Result<(), MemoryError> {
         let index = self.functions.len() as u32;
         self.functions.push(FuncDesc {
             func,
@@ -172,7 +171,7 @@ where
         words.put(id, [VmValue::TAG_NATIVE_FN, index])
     }
 
-    pub fn eval(&mut self, block: Offset) -> Option<MemValue> {
+    pub fn eval(&mut self, block: Offset) -> Result<MemValue, CoreError> {
         let mut exec = Exec::new(self, block)?;
         // exec.jmp(block)?;
         exec.eval()
@@ -183,19 +182,27 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-    fn get_array<const N: usize>(&self, addr: Offset) -> Option<[Word; N]> {
+    fn get_array<const N: usize>(&self, addr: Offset) -> Result<[Word; N], MemoryError> {
         self.heap.get(addr)
     }
 
-    fn get_block<const N: usize>(&self, block: Offset, offset: Offset) -> Option<[Word; N]> {
+    fn get_block<const N: usize>(
+        &self,
+        block: Offset,
+        offset: Offset,
+    ) -> Result<[Word; N], MemoryError> {
         let offset = offset as usize;
         self.heap
             .get_block(block)
-            .and_then(|block| block.get(offset..offset + N))
-            .and_then(|value| value.try_into().ok())
+            .and_then(|block| {
+                block
+                    .get(offset..offset + N)
+                    .ok_or(MemoryError::OutOfBounds)
+            })
+            .and_then(|value| value.try_into().map_err(Into::into))
     }
 
-    pub fn get_system_words(&self) -> Option<Context<&[u32]>> {
+    pub fn get_system_words(&self) -> Result<Context<&[u32]>, MemoryError> {
         self.heap.get_block(self.system_words).map(Context::new)
     }
 }
@@ -204,7 +211,7 @@ impl<T> Module<T>
 where
     T: AsMut<[Word]>,
 {
-    fn get_symbols_mut(&mut self) -> Option<SymbolTable<&mut [Word]>> {
+    fn get_symbols_mut(&mut self) -> Result<SymbolTable<&mut [Word]>, MemoryError> {
         let addr = self.heap.get_mut::<1>(Self::SYMBOLS).map(|[addr]| *addr)?;
         self.heap.get_block_mut(addr).map(SymbolTable::new)
     }
@@ -212,24 +219,15 @@ where
     pub fn parse(&mut self, code: &str) -> Result<Offset, CoreError> {
         let mut collector = ParseCollector::new(self);
         Parser::new(code, &mut collector).parse_block()?;
-        let result = collector.parse.pop::<2>().ok_or(CoreError::InternalError)?;
+        let result = collector.parse.pop::<2>()?;
         Ok(result[1])
     }
 
-    pub fn alloc_string(&mut self, string: &str) -> Option<VmValue> {
-        // Get the raw bytes of the string
+    pub fn alloc_string(&mut self, string: &str) -> Result<VmValue, MemoryError> {
         let bytes = string.as_bytes();
-
-        // Calculate how many words we need (1 byte per u32, rounded up)
         let word_count = (bytes.len() + 3) / 4; // ceiling division
-
-        // Create a vector to hold the length + bytes packed into words
         let mut words = Vec::with_capacity(word_count + 1);
-
-        // First word is the length of the string in bytes
         words.push(bytes.len() as u32);
-
-        // Pack bytes into words (4 bytes per word)
         let mut current_word = 0u32;
         for (i, &byte) in bytes.iter().enumerate() {
             let shift = (i % 4) * 8;
@@ -241,20 +239,18 @@ where
                 current_word = 0;
             }
         }
-
-        // Allocate the block with the words
         self.heap.alloc_block(&words).map(VmValue::String)
     }
 
-    pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Option<Offset> {
+    pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Result<Offset, MemoryError> {
         self.get_symbols_mut()?.get_or_insert(Symbol::from(symbol)?)
     }
 
-    pub fn alloc_value(&mut self, value: &Value) -> Option<VmValue> {
+    pub fn alloc_value(&mut self, value: &Value) -> Result<VmValue, MemoryError> {
         match value {
             // Simple values that don't require heap allocation
-            Value::None => Some(VmValue::None),
-            Value::Int(n) => Some(VmValue::Int(*n)),
+            Value::None => Ok(VmValue::None),
+            Value::Int(n) => Ok(VmValue::Int(*n)),
 
             // Values requiring string allocation
             Value::String(s) => self.alloc_string(s.as_ref()),
@@ -269,15 +265,10 @@ where
                 let mut vm_values = Vec::with_capacity(items.len() * 2);
 
                 for item in items.iter() {
-                    // Recursively allocate each item
-                    if let Some(vm_value) = self.alloc_value(item) {
-                        // Add the VM representation to our list
-                        let repr = vm_value.vm_repr();
-                        vm_values.push(repr[0]);
-                        vm_values.push(repr[1]);
-                    } else {
-                        return None; // Allocation failed for an item
-                    }
+                    let vm_value = self.alloc_value(item)?;
+                    let repr = vm_value.vm_repr();
+                    vm_values.push(repr[0]);
+                    vm_values.push(repr[1]);
                 }
 
                 // Allocate the block in the heap
@@ -296,7 +287,7 @@ where
                         .and_then(|mut ctx| ctx.put(symbol, vm_value.vm_repr()))?;
                 }
 
-                Some(VmValue::Context(context))
+                Ok(VmValue::Context(context))
             }
         }
     }
@@ -306,44 +297,39 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get_symbol(&self, symbol: SymbolId) -> Option<SmolStr> {
+    pub fn get_symbol(&self, symbol: SymbolId) -> Result<SmolStr, MemoryError> {
         let addr = self.heap.get::<1>(Self::SYMBOLS).map(|[addr]| addr)?;
         let symbol_table = self.heap.get_block(addr).map(SymbolTable::new)?;
         let inlined = symbol_table.get(symbol)?;
-        Some(inlined.to_string())
+        Ok(inlined.to_string())
     }
 
-    pub fn to_value(&self, vm_value: VmValue) -> Option<Value> {
+    pub fn to_value(&self, vm_value: VmValue) -> Result<Value, CoreError> {
         match vm_value {
             // Simple values that don't require heap access
-            VmValue::None => Some(Value::None),
-            VmValue::Int(n) => Some(Value::Int(n)),
+            VmValue::None => Ok(Value::None),
+            VmValue::Int(n) => Ok(Value::Int(n)),
 
             // Symbol-based values - use our simplified symbol table
             VmValue::Word(symbol) => {
                 let symbol_name = self.get_symbol(symbol)?;
-                Some(Value::Word(symbol_name))
+                Ok(Value::Word(symbol_name))
             }
 
             VmValue::SetWord(symbol) => {
                 let symbol_name = self.get_symbol(symbol)?;
-                Some(Value::SetWord(symbol_name))
+                Ok(Value::SetWord(symbol_name))
             }
 
             // String value stored in heap
             VmValue::String(offset) => {
                 let string_block = self.heap.get_block(offset)?;
                 if string_block.is_empty() {
-                    return Some(Value::String("".into()));
+                    return Ok(Value::String("".into()));
                 }
 
                 // First word is the length
                 let length = string_block[0] as usize;
-
-                // Safety check on length
-                if length > string_block.len() * 4 {
-                    return None; // Invalid length
-                }
 
                 // Convert the block data to bytes safely
                 let mut bytes = Vec::with_capacity(length);
@@ -369,8 +355,8 @@ where
 
                 // Convert bytes to string
                 match String::from_utf8(bytes) {
-                    Ok(string) => Some(Value::String(string.into())),
-                    Err(_) => None, // UTF-8 decoding error
+                    Ok(string) => Ok(Value::String(string.into())),
+                    Err(e) => Err(e.into()), // UTF-8 decoding error
                 }
             }
 
@@ -378,7 +364,7 @@ where
             VmValue::Block(offset) => {
                 let block_data = self.heap.get_block(offset)?;
                 if block_data.is_empty() {
-                    return Some(Value::Block(Box::new([])));
+                    return Ok(Value::Block(Box::new([])));
                 }
 
                 let mut values = Vec::new();
@@ -395,22 +381,17 @@ where
                     // Convert tag/data to VmValue using the helper method
                     let vm_value = VmValue::from_tag_data(tag, data)?;
 
-                    // Recursively read the value
-                    if let Some(value) = self.to_value(vm_value) {
-                        values.push(value);
-                    } else {
-                        return None; // Failed to read a value
-                    }
+                    values.push(self.to_value(vm_value)?);
                 }
 
-                Some(Value::Block(values.into_boxed_slice()))
+                Ok(Value::Block(values.into_boxed_slice()))
             }
 
             // Context value stored in heap
             VmValue::Context(offset) => {
                 let context_block = self.heap.get_block(offset)?;
                 if context_block.is_empty() {
-                    return Some(Value::Context(Box::new([])));
+                    return Ok(Value::Context(Box::new([])));
                 }
 
                 let mut pairs = Vec::new();
@@ -418,26 +399,17 @@ where
 
                 // Use the iterator to efficiently iterate through all entries in the context
                 for (symbol, [tag, data]) in &context_data {
-                    // Get the symbol name
                     let symbol_name = self.get_symbol(symbol)?;
-
-                    // Convert the tag/data to a VmValue
-                    let Some(vm_value) = VmValue::from_tag_data(tag, data) else {
-                        continue; // Skip unknown tags
-                    };
-
-                    // Recursively convert to Value
-                    if let Some(value) = self.to_value(vm_value) {
-                        pairs.push((symbol_name, value));
-                    }
+                    let vm_value = VmValue::from_tag_data(tag, data)?;
+                    pairs.push((symbol_name, self.to_value(vm_value)?));
                 }
 
-                Some(Value::Context(pairs.into_boxed_slice()))
+                Ok(Value::Context(pairs.into_boxed_slice()))
             }
         }
     }
 
-    pub fn read_value(&self, addr: Offset) -> Option<Value> {
+    pub fn read_value(&self, addr: Offset) -> Result<Value, CoreError> {
         // Get the tag and data from the address
         let [tag, data] = self.heap.get::<2>(addr)?;
 
@@ -476,10 +448,10 @@ pub struct Exec<'a, T> {
 impl<'a, T> Exec<'a, T> {
     const LEAVE_MARKER: Offset = 0x10000;
 
-    fn new(module: &'a mut Module<T>, block: Offset) -> Option<Self> {
+    fn new(module: &'a mut Module<T>, block: Offset) -> Result<Self, MemoryError> {
         let mut env = Stack::new([0; 512]);
         env.push([module.system_words])?;
-        Some(Self {
+        Ok(Self {
             block,
             ip: 0,
             module,
@@ -495,40 +467,36 @@ impl<'a, T> Exec<'a, T>
 where
     T: AsRef<[Word]>,
 {
-    pub fn get_block<const N: usize>(&self, block: Offset, offset: Offset) -> Option<[Word; N]> {
+    pub fn get_block<const N: usize>(
+        &self,
+        block: Offset,
+        offset: Offset,
+    ) -> Result<[Word; N], MemoryError> {
         self.module.get_block(block, offset)
     }
 
-    pub fn get_block_len(&self, block: Offset) -> Option<usize> {
+    pub fn get_block_len(&self, block: Offset) -> Result<usize, MemoryError> {
         self.module.heap.get_block(block).map(|block| block.len())
     }
 
-    pub fn find_word(&self, symbol: SymbolId) -> Result<MemValue, CoreError> {
-        let [ctx] = self.env.peek().ok_or(CoreError::StackUnderflow)?;
-        let context = self
-            .module
-            .heap
-            .get_block(ctx)
-            .map(Context::new)
-            .ok_or(CoreError::InternalError)?;
+    pub fn find_word(&self, symbol: SymbolId) -> Result<MemValue, MemoryError> {
+        let [ctx] = self.env.peek().ok_or(MemoryError::StackUnderflow)?;
+        let context = self.module.heap.get_block(ctx).map(Context::new)?;
         let result = context.get(symbol);
         match result {
-            Err(CoreError::WordNotFound) => {
+            Err(MemoryError::WordNotFound) => {
                 if ctx != self.module.system_words {
-                    let system_words = self
-                        .module
-                        .get_system_words()
-                        .ok_or(CoreError::InternalError)?;
+                    let system_words = self.module.get_system_words()?;
                     system_words.get(symbol)
                 } else {
-                    result
+                    result.map_err(Into::into)
                 }
             }
-            _ => result,
+            _ => result.map_err(Into::into),
         }
     }
 
-    pub fn to_value(&self, vm_value: VmValue) -> Option<Value> {
+    pub fn to_value(&self, vm_value: VmValue) -> Result<Value, CoreError> {
         self.module.to_value(vm_value)
     }
 }
@@ -537,15 +505,15 @@ impl<'a, T> Exec<'a, T>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
-    pub fn pop<const N: usize>(&mut self) -> Option<[Word; N]> {
+    pub fn pop<const N: usize>(&mut self) -> Result<[Word; N], MemoryError> {
         self.stack.pop()
     }
 
-    pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Option<()> {
+    pub fn push<const N: usize>(&mut self, value: [Word; N]) -> Result<(), MemoryError> {
         self.stack.push(value)
     }
 
-    pub fn jmp(&mut self, block: Offset) -> Option<()> {
+    pub fn jmp(&mut self, block: Offset) -> Result<(), CoreError> {
         self.op_stack.push([
             Op::LEAVE_BLOCK,
             self.block,
@@ -554,42 +522,37 @@ where
         ])?;
         self.block = block;
         self.ip = 0;
-        Some(())
+        Ok(())
     }
 
-    pub fn push_op(&mut self, op: Word, word: Word, arity: Word) -> Option<()> {
+    pub fn push_op(&mut self, op: Word, word: Word, arity: Word) -> Result<(), MemoryError> {
         self.op_stack.push([op, word, self.stack.len()?, arity])
     }
 
-    pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Option<Offset> {
+    pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Result<Offset, MemoryError> {
         self.module.heap.alloc(values)
     }
 
-    pub fn put_context(&mut self, symbol: SymbolId, value: [Word; 2]) -> Option<()> {
-        let [ctx] = self.env.peek()?;
-        self.module
-            .heap
-            .get_block_mut(ctx)
-            .map(Context::new)
-            .and_then(|mut ctx| ctx.put(symbol, value))
+    pub fn put_context(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
+        let [ctx] = self.env.peek().ok_or(MemoryError::StackUnderflow)?;
+        let mut context = self.module.heap.get_block_mut(ctx).map(Context::new)?;
+        context.put(symbol, value)
     }
 
-    pub fn new_context(&mut self, size: u32) -> Option<()> {
+    pub fn new_context(&mut self, size: u32) -> Result<(), MemoryError> {
         self.env.push([self.module.heap.alloc_context(size)?])
     }
 
-    pub fn pop_context(&mut self) -> Option<Offset> {
+    pub fn pop_context(&mut self) -> Result<Offset, MemoryError> {
         self.env.pop().map(|[addr]| addr)
     }
 
-    fn resolve(&self, value: MemValue) -> Result<MemValue, CoreError> {
+    fn resolve(&self, value: MemValue) -> Result<MemValue, MemoryError> {
         match value[0] {
             VmValue::TAG_WORD => self.find_word(value[1]).and_then(|result| {
                 if result[0] == VmValue::TAG_STACK_VALUE {
-                    self.base
-                        .peek::<1>()
-                        .and_then(|[base]| self.stack.get(base + result[1]))
-                        .ok_or(CoreError::StackUnderflow)
+                    let [base] = self.base.peek::<1>().ok_or(MemoryError::StackUnderflow)?;
+                    self.stack.get(base + result[1])
                 } else {
                     Ok(result)
                 }
@@ -603,32 +566,34 @@ where
             VmValue::TAG_NATIVE_FN => self
                 .module
                 .get_func(value[1])
-                .map(|native| (Op::CALL_NATIVE, native.arity))
-                .ok_or(CoreError::FunctionNotFound),
+                .map(|native| (Op::CALL_NATIVE, native.arity)),
             VmValue::TAG_FUNC => self
                 .module
                 .get_array::<1>(value[1])
                 .map(|[arity]| (Op::CALL_FUNC, arity))
-                .ok_or(CoreError::FunctionNotFound),
+                .map_err(Into::into),
             VmValue::TAG_SET_WORD => Ok((Op::SET_WORD, 2)),
             _ => Ok((Op::NONE, 0)),
         }
     }
 
-    fn do_op(&mut self, op: Word, word: Word) -> Option<()> {
+    fn do_op(&mut self, op: Word, word: Word) -> Result<(), CoreError> {
         match op {
             Op::SET_WORD => self
                 .stack
                 .pop()
-                .and_then(|value| self.put_context(word, value)),
+                .and_then(|value| self.put_context(word, value))
+                .map_err(Into::into),
             Op::CALL_NATIVE => {
                 let native_fn = self.module.get_func(word)?;
                 (native_fn.func)(self)
             }
-            Op::CALL_FUNC => self.module.get_array(word).and_then(|[arity, ctx, blk]| {
+            Op::CALL_FUNC => {
+                let [arity, ctx, blk] = self.module.get_array(word)?;
                 self.env.push([ctx])?;
+
                 let sp = self.stack.len()?;
-                let bp = sp.checked_sub(arity)?;
+                let bp = sp.checked_sub(arity).ok_or(MemoryError::StackUnderflow)?;
                 self.base.push([bp])?;
 
                 self.op_stack.push([
@@ -640,46 +605,51 @@ where
                 self.block = blk;
                 self.ip = 0;
 
-                Some(())
-            }),
+                Ok(())
+            }
             Op::CONTEXT => {
                 let ctx = self.pop_context()?;
-                self.stack.push([VmValue::TAG_CONTEXT, ctx])
+                self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
+                Ok(())
             }
-            _ => None,
+            _ => Err(CoreError::InternalError),
         }
     }
 
-    fn next_op(&mut self) -> Option<(Word, Word)> {
+    fn next_op(&mut self) -> Result<(Word, Word), CoreError> {
         loop {
             // Check pending operations
             if let Some([bp, arity]) = self.op_stack.peek() {
-                if self.stack.len()? == bp + arity {
+                let sp = self.stack.len()?;
+                if sp == bp + arity {
                     let [op, word, _, _] = self.op_stack.pop()?;
-                    return Some((op, word));
+                    return Ok((op, word));
                 }
             }
 
-            if let Some(value) = self.get_block(self.block, self.ip) {
+            if let Ok(value) = self.get_block(self.block, self.ip) {
                 self.ip += 2;
-                let value = self.resolve(value).ok()?;
-                let (op, arity) = self.op_arity(value).ok()?;
+                let value = self.resolve(value)?;
+                let (op, arity) = self.op_arity(value)?;
                 if arity == 0 {
                     if op == Op::NONE {
                         self.stack.push(value)?;
                     } else {
-                        return Some((op, value[1]));
+                        return Ok((op, value[1]));
                     }
                 } else {
-                    self.push_op(op, value[1], arity);
+                    self.push_op(op, value[1], arity)?;
                 }
             } else {
                 // end of block, let's return single value and set up base
+                if self.op_stack.is_empty()? {
+                    return Err(CoreError::EndOfInput);
+                }
+
                 let [op, block, bp, ip] = self.op_stack.pop()?;
 
                 if op != Op::LEAVE_FUNC && op != Op::LEAVE_BLOCK {
-                    // panic!("ERROR: expecing leave");
-                    return None;
+                    return Err(CoreError::InternalError);
                 }
 
                 let cut = if op == Op::LEAVE_FUNC {
@@ -697,7 +667,7 @@ where
         }
     }
 
-    fn leave(&mut self, bp: Offset) -> Option<()> {
+    fn leave(&mut self, bp: Offset) -> Result<(), MemoryError> {
         let sp = self.stack.len()?;
         match sp.checked_sub(bp) {
             Some(2) => {}
@@ -710,17 +680,26 @@ where
                 self.stack.push(result)?;
             }
             None => {
-                return None;
+                return Err(MemoryError::StackUnderflow);
             }
         };
-        Some(())
+        Ok(())
     }
 
-    fn eval(&mut self) -> Option<MemValue> {
-        while let Some((op, word)) = self.next_op() {
-            self.do_op(op, word)?;
+    fn eval(&mut self) -> Result<MemValue, CoreError> {
+        loop {
+            match self.next_op() {
+                Ok((op, word)) => self.do_op(op, word)?,
+                Err(CoreError::EndOfInput) => {
+                    if self.stack.is_empty()? {
+                        return Ok([VmValue::TAG_NONE, 0]);
+                    } else {
+                        return self.stack.pop().map_err(Into::into);
+                    }
+                }
+                Err(error) => return Err(error),
+            }
         }
-        self.stack.pop().or(Some([VmValue::TAG_NONE, 0]))
     }
 
     // fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
@@ -862,46 +841,31 @@ where
         self.module
             .alloc_string(string)
             .and_then(|value| self.parse.push(value.vm_repr()))
-            .ok_or(MemoryError::OutOfMemory)
     }
 
     fn word(&mut self, kind: WordKind, word: &str) -> Result<(), Self::Error> {
-        self.module
-            .get_or_insert_symbol(word)
-            .and_then(|id| {
-                let value = match kind {
-                    WordKind::Word => VmValue::Word(id),
-                    WordKind::SetWord => VmValue::SetWord(id),
-                };
-                self.parse.push(value.vm_repr())
-            })
-            .ok_or(MemoryError::OutOfMemory)
+        self.module.get_or_insert_symbol(word).and_then(|id| {
+            let value = match kind {
+                WordKind::Word => VmValue::Word(id),
+                WordKind::SetWord => VmValue::SetWord(id),
+            };
+            self.parse.push(value.vm_repr())
+        })
     }
 
     fn integer(&mut self, value: i32) -> Result<(), MemoryError> {
-        self.parse
-            .push([VmValue::TAG_INT, value as u32])
-            .ok_or(MemoryError::OutOfMemory)
+        self.parse.push([VmValue::TAG_INT, value as u32])
     }
 
     fn begin_block(&mut self) -> Result<(), MemoryError> {
-        self.parse
-            .len()
-            .and_then(|len| self.ops.push([len]))
-            .ok_or(MemoryError::OutOfMemory)
+        self.parse.len().and_then(|len| self.ops.push([len]))
     }
 
     fn end_block(&mut self) -> Result<(), MemoryError> {
-        let [bp] = self.ops.pop().ok_or(MemoryError::UnexpectedError)?;
+        let [bp] = self.ops.pop()?;
         let block_data = self.parse.pop_all(bp).ok_or(MemoryError::UnexpectedError)?;
-        let offset = self
-            .module
-            .heap
-            .alloc_block(block_data)
-            .ok_or(MemoryError::OutOfMemory)?;
-        self.parse
-            .push([VmValue::TAG_BLOCK, offset])
-            .ok_or(MemoryError::OutOfMemory)
+        let offset = self.module.heap.alloc_block(block_data)?;
+        self.parse.push([VmValue::TAG_BLOCK, offset])
     }
 }
 
@@ -911,7 +875,7 @@ where
 //     module.parse(str)
 // }
 
-pub fn eval(module: &mut Exec<&mut [Word]>) -> Option<[Word; 2]> {
+pub fn eval(module: &mut Exec<&mut [Word]>) -> Result<[Word; 2], CoreError> {
     module.eval()
 }
 
@@ -935,7 +899,7 @@ mod tests {
         let mut module =
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
         let block = module.parse(input)?;
-        module.eval(block).ok_or(CoreError::InternalError)
+        module.eval(block)
     }
 
     /// This test demonstrates the new Context iterator functionality by:
@@ -1830,7 +1794,7 @@ mod tests {
         // First call to next_op should process the 'add' word and identify it as a CALL_NATIVE operation
         // It will also push the arguments 7 and 8 onto the stack
         let op_result = exec.next_op();
-        assert!(op_result.is_some(), "next_op should return an operation");
+        assert!(op_result.is_ok(), "next_op should return an operation");
         let (op, value) = op_result.unwrap();
 
         // Should return CALL_NATIVE operation
@@ -1874,7 +1838,7 @@ mod tests {
         // There should be no more operations (next_op should return None)
         let next_result = exec.next_op();
         assert!(
-            next_result.is_none(),
+            next_result.is_err(),
             "next_op should return None at end of block"
         );
 
@@ -1915,7 +1879,7 @@ mod tests {
         // CALL_NATIVE operation for the inner 'add'.
         let op_result1 = exec.next_op();
         assert!(
-            op_result1.is_some(),
+            op_result1.is_ok(),
             "First next_op should return an operation"
         );
         let (op1, value1) = op_result1.unwrap();
@@ -1980,7 +1944,7 @@ mod tests {
         // Next call to next_op should identify the CALL_NATIVE operation for the outer 'add'
         let op_result2 = exec.next_op();
         assert!(
-            op_result2.is_some(),
+            op_result2.is_ok(),
             "Second next_op should return an operation"
         );
         let (op2, value2) = op_result2.unwrap();
@@ -2012,7 +1976,7 @@ mod tests {
         // There should be no more operations (next_op should return None)
         let next_result = exec.next_op();
         assert!(
-            next_result.is_none(),
+            next_result.is_err(),
             "next_op should return None at end of block"
         );
 
@@ -2141,7 +2105,7 @@ mod tests {
 
         // Get the first operation
         let op_result = exec.next_op();
-        assert!(op_result.is_some(), "next_op should return an operation");
+        assert!(op_result.is_ok(), "next_op should return an operation");
         let (op, func_addr) = op_result.unwrap();
         println!("Operation type: {}, func_addr: {}", op, func_addr);
 
