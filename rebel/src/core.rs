@@ -50,6 +50,7 @@ pub enum VmValue {
     String(Offset),
     Block(Offset),
     Context(Offset),
+    Path(Offset),
     Word(SymbolId),
     SetWord(SymbolId),
     GetWord(SymbolId),
@@ -69,6 +70,7 @@ impl VmValue {
     pub const TAG_STACK_VALUE: Word = 9;
     pub const TAG_FUNC: Word = 10;
     pub const TAG_BOOL: Word = 11;
+    pub const TAG_PATH: Word = 12;
 
     /// Convert a tag and data word into a VmValue
     ///
@@ -107,6 +109,7 @@ impl VmValue {
             VmValue::Block(offset) => [Self::TAG_BLOCK, *offset],
             VmValue::Context(offset) => [Self::TAG_CONTEXT, *offset],
             VmValue::Func(offset) => [Self::TAG_FUNC, *offset],
+            VmValue::Path(offset) => [Self::TAG_PATH, *offset],
         }
     }
 
@@ -359,6 +362,32 @@ where
         Ok(inlined.to_string())
     }
 
+    fn get_block_value(&self, offset: Offset) -> Result<Box<[Value]>, CoreError> {
+        let block_data = self.heap.get_block(offset)?;
+        if block_data.is_empty() {
+            return Ok(Box::new([]));
+        }
+
+        let mut values = Vec::new();
+
+        // Process pairs of tag/value words
+        for i in (0..block_data.len()).step_by(2) {
+            if i + 1 >= block_data.len() {
+                break; // Incomplete pair
+            }
+
+            let tag = block_data[i];
+            let data = block_data[i + 1];
+
+            // Convert tag/data to VmValue using the helper method
+            let vm_value = VmValue::from_tag_data(tag, data)?;
+
+            values.push(self.to_value(vm_value)?);
+        }
+
+        Ok(values.into_boxed_slice())
+    }
+
     pub fn to_value(&self, vm_value: VmValue) -> Result<Value, CoreError> {
         match vm_value {
             // Simple values that don't require heap access
@@ -420,32 +449,8 @@ where
                 }
             }
 
-            // Block value stored in heap
-            VmValue::Block(offset) => {
-                let block_data = self.heap.get_block(offset)?;
-                if block_data.is_empty() {
-                    return Ok(Value::Block(Box::new([])));
-                }
-
-                let mut values = Vec::new();
-
-                // Process pairs of tag/value words
-                for i in (0..block_data.len()).step_by(2) {
-                    if i + 1 >= block_data.len() {
-                        break; // Incomplete pair
-                    }
-
-                    let tag = block_data[i];
-                    let data = block_data[i + 1];
-
-                    // Convert tag/data to VmValue using the helper method
-                    let vm_value = VmValue::from_tag_data(tag, data)?;
-
-                    values.push(self.to_value(vm_value)?);
-                }
-
-                Ok(Value::Block(values.into_boxed_slice()))
-            }
+            VmValue::Block(offset) => Ok(Value::Block(self.get_block_value(offset)?)),
+            VmValue::Path(offset) => Ok(Value::Path(self.get_block_value(offset)?)),
 
             // Context value stored in heap
             VmValue::Context(offset) => {
