@@ -23,6 +23,7 @@ pub enum ParserError<E> {
 pub enum WordKind {
     Word,
     SetWord,
+    GetWord,
 }
 
 pub trait Collector {
@@ -45,6 +46,7 @@ where
     input: &'a str,
     cursor: CharIndices<'a>,
     collector: &'a mut C,
+    in_path: bool,
 }
 
 impl<'a, C> Parser<'a, C>
@@ -56,6 +58,7 @@ where
             input,
             collector,
             cursor: input.char_indices(),
+            in_path: false,
         }
     }
 
@@ -96,70 +99,55 @@ where
         Err(ParserError::EndOfInput)
     }
 
-    fn report_word(
+    fn collect_word(
         &mut self,
-        start_pos: usize,
-        pos: usize,
-        word_kind: WordKind,
-        close_path: bool,
-    ) -> Result<(), ParserError<C::Error>> {
-        if pos == start_pos {
-            Err(ParserError::EmptyWord)
-        } else {
-            self.collector
-                .word(
-                    word_kind,
-                    self.input
-                        .get(start_pos..pos)
-                        .ok_or(ParserError::EndOfInput)?,
-                )
-                .map_err(ParserError::CollectorError)?;
-            if close_path {
-                self.collector
-                    .end_path()
-                    .map_err(ParserError::CollectorError)?;
+        symbol: &str,
+        kind: WordKind,
+        consumed: Option<char>,
+    ) -> Result<Option<char>, C::Error> {
+        if let Some('/') = consumed {
+            if self.in_path == false {
+                self.in_path = true;
+                self.collector.begin_path()?;
             }
-            Ok(())
         }
+        self.collector.word(kind, symbol).map(|_| consumed)
     }
 
     fn parse_word(&mut self, start_pos: usize) -> Result<Option<char>, ParserError<C::Error>> {
-        let mut in_path = false;
-        let mut word_pos = start_pos;
-        loop {
+        let mut kind = WordKind::Word;
+
+        let consumed = loop {
             match self.cursor.next() {
                 Some((pos, char)) => match char {
-                    c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
                     ':' => {
-                        return self
-                            .report_word(word_pos, pos, WordKind::SetWord, in_path)
-                            .map(|()| None);
-                    }
-                    c if c.is_ascii_whitespace() || c == ']' => {
-                        let consumed = if c == ']' { Some(c) } else { None };
-                        return self
-                            .report_word(word_pos, pos, WordKind::Word, in_path)
-                            .map(|()| consumed);
-                    }
-                    '/' => {
-                        if !in_path {
-                            self.collector
-                                .begin_path()
-                                .map_err(ParserError::CollectorError)?;
-                            in_path = true;
+                        if pos == start_pos {
+                            kind = WordKind::GetWord;
+                        } else {
+                            kind = WordKind::SetWord;
+                            break Some(char);
                         }
-                        self.report_word(word_pos, pos, WordKind::Word, false)?;
-                        word_pos = pos + 1;
                     }
+                    ']' | '/' => break Some(char),
+                    c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
+                    c if c.is_ascii_whitespace() => break Some(char),
                     _ => return Err(ParserError::UnexpectedChar(char)),
                 },
-                None => {
-                    return self
-                        .report_word(word_pos, self.input.len(), WordKind::Word, in_path)
-                        .map(|()| None);
-                }
+                None => break None,
             }
+        };
+
+        let pos = self.cursor.offset() - if consumed.is_some() { 1 } else { 0 };
+        if pos == start_pos {
+            return Err(ParserError::EmptyWord);
         }
+        let symbol = self
+            .input
+            .get(start_pos..pos)
+            .ok_or(ParserError::UnexpectedError)?;
+
+        self.collect_word(symbol, kind, consumed)
+            .map_err(ParserError::CollectorError)
     }
 
     fn parse_number(&mut self, char: char) -> Result<Option<char>, ParserError<C::Error>> {
@@ -209,6 +197,23 @@ where
             .map_err(ParserError::CollectorError)
     }
 
+    fn process_block_end(&mut self, consumed: Option<char>) -> Result<(), C::Error> {
+        println!("consumed: {:?}", consumed);
+        match consumed {
+            Some('/') => {}
+            _ => {
+                if self.in_path {
+                    self.in_path = false;
+                    self.collector.end_path()?;
+                }
+            }
+        }
+        if let Some(']') = consumed {
+            self.collector.end_block()?;
+        }
+        Ok(())
+    }
+
     fn parse(&mut self) -> Result<(), ParserError<C::Error>> {
         while let Some((pos, char)) = self.skip_whitespace() {
             let consumed = match char {
@@ -223,14 +228,8 @@ where
                 c if c.is_ascii_digit() || c == '+' || c == '-' => self.parse_number(c)?,
                 _ => return Err(ParserError::UnexpectedChar(char)),
             };
-            match consumed {
-                Some(']') => {
-                    self.collector
-                        .end_block()
-                        .map_err(ParserError::CollectorError)?;
-                }
-                _ => {}
-            }
+            self.process_block_end(consumed)
+                .map_err(ParserError::CollectorError)?;
         }
         Ok(())
     }

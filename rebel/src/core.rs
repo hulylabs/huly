@@ -52,6 +52,7 @@ pub enum VmValue {
     Context(Offset),
     Word(SymbolId),
     SetWord(SymbolId),
+    GetWord(SymbolId),
     Func(Offset),
 }
 
@@ -64,9 +65,10 @@ impl VmValue {
     pub const TAG_INLINE_STRING: Word = 5;
     pub const TAG_WORD: Word = 6;
     pub const TAG_SET_WORD: Word = 7;
-    pub const TAG_STACK_VALUE: Word = 8;
-    pub const TAG_FUNC: Word = 9;
-    pub const TAG_BOOL: Word = 10;
+    pub const TAG_GET_WORD: Word = 8;
+    pub const TAG_STACK_VALUE: Word = 9;
+    pub const TAG_FUNC: Word = 10;
+    pub const TAG_BOOL: Word = 11;
 
     /// Convert a tag and data word into a VmValue
     ///
@@ -101,6 +103,7 @@ impl VmValue {
             VmValue::String(offset) => [Self::TAG_INLINE_STRING, *offset],
             VmValue::Word(symbol) => [Self::TAG_WORD, *symbol],
             VmValue::SetWord(symbol) => [Self::TAG_SET_WORD, *symbol],
+            VmValue::GetWord(symbol) => [Self::TAG_GET_WORD, *symbol],
             VmValue::Block(offset) => [Self::TAG_BLOCK, *offset],
             VmValue::Context(offset) => [Self::TAG_CONTEXT, *offset],
             VmValue::Func(offset) => [Self::TAG_FUNC, *offset],
@@ -307,6 +310,7 @@ where
             // Symbol-based values
             Value::Word(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::Word),
             Value::SetWord(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::SetWord),
+            Value::GetWord(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::GetWord),
 
             // Nested collection types
             Value::Block(items) => {
@@ -370,6 +374,11 @@ where
             VmValue::SetWord(symbol) => {
                 let symbol_name = self.get_symbol(symbol)?;
                 Ok(Value::SetWord(symbol_name))
+            }
+
+            VmValue::GetWord(symbol) => {
+                let symbol_name = self.get_symbol(symbol)?;
+                Ok(Value::GetWord(symbol_name))
             }
 
             // String value stored in heap
@@ -951,6 +960,7 @@ where
             let value = match kind {
                 WordKind::Word => VmValue::Word(id),
                 WordKind::SetWord => VmValue::SetWord(id),
+                WordKind::GetWord => VmValue::GetWord(id),
             };
             self.parse.push(value.vm_repr())
         })

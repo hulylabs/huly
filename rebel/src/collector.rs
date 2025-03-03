@@ -67,6 +67,7 @@ impl Collector for ValueCollector {
         self.push(match kind {
             WordKind::Word => Value::Word(symbol),
             WordKind::SetWord => Value::SetWord(symbol),
+            WordKind::GetWord => Value::GetWord(symbol),
         })
     }
 
@@ -75,6 +76,7 @@ impl Collector for ValueCollector {
     }
 
     fn begin_block(&mut self) -> Result<(), Self::Error> {
+        println!("begin block");
         if self.in_path {
             return Err(ValueCollectorError::InvalidPath);
         }
@@ -82,6 +84,7 @@ impl Collector for ValueCollector {
     }
 
     fn end_block(&mut self) -> Result<(), Self::Error> {
+        println!("end block");
         if self.stack.len() > 1 {
             let block = self.pop_block()?;
             self.push(Value::Block(block.into_boxed_slice()))?;
@@ -90,16 +93,18 @@ impl Collector for ValueCollector {
     }
 
     fn begin_path(&mut self) -> Result<(), Self::Error> {
+        println!("begin path");
         self.in_path = true;
         Ok(self.stack.push(Vec::new()))
     }
 
     fn end_path(&mut self) -> Result<(), Self::Error> {
+        println!("end path");
         self.in_path = false;
-        if self.stack.len() > 1 {
-            let block = self.pop_block()?;
-            self.push(Value::Path(block.into_boxed_slice()))?;
-        }
+        // if self.stack.len() > 1 {
+        let block = self.pop_block()?;
+        self.push(Value::Path(block.into_boxed_slice()))?;
+        // }
         Ok(())
     }
 }

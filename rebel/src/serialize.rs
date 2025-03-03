@@ -70,6 +70,7 @@ impl BinTag {
     pub const INLINE_STRING: u8 = VmValue::TAG_INLINE_STRING as u8;
     pub const WORD: u8 = VmValue::TAG_WORD as u8;
     pub const SET_WORD: u8 = VmValue::TAG_SET_WORD as u8;
+    pub const GET_WORD: u8 = VmValue::TAG_GET_WORD as u8;
 }
 
 // ============================================================================
@@ -95,6 +96,9 @@ pub trait Serializer {
 
     /// Handle serialization of set-word value
     fn set_word(&mut self, value: &str) -> Result<(), Self::Error>;
+
+    /// Handle serialization of get-word value
+    fn get_word(&mut self, value: &str) -> Result<(), Self::Error>;
 
     /// Begin serializing a block
     fn begin_block(&mut self, len: usize) -> Result<(), Self::Error>;
@@ -126,6 +130,7 @@ impl ValueSerialize for Value {
             Value::String(s) => serializer.string(s),
             Value::Word(w) => serializer.word(w),
             Value::SetWord(w) => serializer.set_word(w),
+            Value::GetWord(w) => serializer.get_word(w),
             Value::Block(block) => {
                 serializer.begin_block(block.len())?;
                 for item in block.iter() {
@@ -238,6 +243,11 @@ impl<W: Write> Serializer for BinarySerializer<W> {
         // Write tag
         self.writer.write_all(&[BinTag::SET_WORD])?;
         // Write string with length prefix
+        self.write_string(value)
+    }
+
+    fn get_word(&mut self, value: &str) -> Result<(), Self::Error> {
+        self.writer.write_all(&[BinTag::GET_WORD])?;
         self.write_string(value)
     }
 
@@ -403,6 +413,11 @@ impl<R: Read> BinaryDeserializer<R> {
             BinTag::SET_WORD => {
                 let value = self.read_string()?;
                 Ok(Value::SetWord(SmolStr::new(value)))
+            }
+
+            BinTag::GET_WORD => {
+                let value = self.read_string()?;
+                Ok(Value::GetWord(SmolStr::new(value)))
             }
 
             BinTag::BLOCK => {

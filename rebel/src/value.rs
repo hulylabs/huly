@@ -12,6 +12,7 @@ pub enum Value {
     String(SmolStr),
     Word(SmolStr),
     SetWord(SmolStr),
+    GetWord(SmolStr),
     Context(Box<[(SmolStr, Value)]>),
     Path(Box<[Value]>),
 }
@@ -24,6 +25,7 @@ impl fmt::Display for Value {
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::Word(w) => write!(f, "{}", w),
             Value::SetWord(w) => write!(f, "{}:", w),
+            Value::GetWord(w) => write!(f, "${}", w),
             Value::Block(block) => {
                 write!(f, "[")?;
                 let mut first = true;
@@ -575,6 +577,7 @@ impl Value {
             Value::String(s) => Value::String(s.clone()),
             Value::Word(w) => Value::String(w.clone()),
             Value::SetWord(w) => Value::String(format!("{}:", w).into()),
+            Value::GetWord(w) => Value::String(format!("{}:", w).into()),
             Value::Block(_) => Value::String(format!("{}", self).into()),
             Value::Context(_) => Value::String(format!("{}", self).into()),
             Value::Path(_) => Value::String(format!("{}", self).into()),
