@@ -78,7 +78,7 @@ where
         None
     }
 
-    fn parse_string(&mut self, pos: usize) -> Result<(), ParserError<C::Error>> {
+    fn parse_string(&mut self, pos: usize) -> Result<Option<char>, ParserError<C::Error>> {
         let start_pos = pos + 1; // Skip the opening quote
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
@@ -89,6 +89,7 @@ where
                             .get(start_pos..pos)
                             .ok_or(ParserError::EndOfInput)?,
                     )
+                    .map(|()| None)
                     .map_err(ParserError::CollectorError);
             }
         }
@@ -122,7 +123,7 @@ where
         }
     }
 
-    fn parse_word(&mut self, start_pos: usize) -> Result<bool, ParserError<C::Error>> {
+    fn parse_word(&mut self, start_pos: usize) -> Result<Option<char>, ParserError<C::Error>> {
         let mut in_path = false;
         let mut word_pos = start_pos;
         loop {
@@ -132,12 +133,13 @@ where
                     ':' => {
                         return self
                             .report_word(word_pos, pos, WordKind::SetWord, in_path)
-                            .map(|()| false);
+                            .map(|()| None);
                     }
                     c if c.is_ascii_whitespace() || c == ']' => {
+                        let consumed = if c == ']' { Some(c) } else { None };
                         return self
                             .report_word(word_pos, pos, WordKind::Word, in_path)
-                            .map(|()| c == ']');
+                            .map(|()| consumed);
                     }
                     '/' => {
                         if !in_path {
@@ -154,17 +156,17 @@ where
                 None => {
                     return self
                         .report_word(word_pos, self.input.len(), WordKind::Word, in_path)
-                        .map(|()| false);
+                        .map(|()| None);
                 }
             }
         }
     }
 
-    fn parse_number(&mut self, char: char) -> Result<bool, ParserError<C::Error>> {
+    fn parse_number(&mut self, char: char) -> Result<Option<char>, ParserError<C::Error>> {
         let mut value: i32 = 0;
         let mut is_negative = false;
         let mut has_digits = false;
-        let mut end_of_block = false;
+        let mut consumed = None;
 
         match char {
             '+' => {}
@@ -189,7 +191,7 @@ where
                         .ok_or(ParserError::IntegerOverflow)?;
                 }
                 ']' => {
-                    end_of_block = true;
+                    consumed = Some(char);
                     break;
                 }
                 _ => break,
@@ -203,37 +205,31 @@ where
         }
         self.collector
             .integer(value)
-            .map(|_| end_of_block)
+            .map(|_| consumed)
             .map_err(ParserError::CollectorError)
     }
 
     fn parse(&mut self) -> Result<(), ParserError<C::Error>> {
         while let Some((pos, char)) = self.skip_whitespace() {
-            match char {
+            let consumed = match char {
                 '[' => self
                     .collector
                     .begin_block()
+                    .map(|()| None)
                     .map_err(ParserError::CollectorError)?,
-                ']' => self
-                    .collector
-                    .end_block()
-                    .map_err(ParserError::CollectorError)?,
+                ']' => Some(char),
                 '"' => self.parse_string(pos)?,
-                c if c.is_ascii_alphabetic() => {
-                    if self.parse_word(pos)? {
-                        self.collector
-                            .end_block()
-                            .map_err(ParserError::CollectorError)?;
-                    }
-                }
-                c if c.is_ascii_digit() || c == '+' || c == '-' => {
-                    if self.parse_number(c)? {
-                        self.collector
-                            .end_block()
-                            .map_err(ParserError::CollectorError)?;
-                    }
-                }
+                c if c.is_ascii_alphabetic() => self.parse_word(pos)?,
+                c if c.is_ascii_digit() || c == '+' || c == '-' => self.parse_number(c)?,
                 _ => return Err(ParserError::UnexpectedChar(char)),
+            };
+            match consumed {
+                Some(']') => {
+                    self.collector
+                        .end_block()
+                        .map_err(ParserError::CollectorError)?;
+                }
+                _ => {}
             }
         }
         Ok(())
