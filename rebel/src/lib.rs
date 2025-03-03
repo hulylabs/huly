@@ -9,4 +9,5 @@ mod hash;
 pub mod mem;
 pub mod parse;
 pub mod serialize;
+pub mod ssh;
 pub mod value;

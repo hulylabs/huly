@@ -4,6 +4,7 @@ use anyhow::Result;
 use colored::*;
 use rebel::core::{Module, VmValue};
 use rebel::fs::fs_package;
+use rebel::ssh::ssh_package;
 use rustyline::{error::ReadlineError, DefaultEditor};
 use std::env;
 
@@ -16,6 +17,7 @@ fn main() -> Result<()> {
 
     let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
     fs_package(&mut module)?;
+    ssh_package(&mut module)?;
 
     // Check if there are command line arguments
     let args: Vec<String> = env::args().skip(1).collect();

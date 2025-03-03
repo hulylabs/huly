@@ -1,0 +1,12 @@
+; SSH Example
+; Usage: ssh "hostname" "command"
+; Example: ssh "localhost" "ls -la"
+
+; Connect to localhost and run 'ls -la'
+result: ssh "localhost" "ls -la"
+
+; Print the result
+print "Exit code:" result/exit_code
+print "Success:" result/success
+print "Output:" result/stdout
+print "Errors:" result/stderr
