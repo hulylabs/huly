@@ -186,6 +186,33 @@ mod tests {
         }
     }
 
+    // Path tests
+
+    #[test]
+    fn test_parse_path_1() {
+        let result = parse_test("context/name");
+        if let Value::Path(path) = result {
+            assert_eq!(path.len(), 2);
+            assert_eq!(path[0], "context");
+            assert_eq!(path[1], "name");
+        } else {
+            panic!("Expected path, got {:?}", result);
+        }
+    }
+
+    #[test]
+    fn test_parse_path_2() {
+        let result = parse_test("context/name/first");
+        if let Value::Path(path) = result {
+            assert_eq!(path.len(), 3);
+            assert_eq!(path[0], "context");
+            assert_eq!(path[1], "name");
+            assert_eq!(path[2], "first");
+        } else {
+            panic!("Expected path, got {:?}", result);
+        }
+    }
+
     // Block parsing tests
 
     #[test]
