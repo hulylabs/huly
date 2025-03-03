@@ -10,3 +10,20 @@ print "Exit code:" result/exit_code
 print "Success:" result/success
 print "Output:" result/stdout
 print "Errors:" result/stderr
+
+; Example with password authentication
+; Create options context with password
+options: context [
+    password: "password"
+]
+
+; Connect to test container and run a command
+test-result: ssh-with-options "testuser@localhost:2222" "echo 'Hello from test container'" options
+
+; Print the result
+print ""
+print "Test Container Result:"
+print "Exit code:" test-result/exit_code
+print "Success:" test-result/success
+print "Output:" test-result/stdout
+print "Errors:" test-result/stderr

@@ -744,20 +744,22 @@ where
                     return Err(CoreError::EndOfInput);
                 }
 
-                let [op, block, bp, ip] = self.op_stack.pop()?;
+                let (block, ip) = loop {
+                    let [op, block, bp, ip] = self.op_stack.pop()?;
 
-                if op != Op::LEAVE_FUNC && op != Op::LEAVE_BLOCK {
-                    return Err(CoreError::UnexpectedEndOfBlock);
-                }
-
-                let cut = if op == Op::LEAVE_FUNC {
-                    let [base] = self.base.pop()?;
-                    base
-                } else {
-                    bp
+                    match op {
+                        Op::LEAVE_FUNC => {
+                            let [base] = self.base.pop()?;
+                            self.leave(base)?;
+                            break (block, ip);
+                        }
+                        Op::LEAVE_BLOCK => {
+                            self.leave(bp)?;
+                            break (block, ip);
+                        }
+                        _ => return Ok((op, block)),
+                    }
                 };
-
-                self.leave(cut)?;
 
                 self.block = block;
                 self.ip = ip - Self::LEAVE_MARKER;

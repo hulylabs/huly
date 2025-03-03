@@ -37,4 +37,22 @@ print "Example 5: Running multiple commands"
 result5: ssh "localhost" "echo 'First command' && ls -la && echo 'Last command'"
 display-result result5
 
+; Example 6: Using password authentication with options
+print "Example 6: Using password authentication with options"
+options: context [
+    password: "password"
+]
+result6: ssh-with-options "testuser@localhost:2222" "echo 'Hello from test container'" options
+display-result result6
+
+; Example 7: File operations with password authentication
+print "Example 7: File operations with password authentication"
+; Create a test file
+ssh-with-options "testuser@localhost:2222" "echo 'Test content' > /tmp/rebel_test_file.txt" options
+; Read the file
+result7: ssh-with-options "testuser@localhost:2222" "cat /tmp/rebel_test_file.txt" options
+display-result result7
+; Delete the file
+ssh-with-options "testuser@localhost:2222" "rm /tmp/rebel_test_file.txt" options
+
 print "All examples completed!"
