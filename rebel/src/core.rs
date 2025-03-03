@@ -1,7 +1,5 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use std::mem;
-
 use crate::boot::core_package;
 use crate::mem::{Context, Heap, MemoryError, Offset, Stack, Symbol, SymbolId, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
