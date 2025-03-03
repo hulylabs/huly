@@ -1,5 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
+use std::mem;
+
 use crate::boot::core_package;
 use crate::mem::{Context, Heap, MemoryError, Offset, Stack, Symbol, SymbolId, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
@@ -84,7 +86,7 @@ impl VmValue {
     /// # Returns
     /// * `Ok(VmValue)` - The constructed VmValue if the tag is recognized
     /// * `Err(CoreError)` - If the tag is not recognized
-    pub fn from_tag_data(tag: Word, data: Word) -> Result<Self, CoreError> {
+    pub fn from_tag_data(tag: Word, data: Word) -> Result<VmValue, CoreError> {
         match tag {
             Self::TAG_NONE => Ok(VmValue::None),
             Self::TAG_INT => Ok(VmValue::Int(data as i32)),
@@ -364,24 +366,10 @@ where
 
     fn get_block_value(&self, offset: Offset) -> Result<Box<[Value]>, CoreError> {
         let block_data = self.heap.get_block(offset)?;
-        if block_data.is_empty() {
-            return Ok(Box::new([]));
-        }
-
         let mut values = Vec::new();
 
-        // Process pairs of tag/value words
-        for i in (0..block_data.len()).step_by(2) {
-            if i + 1 >= block_data.len() {
-                break; // Incomplete pair
-            }
-
-            let tag = block_data[i];
-            let data = block_data[i + 1];
-
-            // Convert tag/data to VmValue using the helper method
-            let vm_value = VmValue::from_tag_data(tag, data)?;
-
+        for pair in block_data.chunks_exact(2) {
+            let vm_value = VmValue::from_tag_data(pair[0], pair[1])?;
             values.push(self.to_value(vm_value)?);
         }
 
@@ -390,27 +378,12 @@ where
 
     pub fn to_value(&self, vm_value: VmValue) -> Result<Value, CoreError> {
         match vm_value {
-            // Simple values that don't require heap access
             VmValue::None => Ok(Value::None),
             VmValue::Int(n) => Ok(Value::Int(n)),
+            VmValue::Word(symbol) => Ok(Value::Word(self.get_symbol(symbol)?)),
+            VmValue::SetWord(symbol) => Ok(Value::SetWord(self.get_symbol(symbol)?)),
+            VmValue::GetWord(symbol) => Ok(Value::GetWord(self.get_symbol(symbol)?)),
 
-            // Symbol-based values - use our simplified symbol table
-            VmValue::Word(symbol) => {
-                let symbol_name = self.get_symbol(symbol)?;
-                Ok(Value::Word(symbol_name))
-            }
-
-            VmValue::SetWord(symbol) => {
-                let symbol_name = self.get_symbol(symbol)?;
-                Ok(Value::SetWord(symbol_name))
-            }
-
-            VmValue::GetWord(symbol) => {
-                let symbol_name = self.get_symbol(symbol)?;
-                Ok(Value::GetWord(symbol_name))
-            }
-
-            // String value stored in heap
             VmValue::String(offset) => {
                 let string_block = self.heap.get_block(offset)?;
                 if string_block.is_empty() {
