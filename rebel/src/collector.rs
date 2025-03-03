@@ -9,13 +9,14 @@ use thiserror::Error;
 pub enum ValueCollectorError {
     #[error("unexpected error")]
     UnexpectedError,
+    #[error("invalid path")]
+    InvalidPath,
 }
 
 /// A collector that builds a Value object from parsed input
 #[derive(Default)]
 pub struct ValueCollector {
     stack: Vec<Vec<Value>>,
-    path: Vec<SmolStr>,
     in_path: bool,
 }
 
@@ -48,6 +49,10 @@ impl ValueCollector {
             Err(ValueCollectorError::UnexpectedError)
         }
     }
+
+    fn pop_block(&mut self) -> Result<Vec<Value>, ValueCollectorError> {
+        self.stack.pop().ok_or(ValueCollectorError::UnexpectedError)
+    }
 }
 
 impl Collector for ValueCollector {
@@ -59,14 +64,10 @@ impl Collector for ValueCollector {
 
     fn word(&mut self, kind: WordKind, word: &str) -> Result<(), Self::Error> {
         let symbol = SmolStr::new(word);
-        if self.in_path {
-            Ok(self.path.push(symbol))
-        } else {
-            self.push(match kind {
-                WordKind::Word => Value::Word(symbol),
-                WordKind::SetWord => Value::SetWord(symbol),
-            })
-        }
+        self.push(match kind {
+            WordKind::Word => Value::Word(symbol),
+            WordKind::SetWord => Value::SetWord(symbol),
+        })
     }
 
     fn integer(&mut self, value: i32) -> Result<(), Self::Error> {
@@ -74,20 +75,15 @@ impl Collector for ValueCollector {
     }
 
     fn begin_block(&mut self) -> Result<(), Self::Error> {
-        println!("begin block");
+        if self.in_path {
+            return Err(ValueCollectorError::InvalidPath);
+        }
         Ok(self.stack.push(Vec::new()))
     }
 
     fn end_block(&mut self) -> Result<(), Self::Error> {
         if self.stack.len() > 1 {
-            println!("end block");
-            let block = self
-                .stack
-                .pop()
-                .ok_or(ValueCollectorError::UnexpectedError)?;
-
-            println!("block: {:?}", block);
-
+            let block = self.pop_block()?;
             self.push(Value::Block(block.into_boxed_slice()))?;
         }
         Ok(())
@@ -95,12 +91,16 @@ impl Collector for ValueCollector {
 
     fn begin_path(&mut self) -> Result<(), Self::Error> {
         self.in_path = true;
-        Ok(self.path.clear())
+        Ok(self.stack.push(Vec::new()))
     }
 
     fn end_path(&mut self) -> Result<(), Self::Error> {
         self.in_path = false;
-        self.push(Value::Path(self.path.clone().into()))
+        if self.stack.len() > 1 {
+            let block = self.pop_block()?;
+            self.push(Value::Path(block.into_boxed_slice()))?;
+        }
+        Ok(())
     }
 }
 
@@ -193,8 +193,8 @@ mod tests {
         let result = parse_test("context/name");
         if let Value::Path(path) = result {
             assert_eq!(path.len(), 2);
-            assert_eq!(path[0], "context");
-            assert_eq!(path[1], "name");
+            assert!(matches!(&path[0], Value::Word(s) if s == "context"));
+            assert!(matches!(&path[1], Value::Word(s) if s == "name"));
         } else {
             panic!("Expected path, got {:?}", result);
         }
@@ -205,9 +205,9 @@ mod tests {
         let result = parse_test("context/name/first");
         if let Value::Path(path) = result {
             assert_eq!(path.len(), 3);
-            assert_eq!(path[0], "context");
-            assert_eq!(path[1], "name");
-            assert_eq!(path[2], "first");
+            assert!(matches!(&path[0], Value::Word(s) if s == "context"));
+            assert!(matches!(&path[1], Value::Word(s) if s == "name"));
+            assert!(matches!(&path[2], Value::Word(s) if s == "first"));
         } else {
             panic!("Expected path, got {:?}", result);
         }

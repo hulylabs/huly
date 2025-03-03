@@ -13,7 +13,7 @@ pub enum Value {
     Word(SmolStr),
     SetWord(SmolStr),
     Context(Box<[(SmolStr, Value)]>),
-    Path(Box<[SmolStr]>),
+    Path(Box<[Value]>),
 }
 
 impl fmt::Display for Value {
@@ -110,8 +110,8 @@ impl Value {
         )
     }
 
-    pub fn path<I: Into<SmolStr>>(segments: I) -> Self {
-        Value::Path(Box::new([segments.into()]))
+    pub fn path<I: IntoIterator<Item = Value>>(values: I) -> Self {
+        Value::Path(values.into_iter().collect::<Vec<_>>().into_boxed_slice())
     }
 
     /// Create a Context from a series of key-values using a builder pattern
