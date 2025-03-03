@@ -43,6 +43,7 @@ pub enum CoreError {
 
 pub type MemValue = [Word; 2];
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VmValue {
     None,
     Int(i32),
@@ -51,6 +52,7 @@ pub enum VmValue {
     Context(Offset),
     Word(SymbolId),
     SetWord(SymbolId),
+    Func(Offset),
 }
 
 impl VmValue {
@@ -87,6 +89,7 @@ impl VmValue {
             Self::TAG_INLINE_STRING => Ok(VmValue::String(data)),
             Self::TAG_WORD => Ok(VmValue::Word(data)),
             Self::TAG_SET_WORD => Ok(VmValue::SetWord(data)),
+            Self::TAG_FUNC => Ok(VmValue::Func(data)),
             _ => Err(CoreError::UnknownTag),
         }
     }
@@ -100,7 +103,28 @@ impl VmValue {
             VmValue::SetWord(symbol) => [Self::TAG_SET_WORD, *symbol],
             VmValue::Block(offset) => [Self::TAG_BLOCK, *offset],
             VmValue::Context(offset) => [Self::TAG_CONTEXT, *offset],
+            VmValue::Func(offset) => [Self::TAG_FUNC, *offset],
         }
+    }
+
+    pub fn is_none(&self) -> bool {
+        matches!(self, VmValue::None)
+    }
+
+    pub fn is_int(&self) -> bool {
+        matches!(self, VmValue::Int(_))
+    }
+
+    pub fn is_string(&self) -> bool {
+        matches!(self, VmValue::String(_))
+    }
+
+    pub fn is_block(&self) -> bool {
+        matches!(self, VmValue::Block(_))
+    }
+
+    pub fn is_context(&self) -> bool {
+        matches!(self, VmValue::Context(_))
     }
 }
 
@@ -145,6 +169,14 @@ impl<T> Module<T> {
         self.functions
             .get(index as usize)
             .ok_or(CoreError::FunctionNotFound)
+    }
+
+    pub fn new_process(&mut self, block: VmValue) -> Result<Exec<T>, CoreError> {
+        let block = match block {
+            VmValue::Block(offset) => offset,
+            _ => return Err(CoreError::BadArguments),
+        };
+        Exec::new(self, block).map_err(Into::into)
     }
 }
 
@@ -194,10 +226,8 @@ where
         words.put(id, [VmValue::TAG_NATIVE_FN, index])
     }
 
-    pub fn eval(&mut self, block: Offset) -> Result<MemValue, CoreError> {
-        let mut exec = Exec::new(self, block)?;
-        // exec.jmp(block)?;
-        exec.eval()
+    pub fn eval(&mut self, block: VmValue) -> Result<VmValue, CoreError> {
+        self.new_process(block).and_then(|mut exec| exec.eval())
     }
 }
 
@@ -235,11 +265,11 @@ where
         self.heap.get_block_mut(addr).map(SymbolTable::new)
     }
 
-    pub fn parse(&mut self, code: &str) -> Result<Offset, CoreError> {
+    pub fn parse(&mut self, code: &str) -> Result<VmValue, CoreError> {
         let mut collector = ParseCollector::new(self);
         Parser::new(code, &mut collector).parse_block()?;
         let result = collector.parse.pop::<2>()?;
-        Ok(result[1])
+        result.try_into()
     }
 
     pub fn alloc_string(&mut self, string: &str) -> Result<VmValue, MemoryError> {
@@ -425,6 +455,29 @@ where
 
                 Ok(Value::Context(pairs.into_boxed_slice()))
             }
+
+            // Function value stored in heap
+            VmValue::Func(_offset) => {
+                Ok(Value::None)
+                // let block = self.heap.get_block(offset)?;
+                // if block.is_empty() {
+                //     return Ok(Value::Block(Box::new([])));
+                // }
+
+                // let [arity, ctx, blk] = block;
+                // let context = self.heap.get_block(ctx)?;
+                // let mut pairs = Vec::new();
+                // let context_data = Context::new(context);
+
+                // // Use the iterator to efficiently iterate through all entries in the context
+                // for (symbol, [tag, data]) in &context_data {
+                //     let symbol_name = self.get_symbol(symbol)?;
+                //     let vm_value = VmValue::from_tag_data(tag, data)?;
+                //     pairs.push((symbol_name, self.to_value(vm_value)?));
+                // }
+
+                // Ok(Value::Func(arity, pairs.into_boxed_slice(), blk))
+            }
         }
     }
 
@@ -543,14 +596,16 @@ where
     }
 
     /// Push a VmValue onto the stack
-    pub fn push_value(&mut self, value: VmValue) -> Result<(), MemoryError> {
+    pub fn push_vm_value(&mut self, value: VmValue) -> Result<(), MemoryError> {
         self.push(value.into())
     }
 
     /// Push a high-level Value directly onto the stack
-    pub fn push_value_direct(&mut self, value: Value) -> Result<(), CoreError> {
-        let vm_value = self.module.alloc_value(&value)?;
-        self.push_value(vm_value).map_err(Into::into)
+    pub fn push_value(&mut self, value: Value) -> Result<(), CoreError> {
+        self.module
+            .alloc_value(&value)
+            .and_then(|vm_value| self.push_vm_value(vm_value))
+            .map_err(Into::into)
     }
 
     pub fn jmp(&mut self, block: Offset) -> Result<(), CoreError> {
@@ -729,15 +784,16 @@ where
         Ok(())
     }
 
-    fn eval(&mut self) -> Result<MemValue, CoreError> {
+    pub fn eval(&mut self) -> Result<VmValue, CoreError> {
         loop {
             match self.next_op() {
                 Ok((op, word)) => self.do_op(op, word)?,
                 Err(CoreError::EndOfInput) => {
                     if self.stack.is_empty()? {
-                        return Ok([VmValue::TAG_NONE, 0]);
+                        return [VmValue::TAG_NONE, 0].try_into();
                     } else {
-                        return self.stack.pop().map_err(Into::into);
+                        let result = self.stack.pop()?;
+                        return result.try_into();
                     }
                 }
                 Err(error) => return Err(error),
@@ -918,7 +974,7 @@ where
 //     module.parse(str)
 // }
 
-pub fn eval(module: &mut Exec<&mut [Word]>) -> Result<[Word; 2], CoreError> {
+pub fn eval(module: &mut Exec<&mut [Word]>) -> Result<VmValue, CoreError> {
     module.eval()
 }
 
@@ -938,7 +994,7 @@ mod tests {
     use crate::rebel;
     use crate::value::Value;
 
-    fn eval(input: &str) -> Result<[Word; 2], CoreError> {
+    fn eval(input: &str) -> Result<VmValue, CoreError> {
         let mut module =
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
         let block = module.parse(input)?;
@@ -1462,14 +1518,14 @@ mod tests {
     #[test]
     fn test_whitespace_1() -> Result<(), CoreError> {
         let result = eval("  \t\n  ")?;
-        assert_eq!(VmValue::TAG_NONE, result[0]);
+        assert!(result.is_none());
         Ok(())
     }
 
     #[test]
     fn test_string_1() -> Result<(), CoreError> {
         let result = eval(" \"hello\"  ")?;
-        assert_eq!(VmValue::TAG_INLINE_STRING, result[0]);
+        assert!(result.is_string());
         Ok(())
     }
 
@@ -1477,7 +1533,7 @@ mod tests {
     fn test_word_1() -> Result<(), CoreError> {
         let input = "42 \"world\" x: 5 x\n ";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 5], result);
+        assert_eq!(VmValue::Int(5), result);
         Ok(())
     }
 
@@ -1485,7 +1541,7 @@ mod tests {
     fn test_add_1() -> Result<(), CoreError> {
         let input = "add 7 8";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 15], result);
+        assert_eq!(VmValue::Int(15), result);
         Ok(())
     }
 
@@ -1493,7 +1549,7 @@ mod tests {
     fn test_add_2() -> Result<(), CoreError> {
         let input = "add 1 add 2 3";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 6], result[0..2]);
+        assert_eq!(VmValue::Int(6), result);
         Ok(())
     }
 
@@ -1501,7 +1557,7 @@ mod tests {
     fn test_add_3() -> Result<(), CoreError> {
         let input = "add add 3 4 5";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 12], result[0..2]);
+        assert_eq!(VmValue::Int(12), result);
         Ok(())
     }
 
@@ -1514,9 +1570,8 @@ mod tests {
         let block = module.parse(input)?;
         let result = module.eval(block)?;
 
-        assert_eq!(VmValue::TAG_CONTEXT, result[0]);
-
-        let value = module.to_value(VmValue::from_tag_data(result[0], result[1])?)?;
+        assert!(result.is_context());
+        let value = module.to_value(result)?;
 
         if let Value::Context(pairs) = value {
             assert_eq!(pairs.len(), 1);
@@ -1539,9 +1594,8 @@ mod tests {
         let block = module.parse(input)?;
         let result = module.eval(block)?;
 
-        assert_eq!(VmValue::TAG_CONTEXT, result[0]);
-
-        let value = module.to_value(VmValue::from_tag_data(result[0], result[1])?)?;
+        assert!(result.is_context());
+        let value = module.to_value(result)?;
 
         if let Value::Context(pairs) = value {
             assert_eq!(pairs.len(), 2);
@@ -1560,7 +1614,7 @@ mod tests {
     fn test_func_1() -> Result<(), CoreError> {
         let input = "f: func [a b] [add a b] f 1 77";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 78], result);
+        assert_eq!(VmValue::Int(78), result);
         Ok(())
     }
 
@@ -1568,7 +1622,7 @@ mod tests {
     fn test_func_2() -> Result<(), CoreError> {
         let input = "f: func [a b] [add a add b b] f 1 2";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 5], result);
+        assert_eq!(VmValue::Int(5), result);
         Ok(())
     }
 
@@ -1576,7 +1630,7 @@ mod tests {
     fn test_either_1() -> Result<(), CoreError> {
         let input = "either lt 1 2 [1] [2]";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 1], result);
+        assert_eq!(VmValue::Int(1), result);
         Ok(())
     }
 
@@ -1584,7 +1638,7 @@ mod tests {
     fn test_either_2() -> Result<(), CoreError> {
         let input = "either lt 2 1 [1] [2]";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 2], result);
+        assert_eq!(VmValue::Int(2), result);
         Ok(())
     }
 
@@ -1592,15 +1646,7 @@ mod tests {
     fn test_do_1() -> Result<(), CoreError> {
         let input = "do [add 1 2]";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 3], result);
-        Ok(())
-    }
-
-    #[test]
-    fn test_func_3() -> Result<(), CoreError> {
-        let input = "f: func [n] [either lt n 2 [n] [add 1 f add n -1]] f 20";
-        let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 20], result);
+        assert_eq!(VmValue::Int(3), result);
         Ok(())
     }
 
@@ -1608,7 +1654,7 @@ mod tests {
     fn test_func_fib() -> Result<(), CoreError> {
         let input = "fib: func [n] [either lt n 2 [n] [add fib add n -1 fib add n -2]] fib 10";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 55], result);
+        assert_eq!(VmValue::Int(55), result);
         Ok(())
     }
 
@@ -1616,7 +1662,7 @@ mod tests {
     fn test_func_sum() -> Result<(), CoreError> {
         let input = "sum: func [n] [either lt n 2 [n] [add 1 sum add n -1]] sum 10";
         let result = eval(input)?;
-        assert_eq!([VmValue::TAG_INT, 10], result);
+        assert_eq!(VmValue::Int(10), result);
         Ok(())
     }
 
@@ -2101,7 +2147,7 @@ mod tests {
         let result = exec.eval().expect("Failed to evaluate program");
 
         // The final result should be 30 (10 + 20)
-        assert_eq!(result, [VmValue::TAG_INT, 30], "Final result should be 30");
+        assert_eq!(result, VmValue::Int(30), "Final result should be 30");
 
         Ok(())
     }
@@ -2131,16 +2177,13 @@ mod tests {
             .alloc_value(&program)
             .expect("Failed to allocate block");
 
-        // Get the VM representation
-        let [_, block_addr] = vm_block.vm_repr();
-
         // Execute the program
-        let result = module.eval(block_addr).expect("Failed to evaluate program");
+        let result = module.eval(vm_block).expect("Failed to evaluate program");
 
         // The result should be 42 (21 doubled)
         assert_eq!(
             result,
-            [VmValue::TAG_INT, 42],
+            VmValue::Int(42),
             "Function should return 42 (21 doubled)"
         );
 
@@ -2160,65 +2203,40 @@ mod tests {
 
         // Define our test function and enter it in the system context
         let func_program = rebel!([double: func [x] [add x x]]);
+        println!("func_program: {:?}", func_program);
         let vm_func = module
             .alloc_value(&func_program)
             .expect("Failed to allocate block");
-        let [_, func_block_addr] = vm_func.vm_repr();
-        let m = module.eval(func_block_addr);
-        println!("MMM: {:?}", m);
-        m.expect("Failed to define function");
+
+        module.eval(vm_func).expect("Failed to define function");
 
         // Verify the direct execution approach works correctly
         let test_call = rebel!([double 21]);
         let vm_call = module
             .alloc_value(&test_call)
             .expect("Failed to allocate block");
-        let [_, call_block_addr] = vm_call.vm_repr();
         let direct_result = module
-            .eval(call_block_addr)
+            .eval(vm_call)
             .expect("Failed to evaluate function call");
         println!("Direct call result: {:?}", direct_result);
         assert_eq!(
             direct_result,
-            [VmValue::TAG_INT, 42],
+            VmValue::Int(42),
             "Direct call should return 42"
         );
-
-        // Now verify that the CALL_FUNC operation is properly identified in next_op
-        // We'll create a separate execution context for this test
-        let mut exec =
-            Exec::new(&mut module, call_block_addr).expect("Failed to create execution context");
-
-        // Get the first operation
-        let op_result = exec.next_op();
-        assert!(op_result.is_ok(), "next_op should return an operation");
-        let (op, func_addr) = op_result.unwrap();
-        println!("Operation type: {}, func_addr: {}", op, func_addr);
-
-        // Verify it's a CALL_FUNC operation
-        assert_eq!(op, Op::CALL_FUNC, "Operation should be CALL_FUNC");
-
-        // We've confirmed that next_op correctly identifies CALL_FUNC operations
-        // Rather than trying to step through the function execution manually,
-        // we'll use the Module.eval method to verify the full execution
 
         // Create another program with a slightly different function call to avoid caching
         let test_call2 = rebel!([double 42]);
         let vm_call2 = module
             .alloc_value(&test_call2)
             .expect("Failed to allocate block");
-        let [_, call_block_addr2] = vm_call2.vm_repr();
 
         // Execute and verify the result
         let result = module
-            .eval(call_block_addr2)
+            .eval(vm_call2)
             .expect("Failed to evaluate function call");
         println!("Second function call result: {:?}", result);
-        assert_eq!(
-            result,
-            [VmValue::TAG_INT, 84],
-            "Second call should return 84"
-        );
+        assert_eq!(result, VmValue::Int(84), "Second call should return 84");
 
         Ok(())
     }

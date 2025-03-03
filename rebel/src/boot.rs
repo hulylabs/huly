@@ -120,3 +120,39 @@ where
 pub fn test_either(module: &mut Exec<&mut [Word]>) -> Result<(), CoreError> {
     either(module)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::rebel;
+    use crate::value::Value;
+
+    #[test]
+    fn test_add() {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        // Create a program [add 7 8] using the rebel! macro
+        let program = rebel!([add 7 8]);
+
+        let vm_block = module
+            .alloc_value(&program)
+            .expect("Failed to allocate block");
+
+        let mut process = module
+            .new_process(vm_block)
+            .expect("Failed to create process");
+
+        process
+            .push_value(Value::int(7))
+            .expect("Failed to push value");
+        process
+            .push_value(Value::int(8))
+            .expect("Failed to push value");
+
+        let result = process.eval().expect("Failed to run process");
+        let value = module.to_value(result).expect("Failed to get value");
+
+        assert_eq!(value, Value::int(15));
+    }
+}
