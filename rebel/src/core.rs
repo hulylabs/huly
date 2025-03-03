@@ -744,18 +744,18 @@ where
                     return Err(CoreError::EndOfInput);
                 }
 
-                let (block, ip) = loop {
+                let (block, ip) = {
                     let [op, block, bp, ip] = self.op_stack.pop()?;
 
                     match op {
                         Op::LEAVE_FUNC => {
                             let [base] = self.base.pop()?;
                             self.leave(base)?;
-                            break (block, ip);
+                            (block, ip)
                         }
                         Op::LEAVE_BLOCK => {
                             self.leave(bp)?;
-                            break (block, ip);
+                            (block, ip)
                         }
                         _ => return Ok((op, block)),
                     }
