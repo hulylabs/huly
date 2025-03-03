@@ -141,6 +141,7 @@ impl ValueSerialize for Value {
                 }
                 serializer.end_context()
             }
+            Value::Path(_) => unimplemented!("Path serialization not supported"),
         }
     }
 }

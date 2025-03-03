@@ -338,6 +338,8 @@ where
 
                 Ok(VmValue::Context(context))
             }
+
+            Value::Path(_) => unimplemented!(),
         }
     }
 }
@@ -967,6 +969,14 @@ where
         let block_data = self.parse.pop_all(bp).ok_or(MemoryError::UnexpectedError)?;
         let offset = self.module.heap.alloc_block(block_data)?;
         self.parse.push([VmValue::TAG_BLOCK, offset])
+    }
+
+    fn begin_path(&mut self) -> Result<(), Self::Error> {
+        unimplemented!()
+    }
+
+    fn end_path(&mut self) -> Result<(), Self::Error> {
+        unimplemented!()
     }
 }
 

@@ -13,6 +13,7 @@ pub enum Value {
     Word(SmolStr),
     SetWord(SmolStr),
     Context(Box<[(SmolStr, Value)]>),
+    Path(Box<[SmolStr]>),
 }
 
 impl fmt::Display for Value {
@@ -46,6 +47,18 @@ impl fmt::Display for Value {
                     write!(f, "{}: {}", key, value)?;
                 }
                 write!(f, " }}")
+            }
+            Value::Path(path) => {
+                write!(f, "/")?;
+                let mut first = true;
+                for segment in path.iter() {
+                    if !first {
+                        write!(f, "/")?;
+                    }
+                    first = false;
+                    write!(f, "{}", segment)?;
+                }
+                Ok(())
             }
         }
     }
@@ -95,6 +108,10 @@ impl Value {
                 .collect::<Vec<_>>()
                 .into_boxed_slice(),
         )
+    }
+
+    pub fn path<I: Into<SmolStr>>(segments: I) -> Self {
+        Value::Path(Box::new([segments.into()]))
     }
 
     /// Create a Context from a series of key-values using a builder pattern
@@ -489,10 +506,8 @@ impl Value {
         V: Into<Value>,
     {
         let value = value.into();
-        let path_vec: Vec<_> = path.into_iter()
-            .map(|k| k.as_ref().to_string())
-            .collect();
-            
+        let path_vec: Vec<_> = path.into_iter().map(|k| k.as_ref().to_string()).collect();
+
         if path_vec.is_empty() {
             return value; // If path is empty, return the value directly
         }
@@ -504,14 +519,14 @@ impl Value {
                 if let Value::Context(pairs) = ctx {
                     let key = &keys[0];
                     let mut pairs_vec = pairs.to_vec();
-                    
+
                     // Find existing or add new
                     if let Some(pos) = pairs_vec.iter().position(|(k, _)| k == key) {
                         pairs_vec[pos].1 = value;
                     } else {
                         pairs_vec.push((key.clone().into(), value));
                     }
-                    
+
                     Value::Context(pairs_vec.into_boxed_slice())
                 } else {
                     // Create new context
@@ -524,14 +539,10 @@ impl Value {
                 if let Value::Context(pairs) = ctx {
                     let first_key = &keys[0];
                     let mut pairs_vec = pairs.to_vec();
-                    
+
                     if let Some(pos) = pairs_vec.iter().position(|(k, _)| k == first_key) {
                         // Key exists - update recursively
-                        let next_ctx = set_path_inner(
-                            pairs_vec[pos].1.clone(),
-                            &keys[1..],
-                            value
-                        );
+                        let next_ctx = set_path_inner(pairs_vec[pos].1.clone(), &keys[1..], value);
                         pairs_vec[pos].1 = next_ctx;
                     } else {
                         // Key doesn't exist - create new context
@@ -539,7 +550,7 @@ impl Value {
                         let updated = set_path_inner(inner_ctx, &keys[1..], value);
                         pairs_vec.push((first_key.clone().into(), updated));
                     }
-                    
+
                     Value::Context(pairs_vec.into_boxed_slice())
                 } else {
                     // Start with a new context
@@ -548,7 +559,7 @@ impl Value {
                 }
             }
         }
-        
+
         set_path_inner(self, &path_vec, value)
     }
 
@@ -566,6 +577,7 @@ impl Value {
             Value::SetWord(w) => Value::String(format!("{}:", w).into()),
             Value::Block(_) => Value::String(format!("{}", self).into()),
             Value::Context(_) => Value::String(format!("{}", self).into()),
+            Value::Path(_) => Value::String(format!("{}", self).into()),
         }
     }
 
@@ -909,7 +921,6 @@ macro_rules! rebel {
     }};
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1196,7 +1207,7 @@ mod tests {
         let num = 42;
         let v3: Value = rebel!(num);
         assert_eq!(v3, Value::Int(42));
-        
+
         // Integers in a block
         let v4 = rebel!([ 1 2 3 -4 -5 ]);
         if let Value::Block(items) = v4 {
@@ -1221,7 +1232,7 @@ mod tests {
         let s = "test".to_string();
         let v2: Value = rebel!(s);
         assert_eq!(v2, Value::String("test".into()));
-        
+
         // String in a block
         let v3 = rebel!([ "hello" "world" ]);
         if let Value::Block(items) = v3 {
@@ -1240,7 +1251,7 @@ mod tests {
         if let Value::Block(items) = v1 {
             assert_eq!(items.len(), 3);
             assert_eq!(items[0], Value::Word("alpha".into()));
-            assert_eq!(items[1], Value::Word("beta".into())); 
+            assert_eq!(items[1], Value::Word("beta".into()));
             assert_eq!(items[2], Value::Word("gamma".into()));
         } else {
             panic!("Expected block");
@@ -1260,13 +1271,13 @@ mod tests {
         // Direct Value construction
         let v3 = Value::Word("apple".into());
         assert_eq!(v3, Value::Word("apple".into()));
-        
+
         let v4 = Value::SetWord("banana".into());
         assert_eq!(v4, Value::SetWord("banana".into()));
     }
-    
+
     // Tests migrated from the rebel4 macro:
-    
+
     #[test]
     fn test_new_block_basics() {
         // Word, string, setword, nested block
@@ -1510,7 +1521,7 @@ mod tests {
     fn test_nested_contexts() {
         // Create a context with nested structure
         let user_info = rebel!({
-            user => { 
+            user => {
                 name => "John",
                 email => "john@example.com",
                 settings => {
@@ -1524,33 +1535,33 @@ mod tests {
         if let Value::Context(pairs) = &user_info {
             assert_eq!(pairs.len(), 1);
             assert_eq!(pairs[0].0, "user");
-            
+
             // Get user context
             if let Value::Context(user) = &pairs[0].1 {
                 // Check first level properties
                 assert_eq!(user.len(), 3);
-                
+
                 let name = user[0].1.clone();
                 let email = user[1].1.clone();
-                
+
                 assert_eq!(name, Value::String("John".into()));
                 assert_eq!(email, Value::String("john@example.com".into()));
-                
+
                 // Check settings
                 if let Value::Context(settings) = &user[2].1 {
                     assert_eq!(settings[0].0, "theme");
                     assert_eq!(settings[0].1, Value::String("dark".into()));
-                    
+
                     assert_eq!(settings[1].0, "notifications");
                     assert_eq!(settings[1].1, Value::Int(1)); // true becomes 1
                 }
             }
         }
-        
+
         // Use get_path (existing functionality) to traverse paths
         let name = user_info.get_path(["user", "name"]);
         assert_eq!(name, Some(&Value::String("John".into())));
-        
+
         let theme = user_info.get_path(["user", "settings", "theme"]);
         assert_eq!(theme, Some(&Value::String("dark".into())));
     }
@@ -1582,13 +1593,13 @@ mod tests {
             inStock => true,
             features => [ "wireless", "bluetooth" ]
         });
-        
+
         let variant2 = rebel!({
             id => 2,
             sku => "ABC-456",
             inStock => false
         });
-        
+
         // Create main context with the variants as a block
         let complex = rebel!({
             id => 1001,
@@ -1674,7 +1685,7 @@ mod tests {
 
         // Direct variable reference in a block - creates Word values with variable name
         let block_with_words = rebel!([ name age is_active ]);
-        
+
         // Extract and check the words
         if let Value::Block(items) = block_with_words {
             assert_eq!(items[0], Value::Word("name".into()));
@@ -1700,7 +1711,10 @@ mod tests {
         // Check the keys and values
         assert_eq!(user1.get("name"), Some(&Value::String("name".into())));
         assert_eq!(user1.get("age"), Some(&Value::String("age".into())));
-        assert_eq!(user1.get("active"), Some(&Value::String("is_active".into())));
+        assert_eq!(
+            user1.get("active"),
+            Some(&Value::String("is_active".into()))
+        );
 
         //==============================================================
         // 3. USING EXTERNAL VARIABLES WITH VALUES

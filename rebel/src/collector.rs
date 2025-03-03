@@ -15,6 +15,8 @@ pub enum ValueCollectorError {
 #[derive(Default)]
 pub struct ValueCollector {
     stack: Vec<Vec<Value>>,
+    path: Vec<SmolStr>,
+    in_path: bool,
 }
 
 impl ValueCollector {
@@ -37,62 +39,68 @@ impl ValueCollector {
             }
         }
     }
+
+    fn push(&mut self, value: Value) -> Result<(), ValueCollectorError> {
+        println!("pushing {:?}", value);
+        if let Some(current) = self.stack.last_mut() {
+            Ok(current.push(value))
+        } else {
+            Err(ValueCollectorError::UnexpectedError)
+        }
+    }
 }
 
 impl Collector for ValueCollector {
     type Error = ValueCollectorError;
 
     fn string(&mut self, string: &str) -> Result<(), Self::Error> {
-        if let Some(current) = self.stack.last_mut() {
-            current.push(Value::String(SmolStr::new(string)));
-            Ok(())
-        } else {
-            Err(ValueCollectorError::UnexpectedError)
-        }
+        self.push(Value::String(SmolStr::new(string)))
     }
 
     fn word(&mut self, kind: WordKind, word: &str) -> Result<(), Self::Error> {
-        if let Some(current) = self.stack.last_mut() {
-            match kind {
-                WordKind::Word => current.push(Value::Word(SmolStr::new(word))),
-                WordKind::SetWord => current.push(Value::SetWord(SmolStr::new(word))),
-            };
-            Ok(())
+        let symbol = SmolStr::new(word);
+        if self.in_path {
+            Ok(self.path.push(symbol))
         } else {
-            Err(ValueCollectorError::UnexpectedError)
+            self.push(match kind {
+                WordKind::Word => Value::Word(symbol),
+                WordKind::SetWord => Value::SetWord(symbol),
+            })
         }
     }
 
     fn integer(&mut self, value: i32) -> Result<(), Self::Error> {
-        if let Some(current) = self.stack.last_mut() {
-            current.push(Value::Int(value));
-            Ok(())
-        } else {
-            Err(ValueCollectorError::UnexpectedError)
-        }
+        self.push(Value::Int(value))
     }
 
     fn begin_block(&mut self) -> Result<(), Self::Error> {
-        self.stack.push(Vec::new());
-        Ok(())
+        println!("begin block");
+        Ok(self.stack.push(Vec::new()))
     }
 
     fn end_block(&mut self) -> Result<(), Self::Error> {
         if self.stack.len() > 1 {
+            println!("end block");
             let block = self
                 .stack
                 .pop()
                 .ok_or(ValueCollectorError::UnexpectedError)?;
-            let parent = self
-                .stack
-                .last_mut()
-                .ok_or(ValueCollectorError::UnexpectedError)?;
-            parent.push(Value::Block(block.into_boxed_slice()));
-            Ok(())
-        } else {
-            // Keep the last block in the stack to be returned by into_value
-            Ok(())
+
+            println!("block: {:?}", block);
+
+            self.push(Value::Block(block.into_boxed_slice()))?;
         }
+        Ok(())
+    }
+
+    fn begin_path(&mut self) -> Result<(), Self::Error> {
+        self.in_path = true;
+        Ok(self.path.clear())
+    }
+
+    fn end_path(&mut self) -> Result<(), Self::Error> {
+        self.in_path = false;
+        self.push(Value::Path(self.path.clone().into()))
     }
 }
 
