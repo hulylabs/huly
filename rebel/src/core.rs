@@ -301,35 +301,28 @@ where
         self.get_symbols_mut()?.get_or_insert(Symbol::from(symbol)?)
     }
 
+    fn alloc_block(&mut self, values: &[Value]) -> Result<Offset, MemoryError> {
+        let mut vm_values = Vec::with_capacity(values.len() * 2);
+        for item in values.iter() {
+            let mem = self.alloc_value(item)?.vm_repr();
+            vm_values.push(mem[0]);
+            vm_values.push(mem[1]);
+        }
+        self.heap.alloc_block(&vm_values)
+    }
+
     pub fn alloc_value(&mut self, value: &Value) -> Result<VmValue, MemoryError> {
         match value {
-            // Simple values that don't require heap allocation
             Value::None => Ok(VmValue::None),
             Value::Int(n) => Ok(VmValue::Int(*n)),
 
-            // Values requiring string allocation
             Value::String(s) => self.alloc_string(s.as_ref()),
 
-            // Symbol-based values
             Value::Word(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::Word),
             Value::SetWord(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::SetWord),
             Value::GetWord(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::GetWord),
-
-            // Nested collection types
-            Value::Block(items) => {
-                // First allocate each value in the block
-                let mut vm_values = Vec::with_capacity(items.len() * 2);
-
-                for item in items.iter() {
-                    let vm_value = self.alloc_value(item)?;
-                    let repr = vm_value.vm_repr();
-                    vm_values.push(repr[0]);
-                    vm_values.push(repr[1]);
-                }
-
-                // Allocate the block in the heap
-                self.heap.alloc_block(&vm_values).map(VmValue::Block)
-            }
+            Value::Block(items) => self.alloc_block(items).map(VmValue::Block),
+            Value::Path(items) => self.alloc_block(items).map(VmValue::Path),
 
             Value::Context(pairs) => {
                 let context = self.heap.alloc_context(pairs.len() as u32)?;
@@ -345,8 +338,6 @@ where
 
                 Ok(VmValue::Context(context))
             }
-
-            Value::Path(_) => unimplemented!(),
         }
     }
 }
