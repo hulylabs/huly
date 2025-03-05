@@ -198,7 +198,6 @@ where
     }
 
     fn process_block_end(&mut self, consumed: Option<char>) -> Result<(), C::Error> {
-        println!("consumed: {:?}", consumed);
         match consumed {
             Some('/') => {}
             _ => {

@@ -42,7 +42,6 @@ impl ValueCollector {
     }
 
     fn push(&mut self, value: Value) -> Result<(), ValueCollectorError> {
-        println!("pushing {:?}", value);
         if let Some(current) = self.stack.last_mut() {
             Ok(current.push(value))
         } else {
@@ -76,7 +75,6 @@ impl Collector for ValueCollector {
     }
 
     fn begin_block(&mut self) -> Result<(), Self::Error> {
-        println!("begin block");
         if self.in_path {
             return Err(ValueCollectorError::InvalidPath);
         }
@@ -84,7 +82,6 @@ impl Collector for ValueCollector {
     }
 
     fn end_block(&mut self) -> Result<(), Self::Error> {
-        println!("end block");
         if self.stack.len() > 1 {
             let block = self.pop_block()?;
             self.push(Value::Block(block.into_boxed_slice()))?;

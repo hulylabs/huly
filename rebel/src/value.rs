@@ -51,7 +51,6 @@ impl fmt::Display for Value {
                 write!(f, " }}")
             }
             Value::Path(path) => {
-                write!(f, "/")?;
                 let mut first = true;
                 for segment in path.iter() {
                     if !first {

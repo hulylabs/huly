@@ -94,6 +94,7 @@ impl VmValue {
             Self::TAG_WORD => Ok(VmValue::Word(data)),
             Self::TAG_SET_WORD => Ok(VmValue::SetWord(data)),
             Self::TAG_FUNC => Ok(VmValue::Func(data)),
+            Self::TAG_PATH => Ok(VmValue::Path(data)),
             _ => Err(CoreError::UnknownTag),
         }
     }
@@ -949,11 +950,14 @@ where
     }
 
     fn begin_path(&mut self) -> Result<(), Self::Error> {
-        unimplemented!()
+        self.parse.len().and_then(|len| self.ops.push([len]))
     }
 
     fn end_path(&mut self) -> Result<(), Self::Error> {
-        unimplemented!()
+        let [bp] = self.ops.pop()?;
+        let block_data = self.parse.pop_all(bp).ok_or(MemoryError::UnexpectedError)?;
+        let offset = self.module.heap.alloc_block(block_data)?;
+        self.parse.push([VmValue::TAG_PATH, offset])
     }
 }
 
@@ -1595,6 +1599,31 @@ mod tests {
         } else {
             panic!("Result should be a context");
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_path_1() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input = "ctx: context [x: 42] ctx/x";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+
+        // assert!(result.is_context());
+        let value = module.to_value(result)?;
+
+        // if let Value::Context(pairs) = value {
+        //     assert_eq!(pairs.len(), 1);
+        //     assert_eq!(pairs[0].0, "x");
+        //     assert_eq!(pairs[0].1, 8.into());
+        // } else {
+        //     panic!("Result should be a context");
+        // }
+
+        println!("CTX: {}", value);
 
         Ok(())
     }
