@@ -617,6 +617,10 @@ where
         self.env.push([self.module.heap.alloc_context(size)?])
     }
 
+    // fn push_context(&mut self, ctx: Offset) -> Result<(), MemoryError> {
+    //     self.env.push([ctx])
+    // }
+
     pub fn pop_context(&mut self) -> Result<Offset, MemoryError> {
         self.env.pop().map(|[addr]| addr)
     }
@@ -625,7 +629,7 @@ where
         self.module.alloc_value(value)
     }
 
-    fn resolve(&self, value: MemValue) -> Result<MemValue, MemoryError> {
+    fn resolve(&mut self, value: MemValue) -> Result<MemValue, MemoryError> {
         match value[0] {
             VmValue::TAG_WORD => self.find_word(value[1]).and_then(|result| {
                 if result[0] == VmValue::TAG_STACK_VALUE {
@@ -635,6 +639,24 @@ where
                     Ok(result)
                 }
             }),
+            VmValue::TAG_PATH => {
+                let mut offset = 0;
+                let block = value[1];
+                let mut result = [VmValue::TAG_NONE, 0];
+                while let Ok(word_value) = self.get_block(block, offset) {
+                    match word_value {
+                        [VmValue::TAG_WORD, symbol] => {
+                            result = self.find_word(symbol)?;
+                            self.env.push([result[1]])?;
+                        }
+                        _ => unimplemented!(),
+                    }
+                    offset += 2;
+                }
+                let env_len = self.env.len()?;
+                self.env.set_len(env_len - offset / 2)?;
+                Ok(result)
+            }
             _ => Ok(value),
         }
     }
@@ -685,6 +707,7 @@ where
                 Ok(())
             }
             Op::CONTEXT => {
+                self.stack.pop::<2>()?; // we have result on stack after context's block leave, let's remove it and push context
                 let ctx = self.pop_context()?;
                 self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
                 Ok(())
@@ -781,116 +804,6 @@ where
             }
         }
     }
-
-    // fn get_value(&self, value: [Word; 2]) -> Option<[Word; 2]> {
-    //     let [tag, word] = value;
-    //     if tag == VmValue::TAG_WORD {
-    //         let resolved = self.find_word(word);
-    //         match resolved {
-    //             Some([VmValue::TAG_STACK_VALUE, index]) => self
-    //                 .base
-    //                 .peek()
-    //                 .and_then(|[bp]| self.stack.get(bp + index * 2)),
-    //             _ => resolved,
-    //         }
-    //     } else {
-    //         Some(value)
-    //     }
-    // }
-
-    // fn next_value(&mut self) -> Option<[Word; 2]> {
-    //     while let Some(cmd) = self.ip.next(self.module) {
-    //         let value = self.get_value(cmd)?;
-
-    //         if let Some((op, arity)) = match value[0] {
-    //             VmValue::TAG_NATIVE_FN => {
-    //                 Some((Op::CALL_NATIVE, self.module.get_func(value[1])?.arity))
-    //             }
-    //             VmValue::TAG_SET_WORD => Some((Op::SET_WORD, 1)),
-    //             VmValue::TAG_FUNC => {
-    //                 Some((Op::CALL_FUNC, self.module.get_array::<1>(value[1])?[0]))
-    //             }
-    //             _ => None,
-    //         } {
-    //             let sp = self.stack.len()?;
-    //             self.arity.push([op, value[1], sp, arity * 2])?;
-    //         } else {
-    //             return Some(value);
-    //         }
-    //     }
-    //     None
-    // }
-
-    // fn eval(&mut self) -> Option<[Word; 2]> {
-    //     loop {
-    //         if let Some(value) = self.next_value() {
-    //             self.stack.alloc(value)?;
-    //         } else {
-    //             let stack_len = self.stack.len()?;
-    //             match stack_len - self.base_ptr {
-    //                 2 => {}
-    //                 0 => {
-    //                     self.stack.push([VmValue::TAG_NONE, 0])?;
-    //                 }
-    //                 _ => {
-    //                     let result = self.stack.pop::<2>()?;
-    //                     self.stack.set_len(self.base_ptr)?;
-    //                     self.stack.push(result)?;
-    //                 }
-    //             }
-    //             let [block, ip] = self.blocks.pop()?;
-    //             if block != 0 {
-    //                 self.ip = IP::new(block, ip);
-    //             } else {
-    //                 break;
-    //             }
-    //         }
-
-    //         while let Some([bp, arity]) = self.arity.peek() {
-    //             let sp = self.stack.len()?;
-    //             if sp == bp + arity {
-    //                 let [op, value, _, _] = self.arity.pop()?;
-    //                 match op {
-    //                     Op::SET_WORD => {
-    //                         let result = self.stack.pop()?;
-    //                         self.put_context(value, result)?;
-    //                     }
-    //                     Op::CALL_NATIVE => {
-    //                         let native_fn = self.module.get_func(value)?;
-    //                         (native_fn.func)(self)?;
-    //                     }
-    //                     Op::CALL_FUNC => {
-    //                         let [ctx, blk] = self.module.get_array(value + 1)?; // value -> [arity, ctx, blk]
-    //                         self.env.push([ctx])?;
-    //                         self.base.push([bp])?;
-    //                         self.arity.push([Op::LEAVE, 0, sp, 2])?;
-    //                         self.call(blk)?;
-    //                         break;
-    //                     }
-    //                     Op::LEAVE => {
-    //                         self.env.pop::<1>()?;
-    //                         let [stack] = self.base.pop::<1>()?;
-    //                         let result = self.stack.pop::<2>()?;
-    //                         self.stack.set_len(stack)?;
-    //                         self.stack.push(result)?;
-    //                         self.base_ptr = stack;
-    //                     }
-    //                     Op::CONTEXT => {
-    //                         let ctx = self.pop_context()?;
-    //                         self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
-    //                     }
-    //                     _ => {
-    //                         return None;
-    //                     }
-    //                 };
-    //             } else {
-    //                 break;
-    //             }
-    //         }
-    //     }
-
-    //     self.stack.pop::<2>().or(Some([VmValue::TAG_NONE, 0]))
-    // }
 }
 
 // P A R S E  C O L L E C T O R
@@ -1615,15 +1528,23 @@ mod tests {
         // assert!(result.is_context());
         let value = module.to_value(result)?;
 
-        // if let Value::Context(pairs) = value {
-        //     assert_eq!(pairs.len(), 1);
-        //     assert_eq!(pairs[0].0, "x");
-        //     assert_eq!(pairs[0].1, 8.into());
-        // } else {
-        //     panic!("Result should be a context");
-        // }
+        assert_eq!(Value::Int(42), value);
 
-        println!("CTX: {}", value);
+        Ok(())
+    }
+
+    #[test]
+    fn test_path_2() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input = "ctx: context [x: 42 inner: context [a: 1 b: 2]] ctx/inner/a";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+
+        let value = module.to_value(result)?;
+
+        assert_eq!(Value::Int(1), value);
 
         Ok(())
     }
@@ -1684,169 +1605,6 @@ mod tests {
         Ok(())
     }
 
-    // #[test]
-    // fn test_func_returns_context() -> Result<(), CoreError> {
-    //     // Define a simple function that creates and returns a context
-    //     let input = "make-person: func [] [context [name: \"Alice\" age: 30]] make-person";
-
-    //     // Execute the function
-    //     let result = eval(input)?;
-
-    //     // Print the tag for debugging
-    //     println!("Return value tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-
-    //     // Verify we got a context back
-    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
-    //         "Function should return a Context, got tag {} instead", result[0]);
-
-    //     Ok(())
-    // }
-
-    // #[test]
-    // fn test_func_with_variable() -> Result<(), CoreError> {
-    //     // Define a function that stores the context in a variable first
-    //     let input = "
-    //         make-person: func [] [
-    //             result: context [name: \"Variable\" age: 40]
-    //             result
-    //         ]
-    //         make-person
-    //     ";
-
-    //     // Execute the function
-    //     let result = eval(input)?;
-
-    //     // Print the tag for debugging
-    //     println!("Variable context tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-
-    //     // Verify we got a context back
-    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
-    //         "Function should return a Context, got tag {} instead", result[0]);
-
-    //     Ok(())
-    // }
-
-    // #[test]
-    // fn test_context_function_with_args() -> Result<(), CoreError> {
-    //     // Function that takes arguments and returns a context
-    //     // Try with explicit variable assignment and return
-    //     let input = "
-    //         make-user: func [name age] [
-    //             result: context [
-    //                 name: name
-    //                 age: age
-    //             ]
-    //             result
-    //         ]
-    //         make-user \"Bob\" 25
-    //     ";
-
-    //     // Execute the function
-    //     let result = eval(input)?;
-
-    //     // Print the tag for debugging
-    //     println!("Return value tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-
-    //     // Verify we got a context back
-    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
-    //         "Function should return a Context, got tag {} instead", result[0]);
-
-    //     // Create a module to verify the context contents
-    //     let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
-    //         .expect("Failed to create module");
-
-    //     // Convert to high-level Value
-    //     let context_value = module.to_value(VmValue::Context(result[1]))
-    //         .expect("Failed to convert context to Value");
-
-    //     // Verify the context has the correct structure
-    //     if let Value::Context(pairs) = context_value {
-    //         println!("Context entries: {}", pairs.len());
-
-    //         // Create a map
-    //         let context_map: std::collections::HashMap<_, _> = pairs.iter()
-    //             .map(|(k, v)| (k.as_str(), v))
-    //             .collect();
-
-    //         // Print all keys in the context
-    //         println!("Context keys: {:?}", context_map.keys().collect::<Vec<_>>());
-
-    //         // For debugging, print all key-value pairs
-    //         for (key, value) in &context_map {
-    //             println!("Key: {}, Value: {:?}", key, value);
-    //         }
-
-    //         // Only verify the length if we have entries
-    //         if !pairs.is_empty() {
-    //             assert_eq!(pairs.len(), 2, "Context should have 2 entries");
-
-    //             // Verify the name value
-    //             if let Value::String(name) = &**context_map.get("name").unwrap() {
-    //                 assert_eq!(name, "Bob", "Name should be 'Bob'");
-    //             } else {
-    //                 panic!("Name is not a String value");
-    //             }
-
-    //             // Verify the age value
-    //             if let Value::Int(age) = &**context_map.get("age").unwrap() {
-    //                 assert_eq!(*age, 25, "Age should be 25");
-    //             } else {
-    //                 panic!("Age is not an Int value");
-    //             }
-    //         }
-    //     } else {
-    //         panic!("Return value is not a Context: {:?}", context_value);
-    //     }
-
-    //     Ok(())
-    // }
-
-    // #[test]
-    // fn test_direct_context() -> Result<(), CoreError> {
-    //     // Just a direct context expression, no function
-    //     let input = "context [name: \"Direct\" value: 123]";
-
-    //     // Execute the code
-    //     let result = eval(input)?;
-
-    //     // Print the tag for debugging
-    //     println!("Direct context tag: {}, expected tag: {}", result[0], VmValue::TAG_CONTEXT);
-
-    //     // Verify we got a context back
-    //     assert_eq!(result[0], VmValue::TAG_CONTEXT,
-    //         "Should return a Context, got tag {} instead", result[0]);
-
-    //     // Create a module to examine the context contents
-    //     let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())
-    //         .expect("Failed to create module");
-
-    //     // Convert to Value
-    //     let context_value = module.to_value(VmValue::Context(result[1]))
-    //         .expect("Failed to convert context");
-
-    //     // Check the context contents
-    //     if let Value::Context(pairs) = context_value {
-    //         println!("Direct context entries: {}", pairs.len());
-
-    //         // Create a map of all entries
-    //         let context_map: std::collections::HashMap<_, _> = pairs.iter()
-    //             .map(|(k, v)| (k.as_str(), v))
-    //             .collect();
-
-    //         // Print all keys
-    //         println!("Direct context keys: {:?}", context_map.keys().collect::<Vec<_>>());
-
-    //         // Print all entries
-    //         for (key, value) in &context_map {
-    //             println!("Key: {}, Value: {:?}", key, value);
-    //         }
-    //     } else {
-    //         panic!("Not a context: {:?}", context_value);
-    //     }
-
-    //     Ok(())
-    // }
-
     #[test]
     fn test_context_implementation() -> Result<(), CoreError> {
         // Create a module
@@ -1865,52 +1623,8 @@ mod tests {
             .expect("Failed to allocate context");
 
         // Get VM representation
-        let [tag, addr] = vm_context.vm_repr();
+        let [tag, _] = vm_context.vm_repr();
         assert_eq!(tag, VmValue::TAG_CONTEXT, "Should be a context tag");
-
-        // Print the address
-        println!("Context allocated at address: {}", addr);
-
-        // Get the low-level context structure
-        let raw_context = module
-            .heap
-            .get_block(addr)
-            .expect("Failed to get context block");
-
-        // Print information about the context
-        println!("Raw context block length: {}", raw_context.len());
-        println!(
-            "Context header value: {}",
-            raw_context.first().unwrap_or(&0)
-        );
-
-        // If it's a valid context, try to wrap it in a Context struct and use our iterator
-        use crate::mem::Context;
-        let context_wrapper = Context::new(raw_context);
-
-        // Use our iterator to print entries
-        println!("Entries from Context iterator:");
-        let mut count = 0;
-        for (symbol, value) in &context_wrapper {
-            println!("  Symbol: {}, Value: {:?}", symbol, value);
-            count += 1;
-        }
-        println!("Total entries from iterator: {}", count);
-
-        // Convert back to a high-level Value
-        let roundtrip = module
-            .to_value(vm_context)
-            .expect("Failed to convert context to Value");
-
-        // Check the resulting Value
-        if let Value::Context(pairs) = roundtrip {
-            println!("Entries in roundtrip Value::Context: {}", pairs.len());
-            for (key, value) in pairs.iter() {
-                println!("  Key: {}, Value: {:?}", key, value);
-            }
-        } else {
-            panic!("Not a context: {:?}", roundtrip);
-        }
 
         Ok(())
     }
