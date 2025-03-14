@@ -315,7 +315,6 @@ mod tests {
     // These tests require a running SSH server on localhost:2222
     // with username "testuser" and password "password"
     #[test]
-    #[ignore] // Ignore by default, run with --ignored flag
     fn test_ssh_basic() {
         // Create module and execution context
         let mut module = setup_module();
@@ -324,12 +323,12 @@ mod tests {
         // Create options context with password
         let options = Value::object().insert("password", "password").build();
 
-        // Push arguments onto the stack (host, command, options)
-        exec.push_value(options).expect("Failed to push options");
-        exec.push_value(Value::string("echo 'Hello from SSH'"))
-            .expect("Failed to push command");
+        // Push arguments onto the stack in reverse order (options, command, host)
         exec.push_value(Value::string("testuser@localhost:2222"))
             .expect("Failed to push host");
+        exec.push_value(Value::string("echo 'Hello from SSH'"))
+            .expect("Failed to push command");
+        exec.push_value(options).expect("Failed to push options");
 
         // Call the SSH function
         ssh_with_options(&mut exec).expect("Failed to call SSH function");
@@ -376,7 +375,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Ignore by default, run with --ignored flag
     fn test_ssh_file_operations() {
         // Create module and execution context
         let mut module = setup_module();
@@ -385,25 +383,25 @@ mod tests {
         // Create options context with password
         let options = Value::object().insert("password", "password").build();
 
-        // 1. Create a test file
+        // 1. Create a test file - push arguments in reverse order (host, command, options)
         let create_file_cmd = "echo 'Test content' > /tmp/rebel_test_file.txt";
-        exec.push_value(options.clone())
-            .expect("Failed to push options");
-        exec.push_value(Value::string(create_file_cmd))
-            .expect("Failed to push command");
         exec.push_value(Value::string("testuser@localhost:2222"))
             .expect("Failed to push host");
+        exec.push_value(Value::string(create_file_cmd))
+            .expect("Failed to push command");
+        exec.push_value(options.clone())
+            .expect("Failed to push options");
         ssh_with_options(&mut exec).expect("Failed to create test file");
         exec.pop_to_value().expect("Failed to get result"); // Discard result
 
-        // 2. Read the file content
+        // 2. Read the file content - push arguments in reverse order (host, command, options)
         let read_file_cmd = "cat /tmp/rebel_test_file.txt";
-        exec.push_value(options.clone())
-            .expect("Failed to push options");
-        exec.push_value(Value::string(read_file_cmd))
-            .expect("Failed to push command");
         exec.push_value(Value::string("testuser@localhost:2222"))
             .expect("Failed to push host");
+        exec.push_value(Value::string(read_file_cmd))
+            .expect("Failed to push command");
+        exec.push_value(options.clone())
+            .expect("Failed to push options");
         ssh_with_options(&mut exec).expect("Failed to read test file");
 
         // Get the result
@@ -424,13 +422,13 @@ mod tests {
             }
         }
 
-        // 3. Delete the test file
+        // 3. Delete the test file - push arguments in reverse order (host, command, options)
         let delete_file_cmd = "rm /tmp/rebel_test_file.txt";
-        exec.push_value(options).expect("Failed to push options");
-        exec.push_value(Value::string(delete_file_cmd))
-            .expect("Failed to push command");
         exec.push_value(Value::string("testuser@localhost:2222"))
             .expect("Failed to push host");
+        exec.push_value(Value::string(delete_file_cmd))
+            .expect("Failed to push command");
+        exec.push_value(options).expect("Failed to push options");
         ssh_with_options(&mut exec).expect("Failed to delete test file");
 
         // Get the result
@@ -450,7 +448,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // Ignore by default, run with --ignored flag
     fn test_ssh_multiple_commands() {
         // Create module and execution context
         let mut module = setup_module();
@@ -459,13 +456,13 @@ mod tests {
         // Create options context with password
         let options = Value::object().insert("password", "password").build();
 
-        // Execute multiple commands
+        // Execute multiple commands - push arguments in reverse order (host, command, options)
         let commands = "echo 'First command' && ls -la /tmp && echo 'Last command'";
-        exec.push_value(options).expect("Failed to push options");
-        exec.push_value(Value::string(commands))
-            .expect("Failed to push command");
         exec.push_value(Value::string("testuser@localhost:2222"))
             .expect("Failed to push host");
+        exec.push_value(Value::string(commands))
+            .expect("Failed to push command");
+        exec.push_value(options).expect("Failed to push options");
         ssh_with_options(&mut exec).expect("Failed to execute multiple commands");
 
         // Get the result
