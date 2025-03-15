@@ -1,0 +1,12 @@
+; RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+
+; Simple context test
+print "Testing simple context access:"
+ctx: context [field: 5]
+print ctx/field
+
+; Function with path access - problematic case
+print "Testing function with path access:"
+f: func [a] [print a/field]
+print "Calling function with context:"
+f context [field: 5]

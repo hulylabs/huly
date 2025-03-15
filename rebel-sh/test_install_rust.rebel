@@ -10,9 +10,9 @@ options: context [
 display-result: func [result] [
     print "===== SSH Result ====="
     print ["Exit code:" result/exit_code]
-    print "Success:" result/success
-    print "Output:" result/stdout
-    print "Errors:" result/stderr
+    print ["Success:" result/success]
+    print ["Output:" result/stdout]
+    print ["Errors:" result/stderr]
     print "===================="
     print ""
 ]

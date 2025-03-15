@@ -11,3 +11,6 @@ pub mod parse;
 pub mod serialize;
 pub mod ssh;
 pub mod value;
+
+#[cfg(test)]
+mod path_access_test;
