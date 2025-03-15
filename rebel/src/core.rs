@@ -485,6 +485,7 @@ impl Op {
     pub const CONTEXT: Word = 6;
     pub const REDUCE: Word = 7;
     pub const FOREACH: Word = 8;
+    const LIT_PARAM: Word = 9;
 }
 
 pub struct Exec<'a, T> {
@@ -671,22 +672,6 @@ where
         }
     }
 
-    fn op_arity(&self, value: MemValue) -> Result<(Word, Word), CoreError> {
-        match value[0] {
-            VmValue::TAG_NATIVE_FN => self
-                .module
-                .get_func(value[1])
-                .map(|native| (Op::CALL_NATIVE, native.arity)),
-            VmValue::TAG_FUNC => self
-                .module
-                .get_array::<1>(value[1])
-                .map(|[arity]| (Op::CALL_FUNC, arity))
-                .map_err(Into::into),
-            VmValue::TAG_SET_WORD => Ok((Op::SET_WORD, 2)),
-            _ => Ok((Op::NONE, 0)),
-        }
-    }
-
     fn do_op(&mut self, op: Word, word: Word) -> Result<(), CoreError> {
         match op {
             Op::SET_WORD => {
@@ -722,6 +707,13 @@ where
                 self.stack.push([VmValue::TAG_CONTEXT, ctx])?;
                 Ok(())
             }
+            Op::LIT_PARAM => {
+                let value = self.get_block::<2>(self.block, self.ip)?;
+                self.ip += 2;
+                println!("LIT_PARAM: {:?}", value);
+                self.stack.push(value)?;
+                Ok(())
+            }
             _ => Err(CoreError::InternalError),
         }
     }
@@ -737,18 +729,32 @@ where
                 }
             }
 
-            if let Ok(value) = self.get_block(self.block, self.ip) {
+            if let Ok(val) = self.get_block(self.block, self.ip) {
                 self.ip += 2;
-                let value = self.resolve(value)?;
-                let (op, arity) = self.op_arity(value)?;
-                if arity == 0 {
-                    if op == Op::NONE {
-                        self.stack.push(value)?;
-                    } else {
-                        return Ok((op, value[1]));
+                match self.resolve(val)? {
+                    [VmValue::TAG_NATIVE_FN, func] => {
+                        let desc = self.module.get_func(func)?;
+                        if desc.arity == 200 {
+                            self.push_op(Op::CALL_NATIVE, func, 6)?;
+                            return Ok((Op::LIT_PARAM, 0));
+                        } else {
+                            if desc.arity == 0 {
+                                return Ok((Op::CALL_NATIVE, func));
+                            } else {
+                                self.push_op(Op::CALL_NATIVE, func, desc.arity)?;
+                            }
+                        }
                     }
-                } else {
-                    self.push_op(op, value[1], arity)?;
+                    [VmValue::TAG_FUNC, desc] => {
+                        let [arity] = self.module.get_array::<1>(desc)?;
+                        if arity == 0 {
+                            return Ok((Op::CALL_FUNC, desc));
+                        } else {
+                            self.push_op(Op::CALL_FUNC, desc, arity)?;
+                        }
+                    }
+                    [VmValue::TAG_SET_WORD, sym] => self.push_op(Op::SET_WORD, sym, 2)?,
+                    other => self.push(other)?,
                 }
             } else {
                 // end of block, let's return single value and set up base

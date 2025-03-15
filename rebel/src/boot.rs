@@ -159,7 +159,7 @@ where
     module.add_native_fn("print", print, 1)?;
     module.add_native_fn("block?", is_block, 1)?;
     module.add_native_fn("reduce", reduce, 1)?;
-    module.add_native_fn("foreach", foreach, 3)?;
+    module.add_native_fn("foreach", foreach, 100)?;
     Ok(())
 }
 
