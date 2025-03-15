@@ -1,0 +1,43 @@
+; Test to SSH into host and install Rust toolchain
+print "Starting Rust installation test..."
+
+; Create options context with password
+options: context [
+    password: "password"
+]
+
+; Function to display SSH results
+display-result: func [result] [
+    print "===== SSH Result ====="
+    print ["Exit code:" result/exit_code]
+    print "Success:" result/success
+    print "Output:" result/stdout
+    print "Errors:" result/stderr
+    print "===================="
+    print ""
+]
+
+; Step 1: Check if Rust is already installed
+print "Step 1: Checking if Rust is already installed..."
+check-result: ssh-with-options "testuser@localhost:2222" "command -v rustc || echo 'Rust not found'" options
+display-result check-result
+
+; Step 2: Install Rust toolchain using rustup
+print "Step 2: Installing Rust toolchain..."
+install-cmd: "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y && echo 'source $HOME/.cargo/env' >> ~/.bashrc && source $HOME/.cargo/env"
+install-result: ssh-with-options "testuser@localhost:2222" install-cmd options
+display-result install-result
+
+; Step 3: Verify Rust installation
+print "Step 3: Verifying Rust installation..."
+verify-result: ssh-with-options "testuser@localhost:2222" "source $HOME/.cargo/env && rustc --version && cargo --version" options
+display-result verify-result
+
+; Check if installation was successful
+either verify-result/success [
+    print "✅ Rust toolchain installation successful!"
+][
+    print "❌ Rust toolchain installation failed!"
+]
+
+print "Test completed!"

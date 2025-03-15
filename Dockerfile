@@ -1,5 +1,8 @@
 FROM ubuntu:22.04
 
+# Add non-interactive flag to avoid prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install SSH server and other essential tools
 RUN apt-get update && apt-get install -y openssh-server sudo curl git build-essential
 RUN mkdir /var/run/sshd

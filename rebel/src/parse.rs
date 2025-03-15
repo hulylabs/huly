@@ -19,7 +19,7 @@ pub enum ParserError<E> {
     EmptyWord,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 pub enum WordKind {
     Word,
     SetWord,
@@ -73,8 +73,18 @@ where
     }
 
     fn skip_whitespace(&mut self) -> Option<(usize, char)> {
-        for (pos, char) in self.cursor.by_ref() {
-            if !char.is_ascii_whitespace() {
+        while let Some((pos, char)) = self.cursor.next() {
+            if char.is_ascii_whitespace() {
+                continue;
+            } else if char == ';' {
+                // Skip comment until newline
+                for (_, c) in self.cursor.by_ref() {
+                    if c == '\n' {
+                        break;
+                    }
+                }
+                continue;
+            } else {
                 return Some((pos, char));
             }
         }
@@ -231,5 +241,83 @@ where
                 .map_err(ParserError::CollectorError)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Collector, Parser, WordKind};
+
+    #[derive(PartialEq, Debug)]
+    struct TestCollector {
+        pub strings: Vec<String>,
+        pub words: Vec<(WordKind, String)>,
+        pub integers: Vec<i32>,
+    }
+
+    impl Collector for TestCollector {
+        type Error = ();
+
+        fn string(&mut self, string: &str) -> Result<(), Self::Error> {
+            self.strings.push(string.to_string());
+            Ok(())
+        }
+
+        fn word(&mut self, kind: WordKind, word: &str) -> Result<(), Self::Error> {
+            self.words.push((kind, word.to_string()));
+            Ok(())
+        }
+
+        fn integer(&mut self, value: i32) -> Result<(), Self::Error> {
+            self.integers.push(value);
+            Ok(())
+        }
+
+        fn begin_block(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn end_block(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn begin_path(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+
+        fn end_path(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn test_comments_are_ignored() {
+        let input = r#"
+                ; this is a comment
+                word1 ; this is a comment
+                "string" ; another comment
+                123 ; numeric comment
+                ; full line comment
+                word2
+            "#;
+
+        let mut collector = TestCollector {
+            strings: vec![],
+            words: vec![],
+            integers: vec![],
+        };
+
+        let mut parser = Parser::new(input, &mut collector);
+        parser.parse().unwrap();
+
+        assert_eq!(
+            collector.words,
+            vec![
+                (WordKind::Word, "word1".to_string()),
+                (WordKind::Word, "word2".to_string()),
+            ]
+        );
+        assert_eq!(collector.strings, vec!["string"]);
+        assert_eq!(collector.integers, vec![123]);
     }
 }
