@@ -721,7 +721,6 @@ where
             Op::LIT_PARAM => {
                 let value = self.get_block::<2>(self.block, self.ip)?;
                 self.ip += 2;
-                println!("LIT_PARAM: {:?}", value);
                 self.stack.push(value)?;
                 Ok(())
             }
@@ -799,7 +798,6 @@ where
                                 self.stack.peek().ok_or(MemoryError::StackUnderflow)?;
                             let index = i + 2;
                             if let Ok(value) = self.get_block(data, index) {
-                                println!("FOREACH: {:?}", value);
                                 let mut ctx = self.peek_context()?;
                                 ctx.put(word, value)?;
                                 self.push([VmValue::TAG_INT, index])?;
