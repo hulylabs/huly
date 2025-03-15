@@ -20,55 +20,76 @@ pub enum Value {
 
 impl fmt::Display for Value {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Value::None => write!(f, "none"),
-            Value::Int(n) => write!(f, "{}", n),
-            Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
-            Value::String(s) => write!(f, "{}", s),
-            Value::Word(w) => write!(f, "{}", w),
-            Value::SetWord(w) => write!(f, "{}:", w),
-            Value::GetWord(w) => write!(f, ":{}", w),
-            Value::Block(block) => {
-                // write!(f, "[")?;
-                let mut first = true;
-                for item in block.iter() {
-                    if !first {
-                        write!(f, " ")?;
-                    }
-                    first = false;
-                    write!(f, "{}", item)?;
-                }
-                // write!(f, "]")
-                Ok(())
-            }
-            Value::Context(pairs) => {
-                write!(f, "make object! [")?;
-                let mut first = true;
-                for (key, value) in pairs.iter() {
-                    if !first {
-                        write!(f, " ")?;
-                    }
-                    first = false;
-                    write!(f, "{}: {}", key, value)?;
-                }
-                write!(f, "]")
-            }
-            Value::Path(path) => {
-                let mut first = true;
-                for segment in path.iter() {
-                    if !first {
-                        write!(f, "/")?;
-                    }
-                    first = false;
-                    write!(f, "{}", segment)?;
-                }
-                Ok(())
-            }
-        }
+        write!(f, "{}", self.form())
     }
 }
 
 impl Value {
+    pub fn form(&self) -> String {
+        match self {
+            Value::None => "none".into(),
+            Value::Int(n) => n.to_string(),
+            Value::Bool(b) => {
+                if *b {
+                    "true".into()
+                } else {
+                    "false".into()
+                }
+            }
+            Value::String(s) => s.to_string(),
+            Value::Word(w) => w.to_string(),
+            Value::SetWord(w) => {
+                let mut result = w.to_string();
+                result.push(':');
+                result
+            }
+            Value::GetWord(w) => {
+                let mut result = ":".to_string();
+                result.push_str(&w);
+                result
+            }
+            Value::Block(block) => {
+                let mut result = String::new();
+                let mut first = true;
+                for item in block.iter() {
+                    if !first {
+                        result.push(' ');
+                    }
+                    first = false;
+                    result.push_str(&item.form());
+                }
+                result
+            }
+            Value::Context(pairs) => {
+                let mut result = "make object! [".to_string();
+                let mut first = true;
+                for (key, value) in pairs.iter() {
+                    if !first {
+                        result.push(' ');
+                    }
+                    first = false;
+                    result.push_str(&key);
+                    result.push(':');
+                    result.push_str(&value.form());
+                }
+                result.push(']');
+                result
+            }
+            Value::Path(path) => {
+                let mut result = String::new();
+                let mut first = true;
+                for segment in path.iter() {
+                    if !first {
+                        result.push('/');
+                    }
+                    first = false;
+                    result.push_str(&segment.form());
+                }
+                result
+            }
+        }
+    }
+
     //==================================================================
     // CONSTRUCTORS
     //==================================================================

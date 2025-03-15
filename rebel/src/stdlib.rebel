@@ -1,7 +1,9 @@
 ; RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
+reform: func [block] [form reduce block]
+
 prin: func [value] [
-    system_print either block? value [reduce value] [value]
+    system_print either block? value [reform value] [value]
 ]
 
 print: func [value] [

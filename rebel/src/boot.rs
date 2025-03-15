@@ -146,6 +146,18 @@ where
     }
 }
 
+fn form<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    let value = module.pop_to_value()?;
+    let form = value.form();
+    module
+        .alloc_string(form.as_str())
+        .and_then(|s| module.push([VmValue::TAG_INLINE_STRING, s]))
+        .map_err(Into::into)
+}
+
 pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
@@ -160,6 +172,7 @@ where
     module.add_native_fn("block?", is_block, 1)?;
     module.add_native_fn("reduce", reduce, 1)?;
     module.add_native_fn("foreach", foreach, 100)?;
+    module.add_native_fn("form", form, 1)?;
     Ok(())
 }
 

@@ -282,7 +282,7 @@ where
         result.try_into()
     }
 
-    pub fn alloc_string(&mut self, string: &str) -> Result<VmValue, MemoryError> {
+    pub fn alloc_string(&mut self, string: &str) -> Result<Offset, MemoryError> {
         let bytes = string.as_bytes();
         let word_count = (bytes.len() + 3) / 4; // ceiling division
         let mut words = Vec::with_capacity(word_count + 1);
@@ -298,7 +298,7 @@ where
                 current_word = 0;
             }
         }
-        self.heap.alloc_block(&words).map(VmValue::String)
+        self.heap.alloc_block(&words)
     }
 
     pub fn get_or_insert_symbol(&mut self, symbol: &str) -> Result<Offset, MemoryError> {
@@ -321,7 +321,7 @@ where
             Value::Int(n) => Ok(VmValue::Int(*n)),
             Value::Bool(b) => Ok(VmValue::Bool(*b)),
 
-            Value::String(s) => self.alloc_string(s.as_ref()),
+            Value::String(s) => self.alloc_string(s.as_ref()).map(VmValue::String),
 
             Value::Word(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::Word),
             Value::SetWord(w) => self.get_or_insert_symbol(w.as_ref()).map(VmValue::SetWord),
@@ -624,6 +624,10 @@ where
         self.module.heap.alloc_block(values)
     }
 
+    pub fn alloc_string(&mut self, string: &str) -> Result<Offset, MemoryError> {
+        self.module.alloc_string(string)
+    }
+
     pub fn alloc_context(&mut self, size: u32) -> Result<Offset, MemoryError> {
         self.module.heap.alloc_context(size)
     }
@@ -899,7 +903,7 @@ where
     fn string(&mut self, string: &str) -> Result<(), Self::Error> {
         self.module
             .alloc_string(string)
-            .and_then(|value| self.parse.push(value.vm_repr()))
+            .and_then(|offset| self.parse.push([VmValue::TAG_INLINE_STRING, offset]))
     }
 
     fn word(&mut self, kind: WordKind, word: &str) -> Result<(), Self::Error> {
