@@ -55,6 +55,16 @@ where
     }
 }
 
+fn reduce<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    match module.pop()? {
+        [VmValue::TAG_BLOCK, block] => module.jmp_op(block, Op::REDUCE),
+        _ => Err(CoreError::BadArguments),
+    }
+}
+
 fn func<T>(module: &mut Exec<T>) -> Result<(), CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
@@ -99,8 +109,20 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     let value = module.pop_to_value()?;
-    println!("[print]: {:?}", value);
+    println!("{}", value);
     Ok(())
+}
+
+fn is_block<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    let value = module.pop::<2>()?;
+    if value[0] == VmValue::TAG_BLOCK {
+        module.push([VmValue::TAG_BOOL, 1]).map_err(Into::into)
+    } else {
+        module.push([VmValue::TAG_BOOL, 0]).map_err(Into::into)
+    }
 }
 
 pub fn core_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
@@ -114,6 +136,8 @@ where
     module.add_native_fn("func", func, 2)?;
     module.add_native_fn("either", either, 3)?;
     module.add_native_fn("print", print, 1)?;
+    module.add_native_fn("block?", is_block, 1)?;
+    module.add_native_fn("reduce", reduce, 1)?;
     Ok(())
 }
 

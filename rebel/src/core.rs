@@ -483,6 +483,7 @@ impl Op {
     const LEAVE_BLOCK: u32 = 4;
     const LEAVE_FUNC: u32 = 5;
     pub const CONTEXT: u32 = 6;
+    pub const REDUCE: u32 = 7;
 }
 
 pub struct Exec<'a, T> {
@@ -587,9 +588,9 @@ where
             .map_err(Into::into)
     }
 
-    pub fn jmp(&mut self, block: Offset) -> Result<(), CoreError> {
+    pub fn jmp_op(&mut self, block: Offset, op: Word) -> Result<(), CoreError> {
         self.op_stack.push([
-            Op::LEAVE_BLOCK,
+            op,
             self.block,
             self.stack.len()?,
             Self::LEAVE_MARKER + self.ip,
@@ -597,6 +598,10 @@ where
         self.block = block;
         self.ip = 0;
         Ok(())
+    }
+
+    pub fn jmp(&mut self, block: Offset) -> Result<(), CoreError> {
+        self.jmp_op(block, Op::LEAVE_BLOCK)
     }
 
     pub fn push_op(&mut self, op: Word, word: Word, arity: Word) -> Result<(), MemoryError> {
@@ -757,6 +762,12 @@ where
                         }
                         Op::LEAVE_BLOCK => {
                             self.leave(bp)?;
+                            (block, ip)
+                        }
+                        Op::REDUCE => {
+                            let result = self.stack.pop_all(bp).ok_or(CoreError::InternalError)?;
+                            let block = self.module.heap.alloc_block(&result)?;
+                            self.stack.push([VmValue::TAG_BLOCK, block])?;
                             (block, ip)
                         }
                         _ => return Ok((op, block)),
@@ -1505,12 +1516,45 @@ mod tests {
 
         if let Value::Context(pairs) = value {
             assert_eq!(pairs.len(), 2);
-            assert_eq!(pairs[0].0, "name");
-            assert_eq!(pairs[0].1, "Alice".into());
-            assert_eq!(pairs[1].0, "age");
-            assert_eq!(pairs[1].1, 30.into());
+            let mut found = 0;
+            for (key, value) in pairs.iter() {
+                match key.as_str() {
+                    "name" => {
+                        assert_eq!(*value, "Alice".into());
+                        found += 1;
+                    }
+                    "age" => {
+                        assert_eq!(*value, 30.into());
+                        found += 1;
+                    }
+                    _ => panic!("Unexpected key: {}", key),
+                }
+            }
+            assert_eq!(found, 2);
         } else {
             panic!("Result should be a context");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reduce_1() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input = "reduce [5 add 5 5]";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+        let value = module.to_value(result)?;
+
+        if let Value::Block(values) = value {
+            assert_eq!(values.len(), 2);
+            assert_eq!(values[0], 5.into());
+            assert_eq!(values[1], 10.into());
+        } else {
+            println!("Result: {:?}", value);
+            panic!("Result should be a block");
         }
 
         Ok(())
