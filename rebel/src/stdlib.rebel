@@ -1,0 +1,10 @@
+; RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+
+prin: func [value] [
+    system_print either block? value [reduce value] [value]
+]
+
+print: func [value] [
+    prin value
+    prin "\n"
+]

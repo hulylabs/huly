@@ -47,6 +47,7 @@ pub type MemValue = [Word; 2];
 pub enum VmValue {
     None,
     Int(i32),
+    Bool(bool),
     String(Offset),
     Block(Offset),
     Context(Offset),
@@ -95,6 +96,7 @@ impl VmValue {
             Self::TAG_SET_WORD => Ok(VmValue::SetWord(data)),
             Self::TAG_FUNC => Ok(VmValue::Func(data)),
             Self::TAG_PATH => Ok(VmValue::Path(data)),
+            Self::TAG_BOOL => Ok(VmValue::Bool(data != 0)),
             _ => Err(CoreError::UnknownTag),
         }
     }
@@ -103,6 +105,7 @@ impl VmValue {
         match self {
             VmValue::None => [Self::TAG_NONE, 0],
             VmValue::Int(value) => [Self::TAG_INT, *value as u32],
+            VmValue::Bool(value) => [Self::TAG_BOOL, if *value { 1 } else { 0 }],
             VmValue::String(offset) => [Self::TAG_INLINE_STRING, *offset],
             VmValue::Word(symbol) => [Self::TAG_WORD, *symbol],
             VmValue::SetWord(symbol) => [Self::TAG_SET_WORD, *symbol],
@@ -316,6 +319,7 @@ where
         match value {
             Value::None => Ok(VmValue::None),
             Value::Int(n) => Ok(VmValue::Int(*n)),
+            Value::Bool(b) => Ok(VmValue::Bool(*b)),
 
             Value::String(s) => self.alloc_string(s.as_ref()),
 
@@ -370,6 +374,7 @@ where
         match vm_value {
             VmValue::None => Ok(Value::None),
             VmValue::Int(n) => Ok(Value::Int(n)),
+            VmValue::Bool(b) => Ok(Value::Bool(b)),
             VmValue::Word(symbol) => Ok(Value::Word(self.get_symbol(symbol)?)),
             VmValue::SetWord(symbol) => Ok(Value::SetWord(self.get_symbol(symbol)?)),
             VmValue::GetWord(symbol) => Ok(Value::GetWord(self.get_symbol(symbol)?)),

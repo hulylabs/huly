@@ -139,7 +139,7 @@ where
                         }
                     }
                     ']' | '/' => break Some(char),
-                    c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
+                    c if c.is_ascii_alphanumeric() || c == '_' || c == '-' || c == '?' => {}
                     c if c.is_ascii_whitespace() => break Some(char),
                     _ => return Err(ParserError::UnexpectedChar(char)),
                 },

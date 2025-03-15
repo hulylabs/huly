@@ -8,6 +8,7 @@ use std::fmt;
 pub enum Value {
     None,
     Int(i32),
+    Bool(bool),
     Block(Box<[Value]>),
     String(SmolStr),
     Word(SmolStr),
@@ -22,6 +23,7 @@ impl fmt::Display for Value {
         match self {
             Value::None => write!(f, "none"),
             Value::Int(n) => write!(f, "{}", n),
+            Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
             Value::String(s) => write!(f, "\"{}\"", s),
             Value::Word(w) => write!(f, "{}", w),
             Value::SetWord(w) => write!(f, "{}:", w),
@@ -573,6 +575,7 @@ impl Value {
         match self {
             Value::None => Value::String("none".into()),
             Value::Int(n) => Value::String(n.to_string().into()),
+            Value::Bool(b) => Value::String(if *b { "true" } else { "false" }.into()),
             Value::String(s) => Value::String(s.clone()),
             Value::Word(w) => Value::String(w.clone()),
             Value::SetWord(w) => Value::String(format!("{}:", w).into()),

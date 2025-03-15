@@ -137,9 +137,7 @@ fn print<T>(module: &mut Exec<T>) -> Result<(), CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    let value = module.pop_to_value()?;
-    println!("{}", value);
-    Ok(())
+    module.pop_to_value().map(|value| print!("{}", value))
 }
 
 fn is_block<T>(module: &mut Exec<T>) -> Result<(), CoreError>
@@ -164,7 +162,7 @@ where
     module.add_native_fn("context", context, 1)?;
     module.add_native_fn("func", func, 2)?;
     module.add_native_fn("either", either, 3)?;
-    module.add_native_fn("print", print, 1)?;
+    module.add_native_fn("system_print", print, 1)?;
     module.add_native_fn("block?", is_block, 1)?;
     module.add_native_fn("reduce", reduce, 1)?;
     module.add_native_fn("foreach", foreach, 100)?;

@@ -71,6 +71,7 @@ impl BinTag {
     pub const WORD: u8 = VmValue::TAG_WORD as u8;
     pub const SET_WORD: u8 = VmValue::TAG_SET_WORD as u8;
     pub const GET_WORD: u8 = VmValue::TAG_GET_WORD as u8;
+    pub const BOOL: u8 = VmValue::TAG_BOOL as u8;
 }
 
 // ============================================================================
@@ -87,6 +88,9 @@ pub trait Serializer {
 
     /// Handle serialization of integer value
     fn integer(&mut self, value: i32) -> Result<(), Self::Error>;
+
+    /// Handle serialization of boolean value
+    fn bool(&mut self, value: bool) -> Result<(), Self::Error>;
 
     /// Handle serialization of string value
     fn string(&mut self, value: &str) -> Result<(), Self::Error>;
@@ -127,6 +131,7 @@ impl ValueSerialize for Value {
         match self {
             Value::None => serializer.none(),
             Value::Int(n) => serializer.integer(*n),
+            Value::Bool(b) => serializer.bool(*b),
             Value::String(s) => serializer.string(s),
             Value::Word(w) => serializer.word(w),
             Value::SetWord(w) => serializer.set_word(w),
@@ -223,6 +228,12 @@ impl<W: Write> Serializer for BinarySerializer<W> {
         self.writer.write_all(&[BinTag::INT])?;
         // Write variable-length encoded integer
         self.write_varint(value)
+    }
+
+    fn bool(&mut self, value: bool) -> Result<(), Self::Error> {
+        self.writer
+            .write_all(&[BinTag::BOOL, if value { 1 } else { 0 }])
+            .map_err(Into::into)
     }
 
     fn string(&mut self, value: &str) -> Result<(), Self::Error> {
