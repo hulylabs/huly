@@ -617,19 +617,22 @@ where
         self.module.heap.alloc(values)
     }
 
-    pub fn put_context(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
+    pub fn alloc_context(&mut self, size: u32) -> Result<Offset, MemoryError> {
+        self.module.heap.alloc_context(size)
+    }
+
+    pub fn get_context(&mut self, offset: Offset) -> Result<Context<&mut [u32]>, MemoryError> {
+        self.module.heap.get_block_mut(offset).map(Context::new)
+    }
+
+    fn peek_context(&mut self) -> Result<Context<&mut [u32]>, MemoryError> {
         let [ctx] = self.env.peek().ok_or(MemoryError::StackUnderflow)?;
-        let mut context = self.module.heap.get_block_mut(ctx).map(Context::new)?;
-        context.put(symbol, value)
+        self.module.heap.get_block_mut(ctx).map(Context::new)
     }
 
-    pub fn new_context(&mut self, size: u32) -> Result<(), MemoryError> {
-        self.env.push([self.module.heap.alloc_context(size)?])
+    pub fn push_context(&mut self, ctx: Offset) -> Result<(), MemoryError> {
+        self.env.push([ctx])
     }
-
-    // fn push_context(&mut self, ctx: Offset) -> Result<(), MemoryError> {
-    //     self.env.push([ctx])
-    // }
 
     pub fn pop_context(&mut self) -> Result<Offset, MemoryError> {
         self.env.pop().map(|[addr]| addr)
@@ -678,19 +681,13 @@ where
                 let contexts = self.env.peek_all(0).ok_or(MemoryError::StackUnderflow)?;
                 for &ctx in contexts.iter().rev() {
                     let mut context = self.module.heap.get_block_mut(ctx).map(Context::new)?;
-                    match context.replace(word, value) {
+                    match context.put(word, value) {
                         Ok(_) => return Ok(()),
                         Err(MemoryError::WordNotFound) => continue,
                         Err(err) => return Err(err.into()),
                     }
                 }
-                let mut globals = self
-                    .module
-                    .heap
-                    .get_block_mut(self.module.system_words)
-                    .map(Context::new)?;
-
-                globals.put(word, value).map_err(Into::into)
+                Err(MemoryError::WordNotFound.into())
             }
             Op::CALL_NATIVE => {
                 let native_fn = self.module.get_func(word)?;
@@ -802,7 +799,9 @@ where
                                 self.stack.peek().ok_or(MemoryError::StackUnderflow)?;
                             let index = i + 2;
                             if let Ok(value) = self.get_block(data, index) {
-                                self.put_context(word, value)?;
+                                println!("FOREACH: {:?}", value);
+                                let mut ctx = self.peek_context()?;
+                                ctx.put(word, value)?;
                                 self.push([VmValue::TAG_INT, index])?;
                                 self.op_stack
                                     .push([Op::FOREACH, block, self.stack.len()?, ip])?;

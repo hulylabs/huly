@@ -29,6 +29,8 @@ pub enum MemoryError {
     SymbolNotFound,
     #[error("symbol table full")]
     SymbolTableFull,
+    #[error("context full")]
+    ContextFull,
     #[error("bad symbol")]
     BadSymbol,
     #[error("string too long")]
@@ -749,49 +751,61 @@ where
     }
 
     /// Get a value for a given symbol
-    pub fn replace(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
-        let (_, data) = self
+    // pub fn replace(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
+    //     let (_, data) = self
+    //         .0
+    //         .split_first_mut()
+    //         .ok_or(MemoryError::UnexpectedError)?;
+
+    //     let capacity = data.len() / Self::ENTRY_SIZE;
+    //     if capacity == 0 {
+    //         return Err(MemoryError::WordNotFound);
+    //     }
+
+    //     let h = Self::hash_u32(symbol) as usize;
+    //     let mut index = h % capacity;
+
+    //     for _probe in 0..capacity {
+    //         let offset = index * Self::ENTRY_SIZE;
+    //         if let Some(found) =
+    //             data.get_mut(offset..offset + Self::ENTRY_SIZE)
+    //                 .and_then(|entry| {
+    //                     entry.split_first_mut().and_then(|(cur, val)| {
+    //                         if *cur == symbol {
+    //                             Some(val)
+    //                         } else {
+    //                             None
+    //                         }
+    //                     })
+    //                 })
+    //         {
+    //             found[0] = value[0];
+    //             found[1] = value[1];
+    //             return Ok(());
+    //         }
+    //         index = (index + 1) % capacity;
+    //     }
+
+    //     Err(MemoryError::WordNotFound)
+    // }
+
+    pub fn seal(&mut self) -> Result<(), MemoryError> {
+        let (header, _) = self
             .0
             .split_first_mut()
             .ok_or(MemoryError::UnexpectedError)?;
-
-        let capacity = data.len() / Self::ENTRY_SIZE;
-        if capacity == 0 {
-            return Err(MemoryError::WordNotFound);
-        }
-
-        let h = Self::hash_u32(symbol) as usize;
-        let mut index = h % capacity;
-
-        for _probe in 0..capacity {
-            let offset = index * Self::ENTRY_SIZE;
-            if let Some(found) =
-                data.get_mut(offset..offset + Self::ENTRY_SIZE)
-                    .and_then(|entry| {
-                        entry.split_first_mut().and_then(|(cur, val)| {
-                            if *cur == symbol {
-                                Some(val)
-                            } else {
-                                None
-                            }
-                        })
-                    })
-            {
-                found[0] = value[0];
-                found[1] = value[1];
-                return Ok(());
-            }
-            index = (index + 1) % capacity;
-        }
-
-        Err(MemoryError::WordNotFound)
+        *header |= 0x8000_0000;
+        Ok(())
     }
 
     pub fn put(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
-        let (count, data) = self
+        let (header, data) = self
             .0
             .split_first_mut()
             .ok_or(MemoryError::UnexpectedError)?;
+
+        let sealed = *header & 0x8000_0000;
+        let count = *header & 0x7FFF_FFFF;
 
         let capacity = data.len() / Self::ENTRY_SIZE;
         if capacity == 0 {
@@ -803,30 +817,31 @@ where
 
         for _probe in 0..capacity {
             let offset = index * Self::ENTRY_SIZE;
-            if data
+            let entry = data
                 .get_mut(offset..offset + Self::ENTRY_SIZE)
-                .and_then(|entry| {
-                    entry.split_first_mut().and_then(|(cur, val)| {
-                        if *cur == 0 {
-                            *count += 1;
-                            *cur = symbol;
-                        }
-                        if *cur == symbol {
-                            val[0] = value[0];
-                            val[1] = value[1];
-                            Some(())
-                        } else {
-                            None
-                        }
-                    })
-                })
-                .is_some()
-            {
+                .ok_or(MemoryError::OutOfBounds)?;
+            let (cur, val) = entry
+                .split_first_mut()
+                .ok_or(MemoryError::UnexpectedError)?;
+            if *cur == 0 {
+                if sealed != 0 {
+                    return Err(MemoryError::WordNotFound);
+                }
+                *header = count + 1;
+                *cur = symbol;
+            }
+            if *cur == symbol {
+                val[0] = value[0];
+                val[1] = value[1];
                 return Ok(());
             }
             index = (index + 1) % capacity;
         }
-        Err(MemoryError::SymbolTableFull)
+        if sealed != 0 {
+            Err(MemoryError::WordNotFound)
+        } else {
+            Err(MemoryError::ContextFull)
+        }
     }
 }
 

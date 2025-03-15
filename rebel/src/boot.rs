@@ -47,7 +47,8 @@ where
 {
     match module.pop()? {
         [VmValue::TAG_BLOCK, block] => {
-            module.new_context(64)?;
+            let ctx = module.alloc_context(64)?;
+            module.push_context(ctx)?;
             module.push_op(Op::CONTEXT, 0, 2)?;
             module.jmp(block)
         }
@@ -70,11 +71,18 @@ where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
     let args = module.pop::<6>()?;
+    println!("args: {:?}", args);
     match args {
         [VmValue::TAG_WORD, word, VmValue::TAG_BLOCK, data, VmValue::TAG_BLOCK, body] => {
             if let Ok(value) = module.get_block::<2>(data, 0) {
-                module.new_context(1)?;
-                module.put_context(word, value)?;
+                let ctx_offset = module.alloc_context(1)?;
+                let mut ctx = module.get_context(ctx_offset)?;
+                ctx.put(word, value)?;
+                ctx.seal()?;
+
+                println!("ctx: {:?}", ctx);
+
+                module.push_context(ctx_offset)?;
                 module.push(args)?;
                 module.push([VmValue::TAG_INT, 0])?;
                 module.jmp_op(body, Op::FOREACH)
@@ -94,17 +102,17 @@ where
         [VmValue::TAG_BLOCK, params, VmValue::TAG_BLOCK, body] => {
             let args = module.get_block_len(params)?;
             let arity = args as Offset / 2;
-            module.new_context(arity)?;
+            let ctx = module.alloc_context(arity)?;
             for i in 0..arity {
                 let param = module.get_block::<2>(params, i * 2)?;
                 match param {
-                    [VmValue::TAG_WORD, symbol] => {
-                        module.put_context(symbol, [VmValue::TAG_STACK_VALUE, 2 * i as Offset])?
-                    }
+                    [VmValue::TAG_WORD, symbol] => module
+                        .get_context(ctx)?
+                        .put(symbol, [VmValue::TAG_STACK_VALUE, 2 * i as Offset])?,
                     _ => return Err(CoreError::BadArguments),
                 }
             }
-            let ctx = module.pop_context()?;
+            module.get_context(ctx)?.seal()?;
             let func = module.alloc([arity * 2, ctx, body])?;
             module.push([VmValue::TAG_FUNC, func]).map_err(Into::into)
         }
