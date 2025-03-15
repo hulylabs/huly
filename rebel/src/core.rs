@@ -476,16 +476,15 @@ where
 pub struct Op;
 
 impl Op {
-    const NONE: u32 = 0;
-    const SET_WORD: u32 = 1;
-    const CALL_NATIVE: u32 = 2;
-    const CALL_FUNC: u32 = 3;
-    const LEAVE_BLOCK: u32 = 4;
-    const LEAVE_FUNC: u32 = 5;
-    pub const CONTEXT: Word = 6;
-    pub const REDUCE: Word = 7;
-    pub const FOREACH: Word = 8;
-    const LIT_PARAM: Word = 9;
+    const SET_WORD: u32 = 0;
+    const CALL_NATIVE: u32 = 1;
+    const CALL_FUNC: u32 = 2;
+    const LEAVE_BLOCK: u32 = 3;
+    const LEAVE_FUNC: u32 = 4;
+    pub const CONTEXT: Word = 5;
+    pub const REDUCE: Word = 6;
+    pub const FOREACH: Word = 7;
+    const LIT_PARAM: Word = 8;
 }
 
 pub struct Exec<'a, T> {
@@ -676,7 +675,22 @@ where
         match op {
             Op::SET_WORD => {
                 let value = self.stack.peek().ok_or(MemoryError::StackUnderflow)?;
-                self.put_context(word, value).map_err(Into::into)
+                let contexts = self.env.peek_all(0).ok_or(MemoryError::StackUnderflow)?;
+                for &ctx in contexts.iter().rev() {
+                    let mut context = self.module.heap.get_block_mut(ctx).map(Context::new)?;
+                    match context.replace(word, value) {
+                        Ok(_) => return Ok(()),
+                        Err(MemoryError::WordNotFound) => continue,
+                        Err(err) => return Err(err.into()),
+                    }
+                }
+                let mut globals = self
+                    .module
+                    .heap
+                    .get_block_mut(self.module.system_words)
+                    .map(Context::new)?;
+
+                globals.put(word, value).map_err(Into::into)
             }
             Op::CALL_NATIVE => {
                 let native_fn = self.module.get_func(word)?;
@@ -1594,19 +1608,12 @@ mod tests {
         let mut module =
             Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
 
-        let input = "foreach x [1 2 3] [print x]";
+        let input = "sum: 0 foreach x [1 2 3 4 5] [sum: add sum x] sum";
         let block = module.parse(input)?;
         let result = module.eval(block)?;
         let value = module.to_value(result)?;
 
-        // if let Value::Block(values) = value {
-        //     assert_eq!(values.len(), 2);
-        //     assert_eq!(values[0], 5.into());
-        //     assert_eq!(values[1], 10.into());
-        // } else {
-        //     println!("Result: {:?}", value);
-        //     panic!("Result should be a block");
-        // }
+        assert_eq!(Value::Int(15), value);
 
         Ok(())
     }

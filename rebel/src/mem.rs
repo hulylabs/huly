@@ -748,6 +748,45 @@ where
         self.0.init(0)
     }
 
+    /// Get a value for a given symbol
+    pub fn replace(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
+        let (_, data) = self
+            .0
+            .split_first_mut()
+            .ok_or(MemoryError::UnexpectedError)?;
+
+        let capacity = data.len() / Self::ENTRY_SIZE;
+        if capacity == 0 {
+            return Err(MemoryError::WordNotFound);
+        }
+
+        let h = Self::hash_u32(symbol) as usize;
+        let mut index = h % capacity;
+
+        for _probe in 0..capacity {
+            let offset = index * Self::ENTRY_SIZE;
+            if let Some(found) =
+                data.get_mut(offset..offset + Self::ENTRY_SIZE)
+                    .and_then(|entry| {
+                        entry.split_first_mut().and_then(|(cur, val)| {
+                            if *cur == symbol {
+                                Some(val)
+                            } else {
+                                None
+                            }
+                        })
+                    })
+            {
+                found[0] = value[0];
+                found[1] = value[1];
+                return Ok(());
+            }
+            index = (index + 1) % capacity;
+        }
+
+        Err(MemoryError::WordNotFound)
+    }
+
     pub fn put(&mut self, symbol: SymbolId, value: [Word; 2]) -> Result<(), MemoryError> {
         let (count, data) = self
             .0
