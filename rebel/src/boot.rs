@@ -1,7 +1,7 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
 use crate::core::{CoreError, Exec, Module, Op, VmValue};
-use crate::mem::{Offset, Word};
+use crate::mem::{MemoryError, Offset, Word};
 
 fn add<T>(module: &mut Exec<T>) -> Result<(), CoreError>
 where
@@ -60,9 +60,12 @@ fn reduce<T>(module: &mut Exec<T>) -> Result<(), CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    match module.pop()? {
-        [VmValue::TAG_BLOCK, block] => module.jmp_op(block, Op::REDUCE),
-        _ => Err(CoreError::BadArguments),
+    let [tag, block] = module.peek::<2>().ok_or(MemoryError::StackUnderflow)?;
+    if tag == VmValue::TAG_BLOCK {
+        module.pop::<2>()?;
+        module.jmp_op(block, Op::REDUCE)
+    } else {
+        Ok(())
     }
 }
 
