@@ -679,6 +679,12 @@ impl From<i32> for Value {
     }
 }
 
+impl From<bool> for Value {
+    fn from(value: bool) -> Self {
+        Value::Bool(value)
+    }
+}
+
 impl From<&str> for Value {
     fn from(value: &str) -> Self {
         Value::String(value.into())
@@ -694,12 +700,6 @@ impl From<String> for Value {
 impl From<SmolStr> for Value {
     fn from(value: SmolStr) -> Self {
         Value::String(value)
-    }
-}
-
-impl From<bool> for Value {
-    fn from(value: bool) -> Self {
-        Value::Int(if value { 1 } else { 0 })
     }
 }
 
