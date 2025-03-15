@@ -665,7 +665,12 @@ where
                 while let Ok(word_value) = self.get_block(block, offset) {
                     match word_value {
                         [VmValue::TAG_WORD, symbol] => {
-                            result = self.find_word(symbol)?;
+                            // Recursively resolve the word
+                            // This will handle TAG_STACK_VALUE and any other indirection
+                            let temp_word = [VmValue::TAG_WORD, symbol];
+                            result = self.resolve(temp_word)?;
+
+                            // Now push the actual value onto the environment stack
                             self.env.push([result[1]])?;
                         }
                         _ => unimplemented!(),
@@ -2076,6 +2081,63 @@ mod tests {
         assert_eq!(result, VmValue::Int(84), "Second call should return 84");
 
         Ok(())
+    }
+
+    /// Test path access with function arguments
+    /// This test verifies that:
+    /// 1. Simple context access works correctly
+    /// 2. Function with path access works correctly
+    /// 3. Nested path access works correctly
+    #[test]
+    fn test_path_access() -> Result<(), CoreError> {
+        // Initialize a module
+        let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
+
+        // First, test direct context access to verify contexts work correctly
+        let simple_context_test = "ctx: context [field: 5] ctx/field";
+        let simple_result = eval_code(&mut module, simple_context_test)?;
+
+        // This should work and return 5
+        assert_eq!(simple_result, Value::Int(5), "Simple context access failed");
+        println!("Simple context access works correctly");
+
+        // Now let's test the problematic case with a function
+        let function_test = "f: func [a] [a/field] f context [field: 5]";
+
+        // With our fix, this should now work
+        let function_result = eval_code(&mut module, function_test)?;
+
+        // The function should return 5
+        assert_eq!(
+            function_result,
+            Value::Int(5),
+            "Function with path access failed"
+        );
+        println!("Function with path access works correctly");
+
+        // Let's test a more complex case with nested contexts
+        let nested_test = "
+            ctx: context [
+                inner: context [
+                    value: 42
+                ]
+            ]
+            f: func [a] [a/inner/value]
+            f ctx
+        ";
+
+        let nested_result = eval_code(&mut module, nested_test)?;
+        assert_eq!(nested_result, Value::Int(42), "Nested path access failed");
+        println!("Nested path access works correctly");
+
+        Ok(())
+    }
+
+    /// Helper function to evaluate code and convert the result to a Value
+    fn eval_code(module: &mut Module<Box<[u32]>>, code: &str) -> Result<Value, CoreError> {
+        let block = module.parse(code)?;
+        let result = module.eval(block)?;
+        module.to_value(result)
     }
 }
 
