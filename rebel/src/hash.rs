@@ -7,6 +7,7 @@ use std::arch::x86_64::{_mm_crc32_u32, _mm_crc32_u64};
 use std::arch::aarch64::__crc32cw;
 
 /// Compile-time CRC32C table generation using a `const fn`
+/// Used internally to generate CRC32C lookup table at compile time
 #[allow(dead_code)]
 const fn generate_crc32c_table() -> [u32; 256] {
     let mut table = [0; 256];
@@ -30,6 +31,7 @@ const fn generate_crc32c_table() -> [u32; 256] {
 }
 
 /// Precomputed CRC32C lookup table (computed at compile time)
+/// Used by the constant-time CRC32C hash implementation
 #[allow(dead_code)]
 const CRC32C_TABLE: [u32; 256] = generate_crc32c_table();
 
@@ -78,7 +80,7 @@ unsafe fn hash_u32x8_arm(input: [u32; 8]) -> u32 {
 }
 
 // -------------------- SCALAR FALLBACK (CRC32C TABLE) --------------------
-// /// Software CRC32C implementation using a lookup table (identical to x86 & ARM CRC32C)
+// Software CRC32C implementation using a lookup table (identical to x86 & ARM CRC32C)
 // fn hash_u32x8_scalar(input: [u32; 8]) -> u32 {
 //     let mut crc: u32 = 0;
 //     for &val in &input {
@@ -94,6 +96,8 @@ unsafe fn hash_u32x8_arm(input: [u32; 8]) -> u32 {
 // }
 
 /// Computes a CRC32C hash for a 8-element `u32` array at **compile time**.
+/// This function is used as a fallback for architectures without hardware CRC32C support
+/// and for computing hash values during compile time in tests
 #[allow(dead_code)]
 pub const fn hash_u32x8_const(input: [u32; 8]) -> u32 {
     let mut crc: u32 = 0;

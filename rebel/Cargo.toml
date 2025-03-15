@@ -6,4 +6,9 @@ edition = "2021"
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true
-blake3 = "1.5.1"
+smol_str = "0.3.2"
+ssh2 = "0.9.4"
+whoami = "1.4.1"
+
+[dev-dependencies]
+tempfile = "3.10.1"

@@ -1,0 +1,58 @@
+; Advanced SSH Example
+; This example demonstrates different ways to use the SSH function
+
+; Function to display SSH results
+display-result: func [result] [
+    print "===== SSH Result ====="
+    print "Exit code:" result/exit_code
+    print "Success:" result/success
+    print "Output:" result/stdout
+    print "Errors:" result/stderr
+    print "===================="
+    print ""
+]
+
+; Example 1: Basic usage with localhost
+print "Example 1: Basic usage with localhost"
+result1: ssh "localhost" "echo 'Hello from localhost'"
+display-result result1
+
+; Example 2: Using a specific username
+print "Example 2: Using a specific username"
+result2: ssh "user@localhost" "whoami"
+display-result result2
+
+; Example 3: Using a specific port
+print "Example 3: Using a specific port"
+result3: ssh "localhost:22" "echo 'Using port 22'"
+display-result result3
+
+; Example 4: Full format with username and port
+print "Example 4: Full format with username and port"
+result4: ssh "user@localhost:22" "echo 'Full format'"
+display-result result4
+
+; Example 5: Running multiple commands
+print "Example 5: Running multiple commands"
+result5: ssh "localhost" "echo 'First command' && ls -la && echo 'Last command'"
+display-result result5
+
+; Example 6: Using password authentication with options
+print "Example 6: Using password authentication with options"
+options: context [
+    password: "password"
+]
+result6: ssh-with-options "testuser@localhost:2222" "echo 'Hello from test container'" options
+display-result result6
+
+; Example 7: File operations with password authentication
+print "Example 7: File operations with password authentication"
+; Create a test file
+ssh-with-options "testuser@localhost:2222" "echo 'Test content' > /tmp/rebel_test_file.txt" options
+; Read the file
+result7: ssh-with-options "testuser@localhost:2222" "cat /tmp/rebel_test_file.txt" options
+display-result result7
+; Delete the file
+ssh-with-options "testuser@localhost:2222" "rm /tmp/rebel_test_file.txt" options
+
+print "All examples completed!"

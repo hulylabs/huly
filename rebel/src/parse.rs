@@ -1,22 +1,42 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::core::{CoreError, Value, inline_string};
-use crate::mem::{Stack, Word, Offset};
-use crate::module::Module;
 use std::str::CharIndices;
+use thiserror::Error;
+
+#[derive(Debug, Error)]
+pub enum ParserError<E> {
+    #[error("end of input")]
+    EndOfInput,
+    #[error("unexpected character: `{0}`")]
+    UnexpectedChar(char),
+    #[error("integer overflow")]
+    IntegerOverflow,
+    #[error("unexpected error")]
+    UnexpectedError,
+    #[error("collector error: `{0}`")]
+    CollectorError(E),
+    #[error("empty word")]
+    EmptyWord,
+}
 
 #[derive(Debug)]
 pub enum WordKind {
     Word,
     SetWord,
+    GetWord,
 }
 
 pub trait Collector {
-    fn string(&mut self, string: &str) -> Option<()>;
-    fn word(&mut self, kind: WordKind, word: &str) -> Option<()>;
-    fn integer(&mut self, value: i32) -> Option<()>;
-    fn begin_block(&mut self) -> Option<()>;
-    fn end_block(&mut self) -> Option<()>;
+    type Error;
+
+    fn string(&mut self, string: &str) -> Result<(), Self::Error>;
+    fn word(&mut self, kind: WordKind, word: &str) -> Result<(), Self::Error>;
+    fn integer(&mut self, value: i32) -> Result<(), Self::Error>;
+    fn begin_block(&mut self) -> Result<(), Self::Error>;
+    fn end_block(&mut self) -> Result<(), Self::Error>;
+
+    fn begin_path(&mut self) -> Result<(), Self::Error>;
+    fn end_path(&mut self) -> Result<(), Self::Error>;
 }
 
 pub struct Parser<'a, C>
@@ -26,6 +46,7 @@ where
     input: &'a str,
     cursor: CharIndices<'a>,
     collector: &'a mut C,
+    in_path: bool,
 }
 
 impl<'a, C> Parser<'a, C>
@@ -37,7 +58,18 @@ where
             input,
             collector,
             cursor: input.char_indices(),
+            in_path: false,
         }
+    }
+
+    pub fn parse_block(&mut self) -> Result<(), ParserError<C::Error>> {
+        self.collector
+            .begin_block()
+            .map_err(ParserError::CollectorError)?;
+        self.parse()?;
+        self.collector
+            .end_block()
+            .map_err(ParserError::CollectorError)
     }
 
     fn skip_whitespace(&mut self) -> Option<(usize, char)> {
@@ -49,7 +81,7 @@ where
         None
     }
 
-    fn parse_string(&mut self, pos: usize) -> Result<(), CoreError> {
+    fn parse_string(&mut self, pos: usize) -> Result<Option<char>, ParserError<C::Error>> {
         let start_pos = pos + 1; // Skip the opening quote
         for (pos, char) in self.cursor.by_ref() {
             if char == '"' {
@@ -58,57 +90,71 @@ where
                     .string(
                         self.input
                             .get(start_pos..pos)
-                            .ok_or(CoreError::EndOfInput)?,
+                            .ok_or(ParserError::EndOfInput)?,
                     )
-                    .ok_or(CoreError::ParseCollectorError);
+                    .map(|()| None)
+                    .map_err(ParserError::CollectorError);
             }
         }
-        Err(CoreError::EndOfInput)
+        Err(ParserError::EndOfInput)
     }
 
-    fn parse_word(&mut self, start_pos: usize) -> Result<bool, CoreError> {
-        for (pos, char) in self.cursor.by_ref() {
-            match char {
-                c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
-                ':' => {
-                    self.collector
-                        .word(
-                            WordKind::SetWord,
-                            self.input
-                                .get(start_pos..pos)
-                                .ok_or(CoreError::EndOfInput)?,
-                        )
-                        .ok_or(CoreError::ParseCollectorError)?;
-                    return Ok(false);
-                }
-                c if c.is_ascii_whitespace() || c == ']' => {
-                    self.collector
-                        .word(
-                            WordKind::Word,
-                            self.input
-                                .get(start_pos..pos)
-                                .ok_or(CoreError::EndOfInput)?,
-                        )
-                        .ok_or(CoreError::ParseCollectorError)?;
-                    return Ok(c == ']');
-                }
-                _ => return Err(CoreError::UnexpectedChar(char)),
+    fn collect_word(
+        &mut self,
+        symbol: &str,
+        kind: WordKind,
+        consumed: Option<char>,
+    ) -> Result<Option<char>, C::Error> {
+        if let Some('/') = consumed {
+            if self.in_path == false {
+                self.in_path = true;
+                self.collector.begin_path()?;
             }
         }
-        self.collector
-            .word(
-                WordKind::Word,
-                self.input.get(start_pos..).ok_or(CoreError::EndOfInput)?,
-            )
-            .ok_or(CoreError::ParseCollectorError)?;
-        Ok(false)
+        self.collector.word(kind, symbol).map(|_| consumed)
     }
 
-    fn parse_number(&mut self, char: char) -> Result<bool, CoreError> {
+    fn parse_word(&mut self, start_pos: usize) -> Result<Option<char>, ParserError<C::Error>> {
+        let mut kind = WordKind::Word;
+
+        let consumed = loop {
+            match self.cursor.next() {
+                Some((pos, char)) => match char {
+                    ':' => {
+                        if pos == start_pos {
+                            kind = WordKind::GetWord;
+                        } else {
+                            kind = WordKind::SetWord;
+                            break Some(char);
+                        }
+                    }
+                    ']' | '/' => break Some(char),
+                    c if c.is_ascii_alphanumeric() || c == '_' || c == '-' => {}
+                    c if c.is_ascii_whitespace() => break Some(char),
+                    _ => return Err(ParserError::UnexpectedChar(char)),
+                },
+                None => break None,
+            }
+        };
+
+        let pos = self.cursor.offset() - if consumed.is_some() { 1 } else { 0 };
+        if pos == start_pos {
+            return Err(ParserError::EmptyWord);
+        }
+        let symbol = self
+            .input
+            .get(start_pos..pos)
+            .ok_or(ParserError::UnexpectedError)?;
+
+        self.collect_word(symbol, kind, consumed)
+            .map_err(ParserError::CollectorError)
+    }
+
+    fn parse_number(&mut self, char: char) -> Result<Option<char>, ParserError<C::Error>> {
         let mut value: i32 = 0;
         let mut is_negative = false;
         let mut has_digits = false;
-        let mut end_of_block = false;
+        let mut consumed = None;
 
         match char {
             '+' => {}
@@ -116,142 +162,74 @@ where
                 is_negative = true;
             }
             c if c.is_ascii_digit() => {
-                value = c.to_digit(10).ok_or(CoreError::InternalError)? as i32;
+                value = c.to_digit(10).ok_or(ParserError::UnexpectedError)? as i32;
                 has_digits = true;
             }
-            _ => return Err(CoreError::UnexpectedChar(char)),
+            _ => return Err(ParserError::UnexpectedChar(char)),
         }
 
         for (_, char) in self.cursor.by_ref() {
             match char {
                 c if c.is_ascii_digit() => {
                     has_digits = true;
-                    let digit = c.to_digit(10).ok_or(CoreError::InternalError)? as i32;
+                    let digit = c.to_digit(10).ok_or(ParserError::UnexpectedError)? as i32;
                     value = value
                         .checked_mul(10)
                         .and_then(|v| v.checked_add(digit))
-                        .ok_or(CoreError::IntegerOverflow)?;
+                        .ok_or(ParserError::IntegerOverflow)?;
                 }
                 ']' => {
-                    end_of_block = true;
+                    consumed = Some(char);
                     break;
                 }
                 _ => break,
             }
         }
         if !has_digits {
-            return Err(CoreError::EndOfInput);
+            return Err(ParserError::EndOfInput);
         }
         if is_negative {
-            value = value.checked_neg().ok_or(CoreError::IntegerOverflow)?;
+            value = value.checked_neg().ok_or(ParserError::IntegerOverflow)?;
         }
         self.collector
             .integer(value)
-            .map(|_| end_of_block)
-            .ok_or(CoreError::ParseCollectorError)
+            .map(|_| consumed)
+            .map_err(ParserError::CollectorError)
     }
 
-    pub fn parse(&mut self) -> Result<(), CoreError> {
-        while let Some((pos, char)) = self.skip_whitespace() {
-            match char {
-                '[' => self
-                    .collector
-                    .begin_block()
-                    .ok_or(CoreError::ParseCollectorError)?,
-                ']' => self
-                    .collector
-                    .end_block()
-                    .ok_or(CoreError::ParseCollectorError)?,
-                '"' => self.parse_string(pos)?,
-                c if c.is_ascii_alphabetic() => {
-                    if self.parse_word(pos)? {
-                        self.collector
-                            .end_block()
-                            .ok_or(CoreError::ParseCollectorError)?;
-                    }
+    fn process_block_end(&mut self, consumed: Option<char>) -> Result<(), C::Error> {
+        match consumed {
+            Some('/') => {}
+            _ => {
+                if self.in_path {
+                    self.in_path = false;
+                    self.collector.end_path()?;
                 }
-                c if c.is_ascii_digit() || c == '+' || c == '-' => {
-                    if self.parse_number(c)? {
-                        self.collector
-                            .end_block()
-                            .ok_or(CoreError::ParseCollectorError)?;
-                    }
-                }
-                _ => return Err(CoreError::UnexpectedChar(char)),
             }
+        }
+        if let Some(']') = consumed {
+            self.collector.end_block()?;
         }
         Ok(())
     }
-}
 
-// P A R S E  C O L L E C T O R
-
-pub struct ParseCollector<'a, T, B> {
-    module: &'a mut Module<T, B>,
-    pub parse: Stack<[Word; 64]>,
-    ops: Stack<[Word; 32]>,
-}
-
-impl<'a, T, B> ParseCollector<'a, T, B> {
-    pub fn new(module: &'a mut Module<T, B>) -> Self {
-        Self {
-            module,
-            parse: Stack::new([0; 64]),
-            ops: Stack::new([0; 32]),
+    fn parse(&mut self) -> Result<(), ParserError<C::Error>> {
+        while let Some((pos, char)) = self.skip_whitespace() {
+            let consumed = match char {
+                '[' => self
+                    .collector
+                    .begin_block()
+                    .map(|()| None)
+                    .map_err(ParserError::CollectorError)?,
+                ']' => Some(char),
+                '"' => self.parse_string(pos)?,
+                c if c.is_ascii_alphabetic() => self.parse_word(pos)?,
+                c if c.is_ascii_digit() || c == '+' || c == '-' => self.parse_number(c)?,
+                _ => return Err(ParserError::UnexpectedChar(char)),
+            };
+            self.process_block_end(consumed)
+                .map_err(ParserError::CollectorError)?;
         }
+        Ok(())
     }
-}
-
-impl<T, B> Collector for ParseCollector<'_, T, B>
-where
-    T: AsMut<[Word]> + AsRef<[Word]>,
-    B: crate::module::BlobStore,
-{
-    fn string(&mut self, string: &str) -> Option<()> {
-        let offset = self.module.get_heap_mut().alloc(inline_string(string)?)?;
-        self.parse.push([Value::TAG_INLINE_STRING, offset])
-    }
-
-    fn word(&mut self, kind: WordKind, word: &str) -> Option<()> {
-        let symbol = inline_string(word)?;
-        let id = self.module.get_symbols_mut()?.get_or_insert(symbol)?;
-        let tag = match kind {
-            WordKind::Word => Value::TAG_WORD,
-            WordKind::SetWord => Value::TAG_SET_WORD,
-        };
-        self.parse.push([tag, id])
-    }
-
-    fn integer(&mut self, value: i32) -> Option<()> {
-        self.parse.push([Value::TAG_INT, value as u32])
-    }
-
-    fn begin_block(&mut self) -> Option<()> {
-        self.ops.push([self.parse.len()?])
-    }
-
-    fn end_block(&mut self) -> Option<()> {
-        let [bp] = self.ops.pop()?;
-        let block_data = self.parse.pop_all(bp)?;
-        let offset = self.module.get_heap_mut().alloc_block(block_data)?;
-        self.parse.push([Value::TAG_BLOCK, offset])
-    }
-}
-
-// Public parse function that can be used to parse a string into a block of code
-pub fn parse<T, B>(module: &mut Module<T, B>, code: &str) -> Result<Offset, CoreError> 
-where
-    T: AsMut<[Word]> + AsRef<[Word]>,
-    B: crate::module::BlobStore,
-{
-    let mut collector = ParseCollector::new(module);
-    collector
-        .begin_block()
-        .ok_or(CoreError::ParseCollectorError)?;
-    Parser::new(code, &mut collector).parse()?;
-    collector
-        .end_block()
-        .ok_or(CoreError::ParseCollectorError)?;
-    let result = collector.parse.pop::<2>().ok_or(CoreError::InternalError)?;
-    Ok(result[1])
 }

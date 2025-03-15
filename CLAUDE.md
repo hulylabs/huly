@@ -22,272 +22,78 @@ cargo fmt
 
 # Run clippy linter
 cargo clippy
-
-# Run Rebel Shell (interactive environment)
-cargo run --package rebel-sh
 ```
-
-## Rebel Overview
-- **Rebel**: A programming language and interpreter developed as part of the Huly project
-- **Rebel Shell**: Interactive environment that uses Rebel for scripting and command execution
-- **Use Cases**: Shell scripting, data processing, and system automation
-
-### Built-in Modules
-The Rebel interpreter includes several built-in modules:
-
-#### Filesystem Module (fs)
-The `fs` module provides filesystem operations:
-
-- **ls**: List files in the current directory
-- *(Future additions: cat, mkdir, rm, etc.)*
-
-Usage in Rebel Shell:
-```
-ls  // Lists files in current directory
-```
-
-To use the fs module in your Rebel applications:
-```rust
-// Register filesystem commands
-fs::register_fs_commands(&mut module)?;
-```
-
-### Implementing Custom Commands
-Rebel can be extended with custom commands implemented as native functions. Here's the basic pattern:
-
-```rust
-// 1. Define the command function
-fn my_command<T>(exec: &mut Exec<T>) -> Option<()>
-where
-    T: AsRef<[Word]> + AsMut<[Word]>,
-{
-    // Implement command functionality
-    // Can use exec.pop() to get arguments
-    // Use exec.push() to return results
-    exec.push([Value::TAG_INLINE_STRING, offset])
-}
-
-// 2. Register the command in a setup function
-fn register_commands<T>(module: &mut Module<T>) -> Option<()>
-where
-    T: AsRef<[Word]> + AsMut<[Word]>,
-{
-    // Register with name, function pointer, and arity (number of arguments)
-    module.add_native_fn("my_command", my_command, 0)?;
-    Some(())
-}
-
-// 3. Call the registration function in your application
-fn main() -> Result<()> {
-    let mut module = Module::init(vec![0; 0x10000].into_boxed_slice())?;
-    register_commands(&mut module)?;
-    // ... rest of setup
-}
-```
-
-When creating reusable command modules:
-1. Place related commands in a dedicated module (like `fs.rs`)
-2. Implement a registration function that adds all commands to a module
-3. Document the arity (number of arguments) for each command
-4. Consider string size limitations when returning results
 
 ## Code Style Guidelines
 - **License Header**: Start files with license header: `// RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT`
 - **Imports**: Group standard lib, external deps, then internal imports with a blank line between groups
 - **Error Handling**: Use `thiserror` for defining error types, implement `Error` trait for custom errors
 - **Naming**: Use snake_case for functions/variables, CamelCase for types, SCREAMING_CASE for constants
-- **Tests**: Write unit tests in a `tests` module at the bottom of each file
+- **Tests**: 
+  - Write unit tests in a `tests` module at the bottom of each file
+  - Tests may return `()` directly or `Result<(), Error>` as needed
+  - Prefer using `.expect()` with meaningful messages over `.unwrap()`
+  - Avoid using `println!` in tests, use assertions to validate behavior
+  - Follow the arrange-act-assert pattern for test structure
 - **Documentation**: Document public APIs with clear descriptions and examples
 - **Types**: Use Rust's strong type system; avoid raw pointers when possible
 - **Error Propagation**: Use `?` operator for error propagation, not `.unwrap()` or `.expect()`
+- **Unwrap Avoidance**: Avoid `unwrap()` calls; use pattern matching, `ok_or()`, or proper error handling instead
+- **Panic Prevention**: Return `Option` or `Result` instead of panicking; use `.get()` instead of indexing for safe array/slice access
+- **Clippy**: Run `cargo clippy` to catch common mistakes and improve code quality
+- **Comments**: Avoid inline comments, write self-explanatory code, use comments for complex logic
+- **Rust Docs**: Write Rust docs for public APIs, use `cargo doc --open` to generate and view docs
 
-## RebelDB VM Architecture
+## Code Patterns
+- **Visitor Pattern**: 
+  - Used for parsing with `Collector` trait (`parse.rs`, `collector.rs`) 
+  - Used for serialization with `Serializer` trait (`serialize.rs`)
+  - Allows creating new formats without modifying value representation
+  
+- **Value Serialization**:
+  - Binary serialization is available using `to_bytes` and `from_bytes` functions
+  - Custom serializers can be implemented using the `Serializer` trait
+  - Variable-length integer encoding used for efficient space utilization
 
-### BlobStore
-The RebelDB VM uses a BlobStore for storing immutable blobs of data that can be accessed via content-addressable hashes:
+## REBOL Language Features
+RebelDB is inspired by REBOL (Relative Expression-Based Object Language), and implements many of its concepts:
 
-```rust
-// BlobStore trait defines the interface for blob storage
-pub trait BlobStore {
-    // Get a blob by its hash
-    fn get(&self, hash: &Hash) -> Result<&[u8], CoreError>;
-    
-    // Store a blob and return its hash
-    fn put(&mut self, data: &[u8]) -> Result<Hash, CoreError>;
-}
+- **Value Types**:
+  - `Value::None`: Represents absence of a value
+  - `Value::Int`: Integer values
+  - `Value::String`: UTF-8 string values using SmolStr for efficiency
+  - `Value::Word`/`Value::SetWord`: Symbolic references and assignments
+  - `Value::Block`: Ordered collections of values (arrays/lists)
+  - `Value::Context`: Key-value pairs, similar to objects or dictionaries
 
-// In-memory implementation for testing and development
-let blob_store = MemoryBlobStore::new();
+- **Context Implementation**:
+  - Implemented as `Box<[(SmolStr, Value)]>` for memory efficiency
+  - Used for object-like structures, configurations, and namespaces
+  - Serialized with efficient binary encoding in the `serialize.rs` module
 
-// Access blobs from a module
-let hash = module.store_blob(data)?;
-let retrieved_data = module.get_blob(&hash)?;
-```
+- **Serialization**:
+  - All Value types support serialization/deserialization
+  - Binary format is compact and preserves all value semantics
+  - Tagged format with variable-length encoding for efficient size
+  - Serialization API via Visitor pattern for extensibility
+  - Strong error types with specific error variants
+  - Support for streaming I/O with Reader/Writer interfaces
 
-### String Handling
-RebelDB handles strings in two ways depending on their length:
+The binary serialization format uses:
+  - Type tag byte (matching Tag constants in core.rs)
+  - Variable-length integer encoding for numbers and lengths
+  - UTF-8 encoding for string data
+  - Recursive encoding for nested structures (Block, Context)
 
-```rust
-// Create a string that will be stored appropriately based on its length
-let string_value = module.create_string("Hello world")?;
+For detailed documentation, see:
+  - [REBOL Design Principles](docs/rebol-design.md)
+  - [Binary Serialization Format](docs/binary-serialization.md)
 
-// The created string value can be used with builders
-ctx_builder.with("greeting", string_value)
+## Commits
 
-// For short strings (≤31 bytes): Uses TAG_INLINE_STRING with direct storage
-// For long strings (>31 bytes): Uses TAG_STRING with storage in BlobStore
+- Make sure project compiles and tests pass before committing.
+- Make sure clippy linter passes before committing.
 
-// Extract a string from a Value::String
-let extracted = module.extract_string_from_value(&string_value)?;
+## Knowledge Base
 
-// Or from an offset in the heap (for implementation details)
-let extracted = module.extract_string_from_offset(offset)?;
-```
-
-The string creation process:
-1. Short strings (≤31 bytes): Stored inline with `TAG_INLINE_STRING` and packed into a fixed-size array
-2. Long strings (>31 bytes): Stored in the BlobStore with `TAG_STRING` and a reference to the blob hash
-3. The final Value::String stores an Offset to the heap location, similar to Value::Block and Value::Context
-
-Important note:
-- Since string storage may need the BlobStore, direct string creation via `.into_value()` or `Value::String` constructors is not supported
-- Always create strings through the Module API with `module.create_string()`
-
-### Word Handling
-RebelDB handles words (identifiers) as symbols stored in a symbol table:
-
-```rust
-// Create a word value directly with the module API
-let word_value = module.create_word("my_variable")?;
-
-// Create a set-word value directly with the module API
-let set_word_value = module.create_set_word("my_variable")?;
-
-// Use the word values with builders
-ctx_builder.with("command", word_value)
-block_builder.with(word_value)
-```
-
-The word handling process:
-1. Words are first converted to inline string representation
-2. These strings are registered in a symbol table to get unique Symbol IDs
-3. The Symbol ID (u32) is used for lookups during execution
-4. Value::Word and Value::SetWord variants store the Symbol ID, not the string itself
-
-Important:
-- Value::Word(Symbol) and Value::SetWord(Symbol) use integer IDs instead of strings
-- Symbol IDs are more efficient than string comparisons during execution
-- The symbol table provides a form of string interning
-- Always create words using the Module API methods (module.create_word() and module.create_set_word())
-- Never use deprecated methods like with_word() or with_string() - they have been removed
-
-### Module as the Main Entry Point
-The recommended way to interact with the RebelDB VM is through the `Module` type, which provides factory methods for creating builders:
-
-```rust
-use rebel::{Module, Value, MemoryBlobStore};
-
-// Create a module with memory and blob storage
-let memory = vec![0; 0x10000].into_boxed_slice();
-let blob_store = MemoryBlobStore::new();
-let mut module = Module::init(memory, blob_store)?;
-
-// Create context and block builders from the module
-let context_builder = module.context_builder();
-let block_builder = module.block_builder();
-```
-
-### Context Creation
-Create contexts using the Module's context builder methods:
-
-```rust
-use rebel::{Module, Value, BlockOffset, WordRef};
-
-// Get a context builder from the module (no direct heap access)
-let ctx_value = module.context_builder()
-    .with("age", 42)                        // i32 -> Int
-    .with("name", "Test User")              // &str -> String
-    .with("active", true)                   // bool -> Bool
-    .with("none", Value::None)              // Direct value
-    .build()?;                              // Returns Value::Context
-
-// You can specify an explicit capacity if needed
-let ctx_value = module.context_builder_with_capacity(20)
-    .with("age", 42)
-    .build()?;
-
-// The build() method returns a Value variant (Value::Context)
-match ctx_value {
-    Value::Context(offset) => println!("Context created at offset {}", offset),
-    _ => panic!("Expected Context value"),
-}
-
-// For references to other VM objects, use wrapper types:
-let parent_ctx_value = module.context_builder().with("x", 100).build()?;
-
-let ctx_value = module.context_builder()
-    // Block references need BlockOffset wrapper
-    .with("code", BlockOffset(block_offset))
-    // Context references can use Value::Context directly
-    .with("parent", parent_ctx_value)
-    // Word references use WordRef wrapper
-    .with("symbol", WordRef("some_word".to_string()))
-    .build()?;
-```
-
-### Block Creation
-Create blocks using the Module's block builder method:
-
-```rust
-use rebel::{Module, Value, BlockOffset, WordRef};
-
-// Get a block builder from the module (no direct heap access)
-let block_value = module.block_builder()
-    .with_int(42)
-    .with_string("Hello") 
-    .with_bool(true)
-    .with_none()
-    .build()?;                        // Returns Value::Block
-
-// The build() method returns a Value variant (Value::Block)
-match block_value {
-    Value::Block(offset) => println!("Block created at offset {}", offset),
-    _ => panic!("Expected Block value"),
-}
-
-// Create nested blocks
-let inner_block_value = module.block_builder()
-    .with_int(10)
-    .with_string("Inner")
-    .build()?;
-    
-// Outer block that references the inner block
-let outer_block_value = module.block_builder()
-    .with_int(42)
-    .with(inner_block_value)         // Pass Value directly 
-    .with(ctx_value)                 // Pass Value directly
-    .with_word("print")              // Word reference
-    .build()?;
-```
-
-### IntoValue Trait
-Both builders use the generic `with<T>()` method which accepts anything implementing `IntoValue`:
-- i32 → Int VM value
-- &str and String → String VM value
-- bool → Bool VM value
-- Offset → Context VM value
-- BlockOffset(Offset) → Block VM value
-- WordRef(String) → Word VM value
-- Value → Direct value
-
-## Commit Rules
-
-- We're using git
-- ALWAYS sign-off commits with `git commit -s` or add `Signed-off-by: Your Name <your.email@example.com>` to commit messages
-- Only commit code that compiles and all tests succeed
-- Make sure that clippy is happy before committing
-- Format commit messages with a clear title followed by bullet points explaining changes
-
-## Preserve Knowledge
-
-- Always add important notes and keep knowledge up to date in this document (CLAUDE.md). Feel free to fix it and add new sections as needed.
+- Always update Claude's knowledge base with new learnings, best practices, and gotchas
