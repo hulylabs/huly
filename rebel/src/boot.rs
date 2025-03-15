@@ -65,6 +65,27 @@ where
     }
 }
 
+fn foreach<T>(module: &mut Exec<T>) -> Result<(), CoreError>
+where
+    T: AsRef<[Word]> + AsMut<[Word]>,
+{
+    let args = module.pop::<6>()?;
+    match args {
+        [VmValue::TAG_WORD, word, VmValue::TAG_BLOCK, data, VmValue::TAG_BLOCK, body] => {
+            if let Ok(value) = module.get_block::<2>(data, 0) {
+                module.new_context(1)?;
+                module.put_context(word, value)?;
+                module.push(args)?;
+                module.push([VmValue::TAG_INT, 0])?;
+                module.jmp_op(body, Op::FOREACH)
+            } else {
+                Ok(())
+            }
+        }
+        _ => Err(CoreError::BadArguments),
+    }
+}
+
 fn func<T>(module: &mut Exec<T>) -> Result<(), CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
@@ -138,6 +159,7 @@ where
     module.add_native_fn("print", print, 1)?;
     module.add_native_fn("block?", is_block, 1)?;
     module.add_native_fn("reduce", reduce, 1)?;
+    module.add_native_fn("foreach", foreach, 3)?;
     Ok(())
 }
 

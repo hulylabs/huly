@@ -482,8 +482,9 @@ impl Op {
     const CALL_FUNC: u32 = 3;
     const LEAVE_BLOCK: u32 = 4;
     const LEAVE_FUNC: u32 = 5;
-    pub const CONTEXT: u32 = 6;
-    pub const REDUCE: u32 = 7;
+    pub const CONTEXT: Word = 6;
+    pub const REDUCE: Word = 7;
+    pub const FOREACH: Word = 8;
 }
 
 pub struct Exec<'a, T> {
@@ -548,6 +549,10 @@ where
 
     pub fn to_value(&self, vm_value: VmValue) -> Result<Value, CoreError> {
         self.module.to_value(vm_value)
+    }
+
+    pub fn peek<const N: usize>(&self) -> Option<[Word; N]> {
+        self.stack.peek()
     }
 }
 
@@ -769,6 +774,24 @@ where
                             let block = self.module.heap.alloc_block(&result)?;
                             self.stack.push([VmValue::TAG_BLOCK, block])?;
                             (block, ip)
+                        }
+                        Op::FOREACH => {
+                            self.stack.pop_all(bp).ok_or(CoreError::InternalError)?; // drop result
+                            let [_, i] = self.stack.pop()?;
+                            let [_, word, _, data, _, body] =
+                                self.stack.peek().ok_or(MemoryError::StackUnderflow)?;
+                            let index = i + 2;
+                            if let Ok(value) = self.get_block(data, index) {
+                                self.put_context(word, value)?;
+                                self.push([VmValue::TAG_INT, index])?;
+                                self.op_stack
+                                    .push([Op::FOREACH, block, self.stack.len()?, ip])?;
+                                (body, Self::LEAVE_MARKER + 0)
+                            } else {
+                                self.stack.pop::<6>()?;
+                                self.pop_context()?;
+                                (block, ip)
+                            }
                         }
                         _ => return Ok((op, block)),
                     }
@@ -1556,6 +1579,28 @@ mod tests {
             println!("Result: {:?}", value);
             panic!("Result should be a block");
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_foreach_1() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input = "foreach x [1 2 3] [print x]";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+        let value = module.to_value(result)?;
+
+        // if let Value::Block(values) = value {
+        //     assert_eq!(values.len(), 2);
+        //     assert_eq!(values[0], 5.into());
+        //     assert_eq!(values[1], 10.into());
+        // } else {
+        //     println!("Result: {:?}", value);
+        //     panic!("Result should be a block");
+        // }
 
         Ok(())
     }
