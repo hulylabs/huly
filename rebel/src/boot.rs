@@ -173,6 +173,27 @@ pub fn test_either(module: &mut Exec<&mut [Word]>) -> Result<(), CoreError> {
     either(module)
 }
 
+/// Execute the standard library code for a module
+///
+/// This function parses and executes the standard library code that defines
+/// common functions like print and prin. The stdlib code is read from the
+/// stdlib.rebel file at compile time using the include_str! macro.
+pub fn stdlib_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
+where
+    T: AsMut<[Word]> + AsRef<[Word]>,
+{
+    // Read the stdlib code from the stdlib.rebel file at compile time
+    let stdlib_code = include_str!("stdlib.rebel");
+
+    // Parse the code into a block
+    let vm_block = module.parse(stdlib_code)?;
+
+    // Evaluate the block to define the functions
+    module.eval(vm_block)?;
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -206,5 +227,33 @@ mod tests {
         let value = module.to_value(result).expect("Failed to get value");
 
         assert_eq!(value, Value::int(15));
+    }
+
+    #[test]
+    fn test_stdlib_functions() {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        // Test that the print function is available
+        let program = rebel!([print "Hello, world!"]);
+        let vm_block = module
+            .alloc_value(&program)
+            .expect("Failed to allocate block");
+
+        // This should execute without error if print is defined
+        let result = module.eval(vm_block).expect("Failed to evaluate program");
+
+        // Test that the prin function is available
+        let program2 = rebel!([prin "Hello, "]);
+        let vm_block2 = module
+            .alloc_value(&program2)
+            .expect("Failed to allocate block");
+
+        // This should execute without error if prin is defined
+        let result2 = module.eval(vm_block2).expect("Failed to evaluate program");
+
+        // The functions return the value they print
+        assert!(matches!(result, VmValue::String(_)));
+        assert!(matches!(result2, VmValue::String(_)));
     }
 }

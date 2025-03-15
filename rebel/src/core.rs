@@ -1,6 +1,6 @@
 // RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
 
-use crate::boot::core_package;
+use crate::boot::{core_package, stdlib_package};
 use crate::mem::{Context, Heap, MemoryError, Offset, Stack, Symbol, SymbolId, SymbolTable, Word};
 use crate::parse::{Collector, Parser, WordKind};
 use crate::value::Value;
@@ -213,6 +213,7 @@ where
             .heap
             .put(0, [0xdeadbeef, symbols_addr, system_words])?;
         core_package(&mut module)?;
+        stdlib_package(&mut module)?;
         Ok(module)
     }
 
