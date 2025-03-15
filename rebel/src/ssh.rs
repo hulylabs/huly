@@ -366,8 +366,8 @@ mod tests {
             }
 
             // Verify success is true
-            if let Some(Value::Int(success)) = result_map.get("success") {
-                assert_eq!(*success, 1, "success should be true");
+            if let Some(Value::Bool(success)) = result_map.get("success") {
+                assert_eq!(*success, true, "success should be true");
             } else {
                 panic!("success field missing or not a boolean");
             }

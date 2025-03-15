@@ -590,22 +590,4 @@ mod tests {
             panic!("Not a context");
         }
     }
-
-    #[test]
-    fn test_rebel_macro_boolean_values() {
-        // Booleans convert to integers (1 and 0)
-        let v1: Value = rebel!(true);
-        assert_eq!(v1, Value::Int(1));
-
-        let v2: Value = rebel!(false);
-        assert_eq!(v2, Value::Int(0));
-
-        // In contexts
-        let v3: Value = rebel!({ active => true });
-        if let Value::Context(items) = v3 {
-            assert_eq!(items[0].1, Value::Int(1));
-        } else {
-            panic!("Not a context");
-        }
-    }
 }

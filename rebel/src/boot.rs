@@ -182,12 +182,12 @@ where
     module.eval(vm_block)?;
 
     // Read and execute the extended standard library
-    #[cfg(feature = "stdlib_ext")]
-    {
-        let stdlib_ext_code = include_str!("stdlib_ext.rebel");
-        let vm_block_ext = module.parse(stdlib_ext_code)?;
-        module.eval(vm_block_ext)?;
-    }
+    // #[cfg(feature = "stdlib_ext")]
+    // {
+    //     let stdlib_ext_code = include_str!("stdlib_ext.rebel");
+    //     let vm_block_ext = module.parse(stdlib_ext_code)?;
+    //     module.eval(vm_block_ext)?;
+    // }
 
     Ok(())
 }

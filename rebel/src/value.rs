@@ -29,7 +29,7 @@ impl fmt::Display for Value {
             Value::SetWord(w) => write!(f, "{}:", w),
             Value::GetWord(w) => write!(f, ":{}", w),
             Value::Block(block) => {
-                write!(f, "[")?;
+                // write!(f, "[")?;
                 let mut first = true;
                 for item in block.iter() {
                     if !first {
@@ -38,19 +38,20 @@ impl fmt::Display for Value {
                     first = false;
                     write!(f, "{}", item)?;
                 }
-                write!(f, "]")
+                // write!(f, "]")
+                Ok(())
             }
             Value::Context(pairs) => {
-                write!(f, "{{ ")?;
+                write!(f, "make object! [")?;
                 let mut first = true;
                 for (key, value) in pairs.iter() {
                     if !first {
-                        write!(f, ", ")?;
+                        write!(f, " ")?;
                     }
                     first = false;
                     write!(f, "{}: {}", key, value)?;
                 }
-                write!(f, " }}")
+                write!(f, "]")
             }
             Value::Path(path) => {
                 let mut first = true;
@@ -1558,7 +1559,7 @@ mod tests {
                     assert_eq!(settings[0].1, Value::String("dark".into()));
 
                     assert_eq!(settings[1].0, "notifications");
-                    assert_eq!(settings[1].1, Value::Int(1)); // true becomes 1
+                    assert_eq!(settings[1].1, Value::Bool(true)); // true becomes 1
                 }
             }
         }
@@ -1575,15 +1576,15 @@ mod tests {
     fn test_boolean_values() {
         // Booleans convert to integers (1 and 0)
         let v1: Value = rebel!(true);
-        assert_eq!(v1, Value::Int(1));
+        assert_eq!(v1, Value::Bool(true));
 
         let v2: Value = rebel!(false);
-        assert_eq!(v2, Value::Int(0));
+        assert_eq!(v2, Value::Bool(false));
 
         // In contexts
         let v3: Value = rebel!({ active => true });
         if let Value::Context(items) = v3 {
-            assert_eq!(items[0].1, Value::Int(1));
+            assert_eq!(items[0].1, Value::Bool(true));
         } else {
             panic!("Not a context");
         }
