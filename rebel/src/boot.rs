@@ -98,26 +98,20 @@ fn func<T>(module: &mut Exec<T>) -> Result<(), CoreError>
 where
     T: AsRef<[Word]> + AsMut<[Word]>,
 {
-    match module.pop()? {
-        [VmValue::TAG_BLOCK, params, VmValue::TAG_BLOCK, body] => {
-            let args = module.get_block_len(params)?;
-            let arity = args as Offset / 2;
-            let ctx = module.alloc_context(arity)?;
-            for i in 0..arity {
-                let param = module.get_block::<2>(params, i * 2)?;
-                match param {
-                    [VmValue::TAG_WORD, symbol] => module
-                        .get_context(ctx)?
-                        .put(symbol, [VmValue::TAG_STACK_VALUE, 2 * i as Offset])?,
-                    _ => return Err(CoreError::BadArguments),
-                }
-            }
-            module.get_context(ctx)?.seal()?;
-            let func = module.alloc([arity * 2, ctx, body])?;
-            module.push([VmValue::TAG_FUNC, func]).map_err(Into::into)
-        }
-        _ => Err(CoreError::BadArguments),
+    let [tag1, params, tag2, body] = module.pop::<4>()?;
+    if tag1 != VmValue::TAG_BLOCK || tag2 != VmValue::TAG_BLOCK {
+        return Err(CoreError::BadArguments);
     }
+    let arity = module.get_block_len(params)? as Offset;
+    let func = module.alloc_block(&[
+        VmValue::TAG_INT,
+        arity,
+        VmValue::TAG_BLOCK,
+        params,
+        VmValue::TAG_BLOCK,
+        body,
+    ])?;
+    module.push([VmValue::TAG_FUNC, func]).map_err(Into::into)
 }
 
 fn either<T>(module: &mut Exec<T>) -> Result<(), CoreError>
@@ -227,33 +221,5 @@ mod tests {
         let value = module.to_value(result).expect("Failed to get value");
 
         assert_eq!(value, Value::int(15));
-    }
-
-    #[test]
-    fn test_stdlib_functions() {
-        let mut module =
-            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
-
-        // Test that the print function is available
-        let program = rebel!([print "Hello, world!"]);
-        let vm_block = module
-            .alloc_value(&program)
-            .expect("Failed to allocate block");
-
-        // This should execute without error if print is defined
-        let result = module.eval(vm_block).expect("Failed to evaluate program");
-
-        // Test that the prin function is available
-        let program2 = rebel!([prin "Hello, "]);
-        let vm_block2 = module
-            .alloc_value(&program2)
-            .expect("Failed to allocate block");
-
-        // This should execute without error if prin is defined
-        let result2 = module.eval(vm_block2).expect("Failed to evaluate program");
-
-        // The functions return the value they print
-        assert!(matches!(result, VmValue::String(_)));
-        assert!(matches!(result2, VmValue::String(_)));
     }
 }

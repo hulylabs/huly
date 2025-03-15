@@ -386,6 +386,12 @@ impl Symbol {
     }
 }
 
+impl std::fmt::Display for Symbol {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.to_string())
+    }
+}
+
 /// Symbol table for storing and retrieving symbols
 /// Symbols are [u32; 8] values stored starting at symbol_table.len() / 9 offset
 /// First symbol_table.len() / 9 words is lookup table for symbol values

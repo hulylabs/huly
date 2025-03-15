@@ -68,10 +68,9 @@ impl VmValue {
     pub const TAG_WORD: Word = 6;
     pub const TAG_SET_WORD: Word = 7;
     pub const TAG_GET_WORD: Word = 8;
-    pub const TAG_STACK_VALUE: Word = 9;
-    pub const TAG_FUNC: Word = 10;
-    pub const TAG_BOOL: Word = 11;
-    pub const TAG_PATH: Word = 12;
+    pub const TAG_FUNC: Word = 9;
+    pub const TAG_BOOL: Word = 10;
+    pub const TAG_PATH: Word = 11;
 
     /// Convert a tag and data word into a VmValue
     ///
@@ -246,9 +245,9 @@ impl<T> Module<T>
 where
     T: AsRef<[Word]>,
 {
-    fn get_array<const N: usize>(&self, addr: Offset) -> Result<[Word; N], MemoryError> {
-        self.heap.get(addr)
-    }
+    // fn get_array<const N: usize>(&self, addr: Offset) -> Result<[Word; N], MemoryError> {
+    //     self.heap.get(addr)
+    // }
 
     fn get_block<const N: usize>(
         &self,
@@ -500,7 +499,6 @@ pub struct Exec<'a, T> {
     module: &'a mut Module<T>,
     stack: Stack<[Offset; 1024]>,
     op_stack: Stack<[Offset; 1024]>,
-    base: Stack<[Offset; 512]>,
     env: Stack<[Offset; 512]>,
 }
 
@@ -516,7 +514,6 @@ impl<'a, T> Exec<'a, T> {
             module,
             stack: Stack::new([0; 1024]),
             op_stack: Stack::new([0; 1024]),
-            base: Stack::new([0; 512]),
             env,
         })
     }
@@ -619,8 +616,12 @@ where
         self.op_stack.push([op, word, self.stack.len()?, arity])
     }
 
-    pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Result<Offset, MemoryError> {
-        self.module.heap.alloc(values)
+    // pub fn alloc<const N: usize>(&mut self, values: [Word; N]) -> Result<Offset, MemoryError> {
+    //     self.module.heap.alloc(values)
+    // }
+
+    pub fn alloc_block(&mut self, values: &[Word]) -> Result<Offset, MemoryError> {
+        self.module.heap.alloc_block(values)
     }
 
     pub fn alloc_context(&mut self, size: u32) -> Result<Offset, MemoryError> {
@@ -648,38 +649,32 @@ where
         self.module.alloc_value(value)
     }
 
-    fn resolve(&mut self, value: MemValue) -> Result<MemValue, MemoryError> {
+    fn resolve(&mut self, value: MemValue) -> Result<MemValue, CoreError> {
         match value[0] {
-            VmValue::TAG_WORD => self.find_word(value[1]).and_then(|result| {
-                if result[0] == VmValue::TAG_STACK_VALUE {
-                    let [base] = self.base.peek::<1>().ok_or(MemoryError::StackUnderflow)?;
-                    self.stack.get(base + result[1])
-                } else {
-                    Ok(result)
-                }
-            }),
+            VmValue::TAG_WORD => {
+                let word = self.find_word(value[1])?;
+                self.resolve(word)
+            }
             VmValue::TAG_PATH => {
-                let mut offset = 0;
+                let env_len = self.env.len()?;
                 let block = value[1];
-                let mut result = [VmValue::TAG_NONE, 0];
-                while let Ok(word_value) = self.get_block(block, offset) {
-                    match word_value {
-                        [VmValue::TAG_WORD, symbol] => {
-                            // Recursively resolve the word
-                            // This will handle TAG_STACK_VALUE and any other indirection
-                            let temp_word = [VmValue::TAG_WORD, symbol];
-                            result = self.resolve(temp_word)?;
-
-                            // Now push the actual value onto the environment stack
-                            self.env.push([result[1]])?;
+                let mut offset = 0;
+                while let Ok(path_segment) = self.get_block::<2>(block, offset) {
+                    match path_segment[0] {
+                        VmValue::TAG_WORD => {
+                            let result = self.find_word(path_segment[1])?;
+                            if result[0] == VmValue::TAG_CONTEXT {
+                                self.env.push([result[1]])?;
+                                offset += 2;
+                            } else {
+                                self.env.set_len(env_len)?;
+                                return Ok(result);
+                            }
                         }
                         _ => unimplemented!(),
                     }
-                    offset += 2;
                 }
-                let env_len = self.env.len()?;
-                self.env.set_len(env_len - offset / 2)?;
-                Ok(result)
+                Err(CoreError::UnexpectedEndOfBlock)
             }
             _ => Ok(value),
         }
@@ -705,20 +700,29 @@ where
                 (native_fn.func)(self)
             }
             Op::CALL_FUNC => {
-                let [arity, ctx, blk] = self.module.get_array(word)?;
+                let [_, arity, _, params, _, body] = self.get_block(word, 0)?;
+                let mut offset = arity;
+                let ctx = self.alloc_context(arity)?;
+                while offset > 0 {
+                    offset -= 2;
+                    let [tag, symbol] = self.get_block(params, offset)?;
+                    if tag != VmValue::TAG_WORD {
+                        return Err(CoreError::BadArguments);
+                    }
+                    let value = self.pop()?;
+                    self.get_context(ctx)?.put(symbol, value)?;
+                }
+
                 self.env.push([ctx])?;
-
-                let sp = self.stack.len()?;
-                let bp = sp.checked_sub(arity).ok_or(MemoryError::StackUnderflow)?;
-                self.base.push([bp])?;
-
+                let bp = self.stack.len()?;
                 self.op_stack.push([
                     Op::LEAVE_FUNC,
                     self.block,
                     bp,
                     Self::LEAVE_MARKER + self.ip,
                 ])?;
-                self.block = blk;
+
+                self.block = body;
                 self.ip = 0;
 
                 Ok(())
@@ -767,7 +771,7 @@ where
                         }
                     }
                     [VmValue::TAG_FUNC, desc] => {
-                        let [arity] = self.module.get_array::<1>(desc)?;
+                        let [arity] = self.module.get_block::<1>(desc, 1)?;
                         if arity == 0 {
                             return Ok((Op::CALL_FUNC, desc));
                         } else {
@@ -788,8 +792,8 @@ where
 
                     match op {
                         Op::LEAVE_FUNC => {
-                            let [base] = self.base.pop()?;
-                            self.leave(base)?;
+                            self.pop_context()?;
+                            self.leave(bp)?;
                             (block, ip)
                         }
                         Op::LEAVE_BLOCK => {
@@ -1603,6 +1607,72 @@ mod tests {
             assert_eq!(values.len(), 2);
             assert_eq!(values[0], 5.into());
             assert_eq!(values[1], 10.into());
+        } else {
+            println!("Result: {:?}", value);
+            panic!("Result should be a block");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reduce_2() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input = "ctx: context [a: 8] reduce [5 ctx/a]";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+        let value = module.to_value(result)?;
+
+        if let Value::Block(values) = value {
+            assert_eq!(values.len(), 2);
+            assert_eq!(values[0], 5.into());
+            assert_eq!(values[1], 8.into());
+        } else {
+            println!("Result: {:?}", value);
+            panic!("Result should be a block");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reduce_3() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input = "f: func [ctx] [reduce [5 ctx/a]] f context [a: 8]";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+        let value = module.to_value(result)?;
+
+        if let Value::Block(values) = value {
+            assert_eq!(values.len(), 2);
+            assert_eq!(values[0], 5.into());
+            assert_eq!(values[1], 8.into());
+        } else {
+            println!("Result: {:?}", value);
+            panic!("Result should be a block");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reduce_4() -> Result<(), CoreError> {
+        let mut module =
+            Module::init(vec![0; 0x10000].into_boxed_slice()).expect("can't create module");
+
+        let input = "f: func [value] [either block? value [reduce value] [ \"not a block\" ]] ctx: context [a: 8] f [5 ctx/a]";
+        let block = module.parse(input)?;
+        let result = module.eval(block)?;
+        let value = module.to_value(result)?;
+
+        if let Value::Block(values) = value {
+            assert_eq!(values.len(), 2);
+            assert_eq!(values[0], 5.into());
+            assert_eq!(values[1], 8.into());
         } else {
             println!("Result: {:?}", value);
             panic!("Result should be a block");

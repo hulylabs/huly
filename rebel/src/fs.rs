@@ -172,6 +172,7 @@ mod tests {
     use crate::core::{Exec, Module};
     use crate::mem::Word;
     use crate::value::Value;
+    use serial_test::serial;
     use std::fs;
     use std::path::Path; // Needed for Path::new() and canonicalize()
     use tempfile::TempDir;
@@ -201,6 +202,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(working_directory)]
     fn test_pwd() {
         let mut module = setup_module();
         let mut exec = setup_exec(&mut module);
@@ -226,6 +228,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(working_directory)]
     fn test_ls() {
         // Create a temporary directory for testing
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
@@ -291,6 +294,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(working_directory)]
     fn test_cd() {
         // Create a temporary directory for testing
         let temp_dir = TempDir::new().expect("Failed to create temporary directory");
