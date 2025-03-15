@@ -92,20 +92,38 @@ where
     }
 
     fn parse_string(&mut self, pos: usize) -> Result<Option<char>, ParserError<C::Error>> {
-        let start_pos = pos + 1; // Skip the opening quote
-        for (pos, char) in self.cursor.by_ref() {
-            if char == '"' {
+        let _start_pos = pos + 1; // Skip the opening quote
+        let mut result = String::new();
+        let mut escaped = false;
+
+        while let Some((_, char)) = self.cursor.next() {
+            if escaped {
+                // Handle escape sequences
+                let escaped_char = match char {
+                    'n' => '\n',
+                    'r' => '\r',
+                    't' => '\t',
+                    '"' => '"',
+                    '\\' => '\\',
+                    _ => return Err(ParserError::UnexpectedChar(char)),
+                };
+                result.push(escaped_char);
+                escaped = false;
+            } else if char == '\\' {
+                escaped = true;
+            } else if char == '"' {
+                // End of string
                 return self
                     .collector
-                    .string(
-                        self.input
-                            .get(start_pos..pos)
-                            .ok_or(ParserError::EndOfInput)?,
-                    )
+                    .string(&result)
                     .map(|()| None)
                     .map_err(ParserError::CollectorError);
+            } else {
+                result.push(char);
             }
         }
+
+        // If we get here, we never found the closing quote
         Err(ParserError::EndOfInput)
     }
 
@@ -319,5 +337,73 @@ mod tests {
         );
         assert_eq!(collector.strings, vec!["string"]);
         assert_eq!(collector.integers, vec![123]);
+    }
+
+    #[test]
+    fn test_escaped_characters_in_strings() {
+        let input = r#"
+            "Hello\nWorld"
+            "Tab\tCharacter"
+            "Quotes: \"quoted\""
+            "Backslash: \\"
+            "Carriage Return: \r"
+            "Mixed: \t\r\n\"\\"
+        "#;
+
+        let mut collector = TestCollector {
+            strings: vec![],
+            words: vec![],
+            integers: vec![],
+        };
+
+        let mut parser = Parser::new(input, &mut collector);
+        parser.parse().unwrap();
+
+        assert_eq!(
+            collector.strings,
+            vec![
+                "Hello\nWorld",
+                "Tab\tCharacter",
+                "Quotes: \"quoted\"",
+                "Backslash: \\",
+                "Carriage Return: \r",
+                "Mixed: \t\r\n\"\\"
+            ]
+        );
+    }
+
+    #[test]
+    fn test_string_with_escaped_quotes() {
+        let input = r#""This string has \"escaped quotes\"" "#;
+
+        let mut collector = TestCollector {
+            strings: vec![],
+            words: vec![],
+            integers: vec![],
+        };
+
+        let mut parser = Parser::new(input, &mut collector);
+        parser.parse().unwrap();
+
+        assert_eq!(
+            collector.strings,
+            vec!["This string has \"escaped quotes\""]
+        );
+    }
+
+    #[test]
+    fn test_string_with_escaped_newlines() {
+        let input = r#""Line1\nLine2\nLine3""#;
+
+        let mut collector = TestCollector {
+            strings: vec![],
+            words: vec![],
+            integers: vec![],
+        };
+
+        let mut parser = Parser::new(input, &mut collector);
+        parser.parse().unwrap();
+
+        assert_eq!(collector.strings, vec!["Line1\nLine2\nLine3"]);
     }
 }

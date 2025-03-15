@@ -24,10 +24,10 @@ impl fmt::Display for Value {
             Value::None => write!(f, "none"),
             Value::Int(n) => write!(f, "{}", n),
             Value::Bool(b) => write!(f, "{}", if *b { "true" } else { "false" }),
-            Value::String(s) => write!(f, "\"{}\"", s),
+            Value::String(s) => write!(f, "{}", s),
             Value::Word(w) => write!(f, "{}", w),
             Value::SetWord(w) => write!(f, "{}:", w),
-            Value::GetWord(w) => write!(f, "${}", w),
+            Value::GetWord(w) => write!(f, ":{}", w),
             Value::Block(block) => {
                 write!(f, "[")?;
                 let mut first = true;
