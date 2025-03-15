@@ -1,0 +1,94 @@
+; REBOL-inspired script to install Rust on a remote machine over SSH
+; This simplified version uses only core functions available in rebel
+
+; Configuration
+config: context [
+    ; SSH connection settings
+    host: "testuser@localhost:2223"
+    password: "password"
+]
+
+; Setup SSH options from configuration
+ssh-options: context [
+    password: config/password
+]
+
+; Helper function to display SSH results
+display-result: func [title result] [
+    print title
+    print ["Exit code:" result/exit_code]
+    print ["Success:" result/success]
+    print ["Output:" result/stdout]
+    print ["Errors:" result/stderr]
+    print ""
+]
+
+; Step 1: Check if Rust is already installed
+print "Step 1: Checking if Rust is already installed..."
+check-result: ssh-with-options config/host "command -v rustc && command -v cargo && rustc --version" ssh-options
+display-result "Result of rust check:" check-result
+
+; Check if installation is needed
+either check-result/success [
+    print "✅ Rust is already installed!"
+][
+    ; Step 2: Check for required dependencies
+    print "Step 2: Checking for required dependencies..."
+    deps-result: ssh-with-options config/host "command -v curl grep tar gcc" ssh-options
+    display-result "Result of dependency check:" deps-result
+    
+    either deps-result/success [
+        print "✓ Required dependencies are available."
+    ][
+        print "Installing missing dependencies..."
+        install-deps-cmd: "apt-get update && apt-get install -y curl build-essential"
+        deps-install-result: ssh-with-options config/host install-deps-cmd ssh-options
+        display-result "Result of dependency installation:" deps-install-result
+    ]
+    
+    ; Step 3: Detect shell
+    print "Step 3: Detecting user's shell..."
+    shell-result: ssh-with-options config/host "basename $SHELL" ssh-options
+    display-result "Result of shell detection:" shell-result
+    
+    shell-config: either find shell-result/stdout "zsh" [
+        ".zshrc"
+    ][
+        ".bashrc"
+    ]
+    
+    print ["Using shell config file:" shell-config]
+    
+    ; Step 4: Install Rust
+    print "Step 4: Installing Rust toolchain..."
+    install-cmd: "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y"
+    install-result: ssh-with-options config/host install-cmd ssh-options
+    display-result "Result of Rust installation:" install-result
+    
+    ; Step 5: Update shell configuration
+    print "Step 5: Updating shell configuration..."
+    update-shell-cmd: "echo '# Rust environment' >> ~/" 
+    update-shell-cmd: update-shell-cmd shell-config
+    update-shell-cmd: update-shell-cmd " && echo 'export PATH=\"$HOME/.cargo/bin:$PATH\"' >> ~/"
+    update-shell-cmd: update-shell-cmd shell-config
+    update-shell-cmd: update-shell-cmd " && echo 'source \"$HOME/.cargo/env\"' >> ~/"
+    update-shell-cmd: update-shell-cmd shell-config
+    
+    update-result: ssh-with-options config/host update-shell-cmd ssh-options
+    display-result "Result of shell configuration update:" update-result
+    
+    ; Step 6: Verify installation
+    print "Step 6: Verifying Rust installation..."
+    verify-cmd: "source $HOME/.cargo/env && rustc --version && cargo --version"
+    verify-result: ssh-with-options config/host verify-cmd ssh-options
+    display-result "Result of verification:" verify-result
+    
+    ; Final evaluation
+    either verify-result/success [
+        print "✅ Rust toolchain installation successful!"
+    ][
+        print "❌ Rust toolchain installation failed. Please check the logs."
+    ]
+]
+
+print "Script completed."

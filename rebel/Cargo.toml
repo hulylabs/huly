@@ -3,6 +3,10 @@ name = "rebel"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+default = ["stdlib_ext"]
+stdlib_ext = []
+
 [dependencies]
 anyhow.workspace = true
 thiserror.workspace = true

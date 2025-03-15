@@ -1,0 +1,429 @@
+; REBOL-inspired script to install Rust on a remote machine over SSH
+;
+; Features:
+;   - OS and architecture detection
+;   - Shell-aware configuration
+;   - Prerequisite checking
+;   - Proper error handling
+;   - Idempotent design
+;   - Customizable installation options
+;   - Thorough verification
+;   - Structured SSH configuration
+
+; Configuration
+config: context [
+    ; Default installation settings
+    default-toolchain: "stable"  ; Options: stable, beta, nightly, or specific version
+    components: []  ; Additional components to install
+    targets: []     ; Additional targets to install
+    
+    ; Customization flags
+    minimal: false  ; If true, only install minimal components
+    auto-update-path: true  ; If true, update PATH in shell config
+    no-modify-path: false   ; If true, don't modify PATH at all
+    
+    ; SSH connection settings
+    host: "localhost"
+    port: 2222
+    user: "testuser"
+    password: "password"  ; For production use, consider using key-based auth
+    
+    ; Default timeout in seconds
+    timeout: 60
+    
+    ; Display settings
+    verbose: true  ; Show detailed output
+]
+
+; Initialize logging
+log: func [level message] [
+    either config/verbose [
+        print rejoin ["[" now/time "]: " level " - " message]
+    ] [
+        if level = "ERROR" [print message]
+    ]
+]
+
+info: func [message] [log "INFO" message]
+warn: func [message] [log "WARN" message]
+error: func [message] [log "ERROR" message]
+
+; Setup SSH options from configuration
+setup-ssh-options: func [] [
+    context [
+        password: config/password
+        timeout: config/timeout
+    ]
+]
+
+; Format SSH target string
+ssh-target: func [] [
+    rejoin [config/user "@" config/host ":" config/port]
+]
+
+; Execute SSH command with proper error handling
+ssh-exec: func [command] [
+    target: ssh-target
+    options: setup-ssh-options
+    
+    info rejoin ["Executing on " target ": " command]
+    
+    result: try [
+        ssh-with-options target command options
+    ]
+    
+    either error? result [
+        error rejoin ["SSH connection failed: " result]
+        context [
+            success: false
+            exit_code: -1
+            stdout: ""
+            stderr: rejoin ["Connection error: " result]
+        ]
+    ][
+        if result/exit_code <> 0 [
+            warn rejoin ["Command exited with code " result/exit_code]
+            warn rejoin ["stderr: " result/stderr]
+        ]
+        result
+    ]
+]
+
+; Helper function for command existence check
+check-command: func [cmd] [
+    result: ssh-exec rejoin ["command -v " cmd " > /dev/null 2>&1 && echo 'YES' || echo 'NO'"]
+    result/stdout/1 = #"Y"
+]
+
+; Detect OS, architecture and shell on remote machine
+detect-system: func [] [
+    info "Detecting remote system information..."
+    
+    ; Get OS information
+    os-info: ssh-exec "cat /etc/os-release 2>/dev/null || cat /usr/lib/os-release 2>/dev/null || uname -s"
+    
+    ; Get architecture
+    arch-info: ssh-exec "uname -m"
+    
+    ; Detect default shell
+    shell-info: ssh-exec "basename $SHELL 2>/dev/null || echo 'unknown'"
+    
+    ; Return system info as context
+    context [
+        os: either os-info/success [
+            either find os-info/stdout "ID=" [
+                line: find/tail os-info/stdout "ID="
+                name: copy/part line find line newline
+                replace name {"} ""
+                replace name {'} ""
+                trim name
+            ][
+                trim os-info/stdout
+            ]
+        ] ["unknown"]
+        
+        arch: either arch-info/success [
+            trim arch-info/stdout
+        ] ["unknown"]
+        
+        shell: either shell-info/success [
+            trim shell-info/stdout
+        ] ["bash"]  ; Default to bash if detection fails
+        
+        shell-config: switch/default shell [
+            "bash" [".bashrc"]
+            "zsh" [".zshrc"]
+            "fish" [".config/fish/config.fish"]
+        ] [".profile"]
+    ]
+]
+
+; Check prerequisites for Rust installation
+check-prerequisites: func [system] [
+    info "Checking prerequisites..."
+    
+    required: ["curl" "grep" "tar" "gzip" "gcc" "make"]
+    missing: copy []
+    
+    foreach cmd required [
+        either check-command cmd [
+            info rejoin ["✓ " cmd " is available"]
+        ][
+            warn rejoin ["✗ " cmd " is not available"]
+            append missing cmd
+        ]
+    ]
+    
+    ; Install missing prerequisites
+    if not empty? missing [
+        info rejoin ["Installing missing prerequisites: " missing]
+        
+        install-cmd: switch/default system/os [
+            "ubuntu" "debian" "linuxmint" "pop" [
+                rejoin ["apt-get update && apt-get install -y " join missing " "]
+            ]
+            "fedora" "rhel" "centos" [
+                rejoin ["dnf install -y " join missing " "]
+            ]
+            "arch" "manjaro" [
+                rejoin ["pacman -Sy --noconfirm " join missing " "]
+            ]
+            "alpine" [
+                rejoin ["apk add " join missing " "]
+            ]
+        ][
+            error "Unsupported package manager. Please install prerequisites manually."
+            ""
+        ]
+        
+        if not empty? install-cmd [
+            result: ssh-exec install-cmd
+            
+            if not result/success [
+                error "Failed to install prerequisites. Installation may fail."
+            ]
+        ]
+    ]
+    
+    ; Return success status
+    empty? missing
+]
+
+; Check if Rust is already installed properly
+check-rust-installation: func [system] [
+    info "Checking for existing Rust installation..."
+    
+    ; Check for rustc
+    rustc-check: ssh-exec "command -v rustc > /dev/null && rustc --version"
+    
+    ; Check for cargo
+    cargo-check: ssh-exec "command -v cargo > /dev/null && cargo --version"
+    
+    ; Check rustup
+    rustup-check: ssh-exec "command -v rustup > /dev/null && rustup --version"
+    
+    ; Verify PATH configuration
+    path-check: ssh-exec rejoin [
+        "grep -q 'cargo/env\\|cargo/bin' ~/" system/shell-config 
+        " && echo 'PATH_CONFIGURED' || echo 'PATH_NOT_CONFIGURED'"
+    ]
+    
+    path-configured: find path-check/stdout "PATH_CONFIGURED"
+    
+    ; Return installation status
+    context [
+        rustc: rustc-check/success
+        cargo: cargo-check/success
+        rustup: rustup-check/success
+        path: path-configured
+        
+        ; Overall status
+        complete: all [rustc-check/success cargo-check/success rustup-check/success path-configured]
+        versions: context [
+            rustc: either rustc-check/success [trim rustc-check/stdout] ["not installed"]
+            cargo: either cargo-check/success [trim cargo-check/stdout] ["not installed"]
+            rustup: either rustup-check/success [trim rustup-check/stdout] ["not installed"]
+        ]
+    ]
+]
+
+; Update shell configuration to include Cargo in PATH
+update-shell-config: func [system] [
+    info rejoin ["Updating shell configuration (" system/shell-config ")..."]
+    
+    ; Check if PATH is already configured
+    path-check: ssh-exec rejoin [
+        "grep -q 'cargo/env\\|cargo/bin' ~/" system/shell-config 
+        " && echo 'Already configured' || echo 'Not configured'"
+    ]
+    
+    if find path-check/stdout "Not configured" [
+        info "Adding Cargo to PATH in shell configuration..."
+        
+        update-cmd: rejoin [
+            "echo '' >> ~/" system/shell-config 
+            " && echo '# Rust toolchain' >> ~/" system/shell-config 
+            " && echo 'export PATH=\"$HOME/.cargo/bin:$PATH\"' >> ~/" system/shell-config
+            " && echo 'source \"$HOME/.cargo/env\"' >> ~/" system/shell-config
+        ]
+        
+        result: ssh-exec update-cmd
+        
+        if not result/success [
+            error "Failed to update shell configuration"
+        ]
+    ] else [
+        info "Shell configuration already includes Cargo path"
+    ]
+]
+
+; Install Rust using rustup
+install-rust: func [system] [
+    info "Installing Rust toolchain..."
+    
+    ; Build rustup installation options
+    options: ""
+    
+    if config/minimal [
+        options: rejoin [options " --profile minimal"]
+    ]
+    
+    if config/no-modify-path [
+        options: rejoin [options " --no-modify-path"]
+    ]
+    
+    ; Add toolchain if specified
+    if config/default-toolchain <> "stable" [
+        options: rejoin [options " --default-toolchain " config/default-toolchain]
+    ]
+    
+    ; Build installation command
+    install-cmd: rejoin [
+        "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | "
+        "sh -s -- -y" options
+    ]
+    
+    ; Execute installation
+    info "Running rustup installer..."
+    result: ssh-exec install-cmd
+    
+    if not result/success [
+        error "Rust installation failed. Check stderr for details."
+        return false
+    ]
+    
+    ; Install additional components if specified
+    if not empty? config/components [
+        info rejoin ["Installing additional components: " config/components]
+        
+        components-cmd: rejoin [
+            "source $HOME/.cargo/env && "
+            "rustup component add " join config/components " "
+        ]
+        
+        comp-result: ssh-exec components-cmd
+        
+        if not comp-result/success [
+            warn "Failed to install some components"
+        ]
+    ]
+    
+    ; Install additional targets if specified
+    if not empty? config/targets [
+        info rejoin ["Installing additional targets: " config/targets]
+        
+        targets-cmd: rejoin [
+            "source $HOME/.cargo/env && "
+            "rustup target add " join config/targets " "
+        ]
+        
+        target-result: ssh-exec targets-cmd
+        
+        if not target-result/success [
+            warn "Failed to install some targets"
+        ]
+    ]
+    
+    ; Update PATH in shell config if needed
+    if all [config/auto-update-path not config/no-modify-path] [
+        update-shell-config system
+    ]
+    
+    true
+]
+
+; Verify Rust installation is complete and working
+verify-installation: func [] [
+    info "Verifying Rust installation..."
+    
+    ; Source cargo environment and check versions
+    verify-cmd: "source $HOME/.cargo/env && rustc --version && cargo --version && rustup --version"
+    
+    result: ssh-exec verify-cmd
+    
+    if not result/success [
+        error "Installation verification failed"
+        return false
+    ]
+    
+    ; Try to compile a simple program
+    test-program: {
+source $HOME/.cargo/env
+mkdir -p /tmp/rust-test
+cd /tmp/rust-test
+cat > main.rs << 'EOF'
+fn main() {
+    println!("Hello from Rust!");
+}
+EOF
+rustc main.rs && ./main
+    }
+    
+    test-result: ssh-exec test-program
+    
+    if not test-result/success [
+        error "Failed to compile test program"
+        return false
+    ]
+    
+    if not find test-result/stdout "Hello from Rust!" [
+        error "Test program did not produce expected output"
+        return false
+    ]
+    
+    info "Rust installation verified successfully!"
+    true
+]
+
+; Main function
+main: func [] [
+    info "=== Rust Installation Script ==="
+    info rejoin ["Target: " ssh-target]
+    
+    ; Detect system information
+    system: detect-system
+    info rejoin ["Detected OS: " system/os ", Arch: " system/arch ", Shell: " system/shell]
+    
+    ; Check existing installation
+    rust-status: check-rust-installation system
+    
+    if rust-status/complete [
+        info "Rust is already installed and configured properly."
+        info rejoin ["rustc: " rust-status/versions/rustc]
+        info rejoin ["cargo: " rust-status/versions/cargo]
+        info rejoin ["rustup: " rust-status/versions/rustup]
+        return true
+    ]
+    
+    ; Check prerequisites
+    prereqs-ok: check-prerequisites system
+    
+    if not prereqs-ok [
+        error "Missing prerequisites. Installation may fail."
+    ]
+    
+    ; Install Rust
+    install-result: install-rust system
+    
+    if not install-result [
+        error "Rust installation failed. Please check the logs."
+        return false
+    ]
+    
+    ; Verify installation
+    verification: verify-installation
+    
+    if verification [
+        info "✅ Rust installation completed successfully!"
+        return true
+    ] else [
+        error "❌ Rust installation verification failed."
+        return false
+    ]
+]
+
+; Run the main function and return the result
+result: main
+
+; Return a boolean indicating success or failure
+result

@@ -1,0 +1,426 @@
+; REBOL-inspired script to install Rust on a remote machine over SSH
+; This version provides fallback implementations for missing functions
+; and works with either core functions or extended stdlib
+
+; Polyfill section - define missing functions if they don't exist
+polyfill: func [] [
+    ; Check if we need to define the rejoin function
+    has-rejoin: try [
+        rejoin ["test"] 
+        true
+    ] 
+    
+    if not has-rejoin [
+        ; Define a simplified rejoin function
+        rejoin: func [block] [
+            result: ""
+            foreach item block [
+                result: append result item
+            ]
+            result
+        ]
+        
+        ; Define a basic append function for strings
+        append: func [target addition] [
+            target: reduce [target addition]
+            target
+        ]
+        
+        ; Define a simplified join function for arrays
+        join: func [values delimiter] [
+            result: ""
+            first-item: true
+            
+            foreach item values [
+                either first-item [
+                    result: item
+                    first-item: false
+                ][
+                    result: append result delimiter
+                    result: append result item
+                ]
+            ]
+            
+            result
+        ]
+        
+        ; Define a simplified find function
+        find: func [series value] [
+            found: false
+            pos: 0
+            
+            foreach char series [
+                pos: pos + 1
+                if char = value [
+                    found: true
+                    break
+                ]
+            ]
+            
+            either found [pos] [false]
+        ]
+        
+        ; Define a simplified all function
+        all: func [conditions] [
+            result: true
+            
+            foreach condition conditions [
+                if not condition [
+                    result: false
+                    break
+                ]
+            ]
+            
+            result
+        ]
+        
+        ; Define a basic empty? function
+        empty?: func [value] [
+            len: 0
+            foreach item value [len: len + 1]
+            len = 0
+        ]
+    ]
+]
+
+; Initialize polyfills at the start
+polyfill
+
+; Configuration
+config: context [
+    ; SSH connection settings
+    host: "testuser@localhost:2223"
+    password: "password"
+    
+    ; Installation settings
+    toolchain: "stable"  ; "stable", "beta", or "nightly"
+    minimal: false       ; Install minimal components only
+    
+    ; Verification
+    verify: true         ; Verify installation
+    test-program: true   ; Create a test program
+]
+
+; Helper function to display SSH results
+display-result: func [title result] [
+    print title
+    print ["Exit code:" result/exit_code]
+    print ["Success:" result/success]
+    
+    ; Only show output if it's not empty
+    if result/stdout <> "" [
+        print ["Output:" result/stdout]
+    ]
+    
+    ; Only show errors if they exist
+    if result/stderr <> "" [
+        print ["Errors:" result/stderr]
+    ]
+    
+    print ""
+]
+
+; Setup SSH options from configuration
+ssh-options: context [
+    password: config/password
+]
+
+; Execute SSH command with proper error handling
+ssh-exec: func [command] [
+    result: ssh-with-options config/host command ssh-options
+    
+    if result/exit_code <> 0 [
+        print ["Warning: Command exited with code" result/exit_code]
+        print ["Command:" command]
+        print ["Error:" result/stderr]
+    ]
+    
+    result
+]
+
+; Detect shell and OS on the remote machine
+detect-system: func [] [
+    print "Detecting remote system information..."
+    
+    ; Get OS information
+    os-info: ssh-exec "cat /etc/os-release 2>/dev/null || cat /usr/lib/os-release 2>/dev/null || uname -s"
+    
+    ; Detect default shell
+    shell-info: ssh-exec "basename $SHELL 2>/dev/null || echo 'bash'"
+    
+    ; Determine shell config file
+    shell-name: shell-info/stdout
+    
+    shell-config: "unknown"
+    if find shell-name "bash" [shell-config: ".bashrc"]
+    if find shell-name "zsh" [shell-config: ".zshrc"]
+    if find shell-name "fish" [shell-config: ".config/fish/config.fish"]
+    if shell-config = "unknown" [shell-config: ".profile"]
+    
+    shell-config: shell-config
+    
+    ; Return system information
+    ctx: context [
+        shell: shell-name
+        shell-config: shell-config
+        
+        ; Extract OS name
+        os: "unknown"
+        if find os-info/stdout "ID=" [
+            os: "linux"
+        ]
+    ]
+    
+    print ["Detected shell:" ctx/shell]
+    print ["Shell config file:" ctx/shell-config]
+    print ["OS:" ctx/os]
+    print ""
+    
+    ctx
+]
+
+; Check if Rust is already installed correctly
+check-rust-installation: func [system] [
+    print "Checking for existing Rust installation..."
+    
+    ; Check for rustc
+    rustc-check: ssh-exec "command -v rustc && rustc --version"
+    
+    ; Check for cargo
+    cargo-check: ssh-exec "command -v cargo && cargo --version"
+    
+    ; Check for rustup
+    rustup-check: ssh-exec "command -v rustup && rustup --version"
+    
+    ; Check PATH configuration in shell config
+    path-check-cmd: "grep -q 'cargo/env\\|cargo/bin' ~/" 
+    path-check-cmd: append path-check-cmd system/shell-config
+    path-check: ssh-exec path-check-cmd
+    
+    ; Create result object
+    ctx: context [
+        rustc: rustc-check/success
+        cargo: cargo-check/success
+        rustup: rustup-check/success
+        path: path-check/success
+        
+        ; All components must be present for a complete installation
+        complete: all [rustc-check/success cargo-check/success rustup-check/success path-check/success]
+    ]
+    
+    ; Display results
+    print "Rust installation status:"
+    print ["rustc:" rustc-check/stdout]
+    print ["cargo:" cargo-check/stdout]
+    print ["rustup:" rustup-check/stdout]
+    print ["PATH configured:" path-check/success]
+    print ["Complete installation:" ctx/complete]
+    print ""
+    
+    ctx
+]
+
+; Check and install prerequisites if needed
+check-prerequisites: func [system] [
+    print "Checking prerequisites..."
+    
+    ; Check for required tools
+    deps-check: ssh-exec "command -v curl && command -v grep && command -v gcc"
+    
+    if deps-check/success [
+        print "✓ Required dependencies are available."
+        return true
+    ]
+    
+    print "Installing missing dependencies..."
+    
+    ; Install dependencies based on OS
+    if find system/os "debian" or find system/os "ubuntu" [
+        deps-install: ssh-exec "sudo apt-get update && sudo apt-get install -y curl build-essential"
+    ]
+    
+    if find system/os "fedora" or find system/os "rhel" [
+        deps-install: ssh-exec "sudo dnf install -y curl gcc-c++ make"
+    ]
+    
+    if find system/os "arch" [
+        deps-install: ssh-exec "sudo pacman -Sy --noconfirm curl base-devel"
+    ]
+    
+    ; Check again
+    deps-check: ssh-exec "command -v curl && command -v gcc"
+    
+    if deps-check/success [
+        print "✓ Dependencies installed successfully."
+        return true
+    ]
+    
+    print "Failed to install all required dependencies."
+    false
+]
+
+; Update shell configuration
+update-shell-config: func [system] [
+    print ["Updating shell configuration (" system/shell-config ")..."]
+    
+    ; Check if PATH is already configured
+    path-check: ssh-exec "grep -q 'cargo/env\\|cargo/bin' ~/" 
+    path-check: append path-check system/shell-config
+    
+    if path-check/success [
+        print "Shell configuration already includes Cargo path."
+        return true
+    ]
+    
+    ; Add Cargo path to shell config
+    update-cmd: "echo '' >> ~/" 
+    update-cmd: append update-cmd system/shell-config 
+    update-cmd: append update-cmd " && echo '# Rust toolchain' >> ~/"
+    update-cmd: append update-cmd system/shell-config
+    update-cmd: append update-cmd " && echo 'export PATH=\"$HOME/.cargo/bin:$PATH\"' >> ~/"
+    update-cmd: append update-cmd system/shell-config
+    update-cmd: append update-cmd " && echo 'source \"$HOME/.cargo/env\"' >> ~/"
+    update-cmd: append update-cmd system/shell-config
+    
+    result: ssh-exec update-cmd
+    
+    if result/success [
+        print "✓ Shell configuration updated."
+        return true
+    ]
+    
+    print "Failed to update shell configuration."
+    false
+]
+
+; Install Rust using rustup
+install-rust: func [system] [
+    print "Installing Rust toolchain..."
+    
+    ; Build rustup installation options
+    options: "-y"
+    
+    if config/minimal [
+        options: append options " --profile minimal"
+    ]
+    
+    ; Add toolchain if specified
+    if config/toolchain <> "stable" [
+        options: append options " --default-toolchain " 
+        options: append options config/toolchain
+    ]
+    
+    ; Build installation command
+    install-cmd: "curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- "
+    install-cmd: append install-cmd options
+    
+    ; Execute installation
+    print "Running rustup installer..."
+    result: ssh-exec install-cmd
+    
+    if result/success [
+        print "✓ Rust installed successfully."
+        
+        ; Update PATH in shell config
+        update-shell-config system
+        
+        return true
+    ]
+    
+    print "Failed to install Rust."
+    false
+]
+
+; Verify Rust installation
+verify-installation: func [] [
+    print "Verifying Rust installation..."
+    
+    ; Check versions
+    verify-cmd: "source $HOME/.cargo/env && rustc --version && cargo --version && rustup --version"
+    result: ssh-exec verify-cmd
+    
+    if not result/success [
+        print "Installation verification failed."
+        return false
+    ]
+    
+    ; Create and compile a test program if requested
+    if config/test-program [
+        print "Testing with a simple Rust program..."
+        
+        test-program: "source $HOME/.cargo/env && "
+        test-program: append test-program "mkdir -p /tmp/rust-test && "
+        test-program: append test-program "cd /tmp/rust-test && "
+        test-program: append test-program "echo 'fn main() { println!(\"Hello from Rust!\"); }' > main.rs && "
+        test-program: append test-program "rustc main.rs && ./main"
+        
+        test-result: ssh-exec test-program
+        
+        if not test-result/success [
+            print "Failed to compile test program."
+            return false
+        ]
+        
+        if not find test-result/stdout "Hello from Rust!" [
+            print "Test program did not produce expected output."
+            return false
+        ]
+        
+        print "✓ Test program compiled and ran successfully."
+    ]
+    
+    print "Rust installation verified successfully!"
+    true
+]
+
+; Main function
+main: func [] [
+    print "=== Rust Installation Script ==="
+    print ["Target:" config/host]
+    
+    ; Detect system information
+    system: detect-system
+    
+    ; Check existing installation
+    rust-status: check-rust-installation system
+    
+    if rust-status/complete [
+        print "✅ Rust is already installed and configured properly."
+        return true
+    ]
+    
+    ; Check prerequisites
+    prereqs-ok: check-prerequisites system
+    
+    if not prereqs-ok [
+        print "Missing prerequisites. Installation may fail."
+    ]
+    
+    ; Install Rust
+    install-result: install-rust system
+    
+    if not install-result [
+        print "❌ Rust installation failed. Please check the logs."
+        return false
+    ]
+    
+    ; Verify installation if requested
+    if config/verify [
+        verification: verify-installation
+        
+        if verification [
+            print "✅ Rust installation completed successfully!"
+        ] else [
+            print "❌ Rust installation verification failed."
+            return false
+        ]
+    ]
+    
+    print "Installation completed."
+    true
+]
+
+; Run the main function and return the result
+result: main
+print ["Final result:" result]
+result

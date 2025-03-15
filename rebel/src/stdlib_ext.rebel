@@ -1,0 +1,218 @@
+; RebelDB™ © 2025 Huly Labs • https://hulylabs.com • SPDX-License-Identifier: MIT
+
+; String manipulation functions
+
+; Join values with a delimiter
+join: func [values delimiter] [
+    result: ""
+    first-item: true
+    
+    foreach item values [
+        either first-item [
+            result: to-string item
+            first-item: false
+        ][
+            result: append-string result delimiter
+            result: append-string result to-string item
+        ]
+    ]
+    
+    result
+]
+
+; Append to string
+append-string: func [target addition] [
+    to-string reduce [target addition]
+]
+
+; Convert to string
+to-string: func [value] [
+    either block? value [
+        result: ""
+        foreach item value [
+            result: append-string result item
+        ]
+        result
+    ][
+        value
+    ]
+]
+
+; Rejoin multiple values into a single string
+rejoin: func [block] [
+    to-string reduce block
+]
+
+; Find a value in a series
+find: func [series value] [
+    either value = "" [
+        series
+    ][
+        found: false
+        position: series
+        
+        while [not found and position <> ""] [
+            sub-len: length? value
+            current: copy-part position sub-len
+            
+            either current = value [
+                found: true
+            ][
+                position: skip position 1
+                if position = "" [return false]
+            ]
+        ]
+        
+        either found [position] [false]
+    ]
+]
+
+; Copy part of a string
+copy-part: func [series length] [
+    if length <= 0 [return ""]
+    
+    result: ""
+    remaining: length
+    position: series
+    
+    while [remaining > 0 and position <> ""] [
+        result: append-string result skip position 0 1
+        position: skip position 1
+        remaining: remaining - 1
+    ]
+    
+    result
+]
+
+; Skip the first n characters of a string
+skip: func [series offset] [
+    if offset <= 0 [return series]
+    if offset >= (length? series) [return ""]
+    
+    result: ""
+    count: 0
+    
+    foreach char series [
+        count: count + 1
+        if count > offset [
+            result: append-string result char
+        ]
+    ]
+    
+    result
+]
+
+; Length of a string or block
+length?: func [value] [
+    len: 0
+    
+    either block? value [
+        foreach item value [
+            len: len + 1
+        ]
+    ][
+        foreach char value [
+            len: len + 1
+        ]
+    ]
+    
+    len
+]
+
+; Copy a value
+copy: func [value] [
+    either block? value [
+        result: []
+        foreach item value [
+            append result item
+        ]
+        result
+    ][
+        value
+    ]
+]
+
+; Create an empty block
+empty-block: func [] []
+
+; Create a new block with a single value
+block1: func [value] [reduce [value]]
+
+; Append a value to a block
+append: func [blk value] [
+    result: copy blk
+    result: reduce [result value]
+    result
+]
+
+; Check if a block is empty
+empty?: func [blk] [
+    len: 0
+    foreach item blk [len: len + 1]
+    len = 0
+]
+
+; Check if all conditions are true
+all: func [conditions] [
+    result: true
+    
+    foreach condition conditions [
+        if not condition [
+            result: false
+            break
+        ]
+    ]
+    
+    result
+]
+
+; Replace occurrences in a string
+replace: func [target search replacement] [
+    result: ""
+    
+    pos: find target search
+    
+    either pos [
+        before: copy-part target (length? target) - (length? pos)
+        after: skip pos (length? search)
+        result: rejoin [before replacement after]
+    ][
+        result: target
+    ]
+    
+    result
+]
+
+; Trim whitespace from string
+trim: func [text] [
+    result: text
+    
+    ; Trim leading whitespace
+    while [
+        not empty? result and 
+        find " \t\n\r" first-char result
+    ][
+        result: skip result 1
+    ]
+    
+    ; TODO: Implement trim trailing whitespace
+    ; (for now we'll just return with leading whitespace trimmed)
+    
+    result
+]
+
+; Get the first character of a string
+first-char: func [text] [
+    copy-part text 1
+]
+
+; Error handling
+error?: func [value] [false] ; Placeholder
+try: func [block] [do block] ; Placeholder
+
+; Current date and time
+now: context [
+    time: func [] [
+        "12:34:56"  ; Placeholder - this would need native implementation
+    ]
+]

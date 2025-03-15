@@ -176,14 +176,18 @@ pub fn stdlib_package<T>(module: &mut Module<T>) -> Result<(), CoreError>
 where
     T: AsMut<[Word]> + AsRef<[Word]>,
 {
-    // Read the stdlib code from the stdlib.rebel file at compile time
+    // Read and execute the standard library
     let stdlib_code = include_str!("stdlib.rebel");
-
-    // Parse the code into a block
     let vm_block = module.parse(stdlib_code)?;
-
-    // Evaluate the block to define the functions
     module.eval(vm_block)?;
+
+    // Read and execute the extended standard library
+    #[cfg(feature = "stdlib_ext")]
+    {
+        let stdlib_ext_code = include_str!("stdlib_ext.rebel");
+        let vm_block_ext = module.parse(stdlib_ext_code)?;
+        module.eval(vm_block_ext)?;
+    }
 
     Ok(())
 }

@@ -1,0 +1,26 @@
+; Basic test script
+
+print "Testing basic functionality"
+
+; Define a simple function
+add-two: func [n] [
+    n + 2
+]
+
+; Test the function
+result: add-two 5
+print ["Adding 2 to 5 gives:" result]
+
+; Test SSH connection
+ssh-options: context [
+    password: "password"
+]
+
+print "Testing SSH connection to localhost..."
+test-result: ssh-with-options "testuser@localhost:2223" "echo 'Hello from SSH'" ssh-options
+
+print "SSH result:"
+print ["Success:" test-result/success]
+print ["Output:" test-result/stdout]
+
+print "Test completed"
